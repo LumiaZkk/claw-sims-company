@@ -2,7 +2,7 @@ import type { Company } from "../company/types";
 import { getActiveHandoffs } from "../handoffs/active-handoffs";
 import { evaluateSlaAlerts } from "../sla/escalation-rules";
 import type { GatewaySessionRow } from "../backend";
-import { isSessionActive, parseAgentIdFromSessionKey, resolveSessionUpdatedAt } from "../../lib/sessions";
+import { isSessionActive, resolveSessionActorId, resolveSessionUpdatedAt } from "../../lib/sessions";
 
 export type EmployeeOperationalInsight = {
   agentId: string;
@@ -104,7 +104,7 @@ export function buildEmployeeOperationalInsights(params: {
   const sessionsByAgent = new Map<string, GatewaySessionRow[]>();
 
   for (const session of params.sessions) {
-    const agentId = parseAgentIdFromSessionKey(session.key);
+    const agentId = resolveSessionActorId(session);
     if (!agentId) {
       continue;
     }

@@ -14,7 +14,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { useCompanyStore } from "../features/company/store";
-import type { ArtifactRecord } from "../features/company/types";
+import type { ArtifactRecord, WorkItemRecord } from "../features/company/types";
 import {
   buildWorkspaceToolRequest,
   categorizeWorkspaceResource,
@@ -22,6 +22,7 @@ import {
   summarizeConsistencyAnchors,
   type WorkspaceResourceKind,
 } from "../features/company/workspace-apps";
+import { isReliableWorkItemRecord } from "../features/execution/work-item-signal";
 import {
   gateway,
   type AgentListEntry,
@@ -41,6 +42,7 @@ type WorkspaceFileRow = {
   name: string;
   path: string;
   previewText?: string;
+  content?: string | null;
   updatedAtMs?: number;
   size?: number;
   kind: WorkspaceResourceKind;
@@ -126,6 +128,7 @@ function buildWorkspaceRows(input: {
         workspace: snapshot.workspace,
         name,
         path,
+        content: typeof file.content === "string" ? file.content : null,
         updatedAtMs: typeof file.updatedAtMs === "number" ? file.updatedAtMs : undefined,
         size: typeof file.size === "number" ? file.size : undefined,
         kind: categorizeWorkspaceResource(name, path),
@@ -156,10 +159,11 @@ function buildArtifactMirrorRows(input: {
         agentId: artifact.sourceActorId ?? artifact.ownerActorId ?? "",
         agentLabel: owner?.nickname ?? artifact.sourceActorId ?? "公司产物",
         role: owner?.role ?? artifact.kind,
-        workspace: artifact.providerId ? `${artifact.providerId} mirror` : "product store",
+        workspace: artifact.providerId ? `产品产物库（同步自 ${artifact.providerId}）` : "产品产物库",
         name: artifact.sourceName ?? artifact.title,
         path: artifact.sourcePath ?? artifact.sourceUrl ?? artifact.title,
         previewText: artifact.summary,
+        content: artifact.content ?? null,
         updatedAtMs: artifact.updatedAt,
         kind: categorizeWorkspaceResource(
           artifact.sourceName ?? artifact.title,
@@ -181,7 +185,6 @@ function pickDefaultFile(files: WorkspaceFileRow[]): WorkspaceFileRow | null {
     files.find((file) => file.kind === "chapter") ??
     files.find((file) => file.kind === "canon") ??
     files.find((file) => file.kind === "review") ??
-    files[0] ??
     null
   );
 }
@@ -189,8 +192,10 @@ function pickDefaultFile(files: WorkspaceFileRow[]): WorkspaceFileRow | null {
 export function WorkspacePage() {
   const navigate = useNavigate();
   const activeCompany = useCompanyStore((state) => state.activeCompany);
+  const activeWorkItems = useCompanyStore((state) => state.activeWorkItems);
   const activeArtifacts = useCompanyStore((state) => state.activeArtifacts);
   const syncArtifactMirrorRecords = useCompanyStore((state) => state.syncArtifactMirrorRecords);
+  const upsertArtifactRecord = useCompanyStore((state) => state.upsertArtifactRecord);
   const connected = useGatewayStore((state) => state.connected);
   const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
   const providerManifest = useGatewayStore((state) => state.manifest);
@@ -214,6 +219,19 @@ export function WorkspacePage() {
   const shouldSyncProviderWorkspace = supportsAgentFiles && providerManifest.storageStrategy === "provider-files";
   const ctoEmployee =
     activeCompany?.employees.find((employee) => employee.metaRole === "cto") ?? null;
+  const activeWorkspaceWorkItem = useMemo<WorkItemRecord | null>(() => {
+    const candidates = activeWorkItems
+      .filter((item) => item.status !== "archived" && isReliableWorkItemRecord(item))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+    return candidates[0] ?? null;
+  }, [activeWorkItems]);
+  const artifactBackedWorkspaceCount = useMemo(
+    () =>
+      activeArtifacts.filter(
+        (artifact) => Boolean(artifact.content || artifact.summary || artifact.sourcePath || artifact.sourceUrl),
+      ).length,
+    [activeArtifacts],
+  );
 
   useEffect(() => {
     if (!workspaceApps.length) {
@@ -251,21 +269,7 @@ export function WorkspacePage() {
         }
 
         const nextFilesByAgent: Record<string, { workspace: string; files: Array<Record<string, unknown>> }> = {};
-        const nextArtifacts: Array<{
-          id: string;
-          workItemId: null;
-          title: string;
-          kind: string;
-          status: "ready";
-          ownerActorId: string;
-          providerId: string;
-          sourceActorId: string;
-          sourceName: string;
-          sourcePath: string;
-          summary: string;
-          createdAt: number;
-          updatedAt: number;
-        }> = [];
+        const nextArtifacts: ArtifactRecord[] = [];
         for (const snapshot of snapshots) {
           if (snapshot.status !== "fulfilled") {
             continue;
@@ -300,6 +304,7 @@ export function WorkspacePage() {
                 : typeof file.path === "string"
                   ? file.path
                   : file.name,
+              content: typeof file.content === "string" ? file.content : null,
               createdAt: updatedAtMs,
               updatedAt: updatedAtMs,
             });
@@ -361,9 +366,22 @@ export function WorkspacePage() {
     }
     for (const row of providerRows) {
       const key = `${row.agentId}:${row.path || row.name}`;
-      if (!merged.has(key)) {
-        merged.set(key, row);
-      }
+      const existing = merged.get(key);
+      merged.set(
+        key,
+        existing
+          ? {
+              ...row,
+              ...existing,
+              workspace: existing.workspace || row.workspace,
+              path: existing.path || row.path,
+              previewText: existing.previewText ?? row.previewText,
+              content: existing.content ?? row.content ?? null,
+              updatedAtMs: Math.max(existing.updatedAtMs ?? 0, row.updatedAtMs ?? 0) || undefined,
+              size: existing.size ?? row.size,
+            }
+          : row,
+      );
     }
     return [...merged.values()].sort((left, right) => {
       const byKind = getWorkspaceFilePriority(left.kind) - getWorkspaceFilePriority(right.kind);
@@ -373,6 +391,10 @@ export function WorkspacePage() {
       return (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0);
     });
   }, [activeArtifacts, activeCompany, filesByAgent, shouldSyncProviderWorkspace]);
+  const mirroredOnlyWorkspaceCount = useMemo(
+    () => workspaceFiles.filter((file) => !file.artifactId).length,
+    [workspaceFiles],
+  );
 
   useEffect(() => {
     const selectedStillExists = selectedFileKey
@@ -388,17 +410,19 @@ export function WorkspacePage() {
     (selectedFileKey ? workspaceFiles.find((file) => file.key === selectedFileKey) : null) ?? null;
 
   useEffect(() => {
-    if (!selectedFile) {
+    if (!selectedFile || !activeCompany) {
       setSelectedFileContent("");
       return;
     }
 
-    if (
-      !shouldSyncProviderWorkspace ||
-      !selectedFile.agentId ||
-      !selectedFile.name
-    ) {
-      setSelectedFileContent(selectedFile.previewText ?? "");
+    const artifactContent = selectedFile.content?.trim() ?? "";
+    const previewText = selectedFile.previewText?.trim() ?? "";
+    if (artifactContent.length > 0) {
+      setSelectedFileContent(artifactContent);
+      return;
+    }
+    if (!shouldSyncProviderWorkspace || !selectedFile.agentId || !selectedFile.name || previewText.length > 0) {
+      setSelectedFileContent(previewText);
       return;
     }
 
@@ -408,7 +432,26 @@ export function WorkspacePage() {
       try {
         const result = await gateway.getAgentFile(selectedFile.agentId, selectedFile.name);
         if (!cancelled) {
-          setSelectedFileContent(result.file?.content ?? "");
+          const content = result.file?.content ?? "";
+          setSelectedFileContent(content);
+          upsertArtifactRecord({
+            id:
+              selectedFile.artifactId ??
+              `workspace:${activeCompany.id}:${selectedFile.agentId}:${result.file?.path ?? selectedFile.name}`,
+            workItemId: activeWorkspaceWorkItem?.id ?? null,
+            title: selectedFile.name,
+            kind: selectedFile.kind,
+            status: "ready",
+            ownerActorId: selectedFile.agentId,
+            providerId: gateway.providerId,
+            sourceActorId: selectedFile.agentId,
+            sourceName: selectedFile.name,
+            sourcePath: result.file?.path ?? selectedFile.path,
+            summary: selectedFile.previewText ?? undefined,
+            content,
+            createdAt: selectedFile.updatedAtMs ?? Date.now(),
+            updatedAt: result.file?.updatedAtMs ?? Date.now(),
+          });
         }
       } catch (error) {
         console.error("Failed to load selected workspace file", error);
@@ -427,7 +470,7 @@ export function WorkspacePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, shouldSyncProviderWorkspace]);
+  }, [activeCompany, activeWorkspaceWorkItem?.id, selectedFile, shouldSyncProviderWorkspace, upsertArtifactRecord]);
 
   if (!activeCompany) {
     return <div className="p-8 text-center text-muted-foreground">未选择正在运营的公司组织</div>;
@@ -453,10 +496,10 @@ export function WorkspacePage() {
   const canonFiles = workspaceFiles.filter((file) => file.kind === "canon");
   const reviewFiles = workspaceFiles.filter((file) => file.kind === "review");
   const toolingFiles = workspaceFiles.filter((file) => file.kind === "tooling");
+  const supplementaryFiles = workspaceFiles.filter(
+    (file) => file.kind === "tooling" || file.kind === "other",
+  );
   const anchors = summarizeConsistencyAnchors(canonFiles.map((file) => file.name));
-  const indexedWorkspaceCount = shouldSyncProviderWorkspace
-    ? Object.keys(filesByAgent).length
-    : activeArtifacts.length;
   const agentLabelById = new Map(
     agentsCache.map((agent) => [agent.id, agent.name?.trim() || agent.identity?.name?.trim() || agent.id]),
   );
@@ -480,18 +523,33 @@ export function WorkspacePage() {
 
   const renderWorkspaceReader = () => (
     <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+      {activeWorkspaceWorkItem ? (
+        <Card className="xl:col-span-2 border-indigo-200/70 bg-indigo-50/70 shadow-sm">
+          <CardHeader className="gap-2">
+            <CardDescription>当前工作项</CardDescription>
+            <CardTitle className="text-base">
+              {activeWorkspaceWorkItem.title}
+            </CardTitle>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <Badge variant="secondary">负责人 {activeWorkspaceWorkItem.ownerLabel}</Badge>
+              <Badge variant="secondary">当前阶段 {activeWorkspaceWorkItem.stageLabel}</Badge>
+              <Badge variant="secondary">下一步 {activeWorkspaceWorkItem.nextAction}</Badge>
+            </div>
+          </CardHeader>
+        </Card>
+      ) : null}
       <Card className="border-slate-200/80 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">公司 workspace 文档</CardTitle>
-          <CardDescription>正文、设定、审校报告和工具脚本都按当前公司聚合在这里。</CardDescription>
+          <CardTitle className="text-base">公司产物文档</CardTitle>
+          <CardDescription>
+            默认先看产品产物库里的正文、设定、审校报告和工具说明；后端文件镜像只作为补充来源。
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {([
             ["chapter", chapterFiles],
             ["canon", canonFiles],
             ["review", reviewFiles],
-            ["tooling", toolingFiles],
-            ["other", workspaceFiles.filter((file) => file.kind === "other")],
           ] as const).map(([kind, files]) => {
             if (files.length === 0) {
               return null;
@@ -532,11 +590,16 @@ export function WorkspacePage() {
               </div>
             );
           })}
-          {!workspaceFiles.length && (
+          {chapterFiles.length + canonFiles.length + reviewFiles.length === 0 && (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-              当前还没从公司 workspace 里读到文件。通常是节点工作区还没落内容，或者 Gateway 尚未同步。
+              当前产品产物库里还没有正文、设定或审校报告这类业务文档。先让 CTO/内容团队把可读产物固化下来，再回这里统一阅读。
             </div>
           )}
+          {supplementaryFiles.length > 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-xs leading-6 text-slate-600">
+              当前还有 {supplementaryFiles.length} 份工具/系统文档已收起，不再抢占阅读主视图。需要排查原始镜像时，再去“一致性中心”或“CTO 工具工坊”查看。
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -549,7 +612,7 @@ export function WorkspacePage() {
               </CardTitle>
               <CardDescription className="mt-1">
                 {selectedFile
-                  ? `${selectedFile.agentLabel} · ${selectedFile.role} · ${selectedFile.workspace}`
+                  ? `${selectedFile.agentLabel} · ${selectedFile.role} · ${selectedFile.artifactId ? "产品产物" : "镜像补充"}`
                   : "从左侧挑一份正文、设定或审校报告，直接在页面里阅读。"}
               </CardDescription>
             </div>
@@ -719,7 +782,7 @@ export function WorkspacePage() {
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight text-slate-950">工作目录</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                  把当前公司的专属工具、workspace 文档和 CTO 工具需求收进一个页面里。对小说公司来说，这里就是阅读器、一致性中心和工具开发工坊的统一入口。
+                  把当前公司的专属工具、产品产物和 CTO 工具需求收进一个页面里。对小说公司来说，这里就是阅读器、一致性中心和工具开发工坊的统一入口；底层工作区文件只作为补充镜像，不再是主真相源。
                 </p>
               </div>
               <div className="flex flex-wrap gap-3">
@@ -736,17 +799,15 @@ export function WorkspacePage() {
               <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">公司应用</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-950">{workspaceApps.length}</div>
-              <div className="mt-1 text-sm text-slate-600">当前公司已经启用的专属菜单与工具入口。</div>
-            </div>
-            <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  {shouldSyncProviderWorkspace ? "已接入工作区" : "产品产物库"}
-                </div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950">{indexedWorkspaceCount}</div>
+                <div className="mt-1 text-sm text-slate-600">当前公司已经启用的专属菜单与工具入口。</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">产品产物索引</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{artifactBackedWorkspaceCount}</div>
                 <div className="mt-1 text-sm text-slate-600">
                   {shouldSyncProviderWorkspace
-                    ? "已经从当前公司的 workspace 里索引到的节点数。"
-                    : "当前后端不提供文件区，工作目录直接读取产品侧 artifact store。"}
+                    ? `当前可直接消费的产品产物 ${artifactBackedWorkspaceCount} 份；镜像补充 ${mirroredOnlyWorkspaceCount} 份，仅在产物缺位时兜底。`
+                    : "当前后端不提供文件区，工作目录直接读取产品侧产物库。"}
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4">
@@ -839,8 +900,11 @@ export function WorkspacePage() {
                     </CardDescription>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Badge variant="outline">当前公司 workspace</Badge>
-                    <Badge variant="secondary">{workspaceFiles.length} 份文件</Badge>
+                    <Badge variant="outline">产品产物优先</Badge>
+                    <Badge variant="secondary">{artifactBackedWorkspaceCount} 份产物</Badge>
+                    {shouldSyncProviderWorkspace && mirroredOnlyWorkspaceCount > 0 ? (
+                      <Badge variant="outline">镜像补充 {mirroredOnlyWorkspaceCount}</Badge>
+                    ) : null}
                     <Button
                       type="button"
                       size="sm"

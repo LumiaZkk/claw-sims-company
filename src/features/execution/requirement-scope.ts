@@ -1,4 +1,10 @@
-import type { Company, HandoffRecord, RequestRecord, TrackedTask } from "../company/types";
+import type {
+  Company,
+  HandoffRecord,
+  RequestRecord,
+  TrackedTask,
+  WorkItemRecord,
+} from "../company/types";
 import type { RequirementExecutionOverview } from "./requirement-overview";
 import type { SlaAlert } from "../sla/escalation-rules";
 import { getActiveHandoffs, inferHandoffTopicKey } from "../handoffs/active-handoffs";
@@ -53,28 +59,97 @@ function matchesHandoffTopic(handoff: HandoffRecord, topicKey: string): boolean 
   ]);
 }
 
+function matchesWorkItemContext(
+  workItem: WorkItemRecord | null | undefined,
+  values: Array<string | null | undefined>,
+): boolean {
+  if (!workItem) {
+    return false;
+  }
+  const corpus = values
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n");
+  if (!corpus) {
+    return false;
+  }
+  const needles = [
+    workItem.title,
+    workItem.goal,
+    workItem.summary,
+    workItem.nextAction,
+    ...workItem.steps.map((step) => `${step.title}\n${step.detail ?? ""}`),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length >= 4);
+  const haystack = corpus.toLowerCase();
+  return needles.some((needle) => haystack.includes(needle) || needle.includes(haystack));
+}
+
 export function buildRequirementScope(
   company: Company,
   overview: RequirementExecutionOverview | null,
+  workItem?: WorkItemRecord | null,
 ): RequirementScope | null {
-  if (!overview) {
+  const topicKey = workItem?.topicKey ?? overview?.topicKey;
+  if (!topicKey) {
     return null;
   }
 
-  const topicKey = overview.topicKey;
-  const startedAt = overview.startedAt;
+  const startedAt = workItem?.startedAt ?? overview?.startedAt ?? 0;
+  const workItemParticipantIds = [
+    workItem?.ownerActorId,
+    workItem?.batonActorId,
+    ...(workItem?.steps ?? []).flatMap((step) => step.assigneeActorId),
+  ].filter((agentId, index, array): agentId is string => {
+    return typeof agentId === "string" && array.indexOf(agentId) === index;
+  });
+  const participantFilter =
+    workItemParticipantIds.length > 0 ? new Set(workItemParticipantIds) : null;
   const tasks = (company.tasks ?? []).filter(
-    (task) => task.updatedAt >= startedAt && matchesTaskTopic(task, topicKey),
+    (task) =>
+      task.updatedAt >= startedAt &&
+      (matchesTaskTopic(task, topicKey) ||
+        matchesWorkItemContext(workItem, [
+          task.title,
+          task.summary,
+          task.blockedReason,
+          ...task.steps.map((step) => step.text),
+        ])) &&
+      (!participantFilter ||
+        participantFilter.has(task.agentId) ||
+        (task.assigneeAgentIds ?? []).some((agentId) => participantFilter.has(agentId)) ||
+        ((!task.agentId || (task.assigneeAgentIds ?? []).length === 0) &&
+          (task.ownerAgentId ? participantFilter.has(task.ownerAgentId) : false))),
   );
   const requests = getActiveRequests(company.requests ?? []).filter((request) =>
-    request.updatedAt >= startedAt && matchesRequestTopic(request, topicKey),
+    request.updatedAt >= startedAt &&
+    (matchesRequestTopic(request, topicKey) ||
+      matchesWorkItemContext(workItem, [request.title, request.summary, request.responseSummary])) &&
+    (!participantFilter ||
+      request.toAgentIds.some((agentId) => participantFilter.has(agentId)) ||
+      (request.toAgentIds.length === 0 &&
+        (request.fromAgentId ? participantFilter.has(request.fromAgentId) : false))),
   );
   const handoffs = getActiveHandoffs(company.handoffs ?? []).filter((handoff) =>
-    handoff.updatedAt >= startedAt && matchesHandoffTopic(handoff, topicKey),
+    handoff.updatedAt >= startedAt &&
+    (matchesHandoffTopic(handoff, topicKey) ||
+      matchesWorkItemContext(workItem, [
+        handoff.title,
+        handoff.summary,
+        ...(handoff.checklist ?? []),
+        ...(handoff.missingItems ?? []),
+        ...(handoff.artifactPaths ?? []),
+      ])) &&
+    (!participantFilter ||
+      handoff.toAgentIds.some((agentId) => participantFilter.has(agentId)) ||
+      (handoff.toAgentIds.length === 0 &&
+        (handoff.fromAgentId ? participantFilter.has(handoff.fromAgentId) : false))),
   );
 
   const participantAgentIds = [
-    ...overview.participants.map((participant) => participant.agentId),
+    ...(overview?.participants ?? []).map((participant) => participant.agentId),
+    ...workItemParticipantIds,
     ...tasks.flatMap((task) => [
       task.agentId,
       task.ownerAgentId,
@@ -88,7 +163,7 @@ export function buildRequirementScope(
 
   return {
     topicKey,
-    title: overview.title,
+    title: workItem?.title ?? overview?.title ?? "当前需求",
     tasks,
     requests,
     handoffs,

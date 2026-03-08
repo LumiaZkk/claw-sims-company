@@ -57,6 +57,7 @@ import {
 } from "../features/execution/requirement-overview";
 import {
   areRequirementRoomChatMessagesEqual,
+  buildRequirementRoomRecordSignature,
   buildRoomConversationBindingsFromSessions,
   buildRequirementRoomRecord,
   buildRequirementRoomRoute,
@@ -77,9 +78,11 @@ import {
   isStrategicRequirementTopic,
 } from "../features/execution/requirement-kind";
 import {
+  isInternalAssistantMonologueText,
   isSyntheticWorkflowPromptText,
   normalizeTruthText,
   stripTruthControlMetadata,
+  stripTruthInternalMonologue,
   stripTruthTaskTracker,
 } from "../features/execution/message-truth";
 import { resolveExecutionState } from "../features/execution/state";
@@ -106,8 +109,14 @@ import {
 import { useGatewayStore } from "../features/gateway/store";
 import { toast } from "../features/ui/toast-store";
 import { AgentOps } from "../lib/agent-ops";
+import { resolveSessionPresentation } from "../lib/chat-routes";
 import { parseHrDepartmentPlan } from "../lib/hr-dept-plan";
-import { parseAgentIdFromSessionKey, resolveSessionTitle, resolveSessionUpdatedAt } from "../lib/sessions";
+import {
+  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
+  resolveSessionTitle,
+  resolveSessionUpdatedAt,
+} from "../lib/sessions";
 import { usePageVisibility } from "../lib/use-page-visibility";
 import { cn, formatTime, getAvatarUrl } from "../lib/utils";
 
@@ -180,7 +189,7 @@ function workItemToConversationMission(
 }
 
 function limitChatMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.slice(-CHAT_UI_MESSAGE_LIMIT);
+  return dedupeVisibleChatMessages(messages).slice(-CHAT_UI_MESSAGE_LIMIT);
 }
 
 function normalizeMessage(raw: ChatMessage): ChatMessage {
@@ -188,6 +197,76 @@ function normalizeMessage(raw: ChatMessage): ChatMessage {
     ...raw,
     timestamp: typeof raw.timestamp === "number" ? raw.timestamp : Date.now(),
   };
+}
+
+function normalizeChatDisplaySignature(message: ChatMessage): string {
+  const text = extractTextFromMessage(message);
+  if (!text) {
+    return "";
+  }
+  return normalizeTruthText(stripTruthInternalMonologue(text));
+}
+
+function dedupeVisibleChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+
+  for (const message of messages) {
+    const last = result[result.length - 1];
+    if (!last) {
+      result.push(message);
+      continue;
+    }
+
+    const currentText = normalizeChatDisplaySignature(message);
+    const lastText = normalizeChatDisplaySignature(last);
+    const currentTimestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
+    const lastTimestamp = typeof last.timestamp === "number" ? last.timestamp : 0;
+    const sameDirectUserEcho =
+      message.role === "user" &&
+      last.role === "user" &&
+      (message.roomAgentId ?? null) === null &&
+      (last.roomAgentId ?? null) === null &&
+      currentText.length > 0 &&
+      currentText === lastText &&
+      Math.abs(currentTimestamp - lastTimestamp) <= 120_000;
+    const withinWindow = sameDirectUserEcho || Math.abs(currentTimestamp - lastTimestamp) <= 5_000;
+    const sameConversationScope =
+      (message.roomAgentId ?? null) !== (last.roomAgentId ?? null)
+        ? false
+        : (message.roomAgentId ?? null) === null && (last.roomAgentId ?? null) === null
+          ? true
+          : (message.roomSessionKey ?? null) === (last.roomSessionKey ?? null);
+
+    if (
+      withinWindow &&
+      message.role === last.role &&
+      currentText.length > 0 &&
+      currentText === lastText &&
+      sameConversationScope
+    ) {
+      if (currentTimestamp > lastTimestamp) {
+        result[result.length - 1] = {
+          ...message,
+          roomAudienceAgentIds:
+            Array.isArray(last.roomAudienceAgentIds) || Array.isArray(message.roomAudienceAgentIds)
+              ? [
+                  ...new Set(
+                    [
+                      ...(Array.isArray(last.roomAudienceAgentIds) ? last.roomAudienceAgentIds : []),
+                      ...(Array.isArray(message.roomAudienceAgentIds) ? message.roomAudienceAgentIds : []),
+                    ].map((agentId) => String(agentId)),
+                  ),
+                ]
+              : message.roomAudienceAgentIds,
+        };
+      }
+      continue;
+    }
+
+    result.push(message);
+  }
+
+  return result;
 }
 
 function hasRichMarkdownSyntax(text: string): boolean {
@@ -272,7 +351,7 @@ function uniqueHandoffList(
 function resolveArchiveHistoryNotice(error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   if (/unknown method:\s*sessions\.archives\.(list|get|delete|restore)/i.test(message)) {
-    return "当前 Gateway 版本还不支持归档轮次。升级 Gateway 后，/new 之前的旧轮次会出现在这里。";
+    return "当前后端还不支持原生归档接口。系统会继续优先显示产品侧已保存的轮次历史。";
   }
   if (message.trim().length > 0) {
     return `归档轮次暂时不可用：${message}`;
@@ -281,7 +360,15 @@ function resolveArchiveHistoryNotice(error: unknown): string | null {
 }
 
 function compactRoundText(text: string, limit: number = 320): string {
-  const normalized = normalizeTruthText(stripTruthControlMetadata(text)).replace(/\s+/g, " ").trim();
+  const normalized = normalizeTruthText(stripTruthControlMetadata(text))
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/^a new session was started via \/new or \/reset/i.test(normalized)) {
+    return "这是一条上一轮的会话切换提示，可在需要时恢复查看完整上下文。";
+  }
   if (normalized.length <= limit) {
     return normalized;
   }
@@ -371,7 +458,7 @@ function buildHistoryRoundItems(input: {
     .map((archive) => ({
       id: archive.id,
       title: archive.title || archive.fileName,
-      preview: archive.preview ?? null,
+      preview: archive.preview ? compactRoundText(archive.preview, 140) : null,
       archivedAt: archive.archivedAt,
       restorable: true,
       source: "provider" as const,
@@ -388,10 +475,22 @@ function matchesProductRoundToActor(round: RoundRecord, actorId: string | null |
   if (!actorId) {
     return false;
   }
-  if (round.sourceActorId === actorId) {
+  return round.sourceActorId === actorId;
+}
+
+function matchesProductRoundToRoom(input: {
+  round: RoundRecord;
+  roomId?: string | null;
+  workItemId?: string | null;
+}): boolean {
+  const { round, roomId, workItemId } = input;
+  if (roomId && round.roomId === roomId) {
     return true;
   }
-  return parseAgentIdFromSessionKey(round.sourceSessionKey ?? "") === actorId;
+  if (workItemId && round.workItemId === workItemId) {
+    return true;
+  }
+  return false;
 }
 
 function extractTaskTracker(text: string): TaskItem[] | null {
@@ -1327,7 +1426,8 @@ function isSubstantiveConversationText(text: string): boolean {
     !cleaned ||
     cleaned === "ANNOUNCE_SKIP" ||
     isEphemeralConversationText(cleaned) ||
-    isSyntheticWorkflowPromptText(cleaned)
+    isSyntheticWorkflowPromptText(cleaned) ||
+    isInternalAssistantMonologueText(text)
   ) {
     return false;
   }
@@ -1351,20 +1451,6 @@ function extractArtifactPathsFromMessages(messages: ChatMessage[]): string[] {
   }
 
   return [...paths];
-}
-
-function parseAgentFileReference(
-  absolutePath: string,
-): { agentId: string; name: string } | null {
-  const match = absolutePath.match(/\/\.openclaw\/workspaces\/---([^/]+)\/(.+)$/);
-  if (!match?.[1] || !match[2]) {
-    return null;
-  }
-
-  return {
-    agentId: match[1],
-    name: match[2],
-  };
 }
 
 function findArtifactMirrorRecord(
@@ -1628,7 +1714,12 @@ function buildChatDisplayItems(
     }
 
     const rawText = extractTextFromMessage(message);
-    if (rawText && isSyntheticWorkflowPromptText(rawText)) {
+    if (rawText && (isSyntheticWorkflowPromptText(rawText) || isInternalAssistantMonologueText(rawText))) {
+      return;
+    }
+
+    const renderableContent = getRenderableMessageContent(message.content);
+    if (!rawText && !renderableContent) {
       return;
     }
 
@@ -1680,8 +1771,8 @@ function extractBracketSection(text: string, label: string): string | null {
 }
 
 function summarizeProgressText(text: string): { title: string; summary: string; detail?: string } | null {
-  const cleaned = stripTaskTrackerSection(stripChatControlMetadata(text));
-  if (!cleaned || cleaned === "ANNOUNCE_SKIP") {
+    const cleaned = stripTaskTrackerSection(stripChatControlMetadata(text));
+  if (!cleaned || cleaned === "ANNOUNCE_SKIP" || isInternalAssistantMonologueText(text)) {
     return null;
   }
 
@@ -1843,11 +1934,10 @@ function buildSessionProgressEvents(input: {
         typeof message.provenance === "object" && message.provenance
           ? (message.provenance as Record<string, unknown>)
           : null;
-      const sourceSessionKey =
-        provenance && typeof provenance.sourceSessionKey === "string"
-          ? provenance.sourceSessionKey
+      const sourceAgentId =
+        provenance && typeof provenance.sourceActorId === "string"
+          ? provenance.sourceActorId
           : null;
-      const sourceAgentId = parseAgentIdFromSessionKey(sourceSessionKey ?? "");
       const actorLabel =
         message.role === "assistant"
           ? input.ownerLabel
@@ -1947,6 +2037,7 @@ export function ChatPage() {
   const userScrollLockRef = useRef(false);
   const lastScrollTopRef = useRef(0);
   const lockedScrollTopRef = useRef<number | null>(null);
+  const lastSyncedRoomSignatureRef = useRef<string | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ id: number; text: string } | null>(null);
 
   const [isDragging, setIsDragging] = useState(false);
@@ -2047,12 +2138,14 @@ export function ChatPage() {
   const groupMembers = groupMembersCsv ? [...new Set(groupMembersCsv.split(",").filter(Boolean))] : [];
   const routeGroupTopicKey = isGroup ? searchParams.get("tk")?.trim().toLowerCase() || null : null;
   const routeWorkItemId = isGroup ? searchParams.get("wi")?.trim() || null : null;
-  const routeRoomSessionKey = isGroup ? searchParams.get("sk")?.trim() || null : null;
-  const archiveId = !isGroup ? searchParams.get("archive")?.trim() || null : null;
-  const isArchiveView = Boolean(archiveId && historyAgentId);
+  const archiveId = searchParams.get("archive")?.trim() || null;
+  const isArchiveView = Boolean(archiveId && (historyAgentId || isGroup));
   const supportsSessionHistory = providerCapabilities.sessionHistory;
   const supportsSessionArchives = providerCapabilities.sessionArchives;
   const supportsSessionArchiveRestore = providerCapabilities.sessionArchiveRestore;
+  useEffect(() => {
+    lastSyncedRoomSignatureRef.current = null;
+  }, [activeCompany?.id, sessionKey, archiveId]);
   const rawGroupTitle =
     searchParams.get("title")?.trim() ||
     (groupTopic
@@ -2068,26 +2161,54 @@ export function ChatPage() {
         ? activeRoomRecords.find(
             (room) =>
               (routeRoomId && room.id === routeRoomId) ||
-              (targetSessionKey && room.sessionKey === targetSessionKey) ||
               (routeWorkItemId && room.workItemId === routeWorkItemId),
           ) ??
           null
         : null,
     [activeRoomRecords, isGroup, routeRoomId, routeWorkItemId, targetSessionKey],
   );
-  const effectiveGroupSessionKey =
-    activeRequirementRoom?.sessionKey ?? routeRoomSessionKey ?? targetSessionKey;
   const groupTitle = activeRequirementRoom?.title ?? rawGroupTitle;
   const groupTopicKey = activeRequirementRoom?.topicKey ?? routeGroupTopicKey;
   const groupWorkItemId = activeRequirementRoom?.workItemId ?? routeWorkItemId;
-  const productArchivedRounds = useMemo(
+  const productRoomId = useMemo(
     () =>
-      !isGroup && historyAgentId
-        ? activeRoundRecords
-            .filter((round) => matchesProductRoundToActor(round, historyAgentId))
-            .sort((left, right) => right.archivedAt - left.archivedAt)
-        : [],
-    [activeRoundRecords, historyAgentId, isGroup],
+      isGroup
+        ? activeRequirementRoom?.id ??
+          routeRoomId ??
+          (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : null)
+        : null,
+    [activeRequirementRoom?.id, groupWorkItemId, isGroup, routeRoomId],
+  );
+  const effectiveGroupSessionKey =
+    activeRequirementRoom?.sessionKey ??
+    activeRoomBindings.find(
+      (binding) =>
+        binding.roomId === productRoomId &&
+        typeof binding.conversationId === "string" &&
+        binding.conversationId.trim().length > 0,
+    )?.conversationId ??
+    targetSessionKey;
+  const productArchivedRounds = useMemo(
+    () => {
+      if (isGroup) {
+        return activeRoundRecords
+          .filter((round) =>
+            matchesProductRoundToRoom({
+              round,
+              roomId: activeRequirementRoom?.id ?? routeRoomId,
+              workItemId: groupWorkItemId,
+            }),
+          )
+          .sort((left, right) => right.archivedAt - left.archivedAt);
+      }
+      if (!historyAgentId) {
+        return [];
+      }
+      return activeRoundRecords
+        .filter((round) => matchesProductRoundToActor(round, historyAgentId))
+        .sort((left, right) => right.archivedAt - left.archivedAt);
+    },
+    [activeRequirementRoom?.id, activeRoundRecords, groupWorkItemId, historyAgentId, isGroup, routeRoomId],
   );
   const activeArchivedRound = useMemo(
     () =>
@@ -2098,9 +2219,9 @@ export function ChatPage() {
     () =>
       buildHistoryRoundItems({
         productRounds: productArchivedRounds,
-        providerRounds: recentArchivedRounds,
+        providerRounds: isGroup ? [] : recentArchivedRounds,
       }).slice(0, 16),
-    [productArchivedRounds, recentArchivedRounds],
+    [isGroup, productArchivedRounds, recentArchivedRounds],
   );
   const requirementRoomTargetAgentIds = useMemo(
     () =>
@@ -2144,6 +2265,20 @@ export function ChatPage() {
   );
 
   const emp = activeCompany?.employees.find((e) => e.agentId === targetAgentId);
+  const historySessionPresentations = useMemo(() => {
+    const employees = activeCompany?.employees ?? [];
+    return new Map(
+      recentAgentSessions.map((session) => [
+        session.key,
+        resolveSessionPresentation({
+          session,
+          rooms: activeRoomRecords,
+          bindings: activeRoomBindings,
+          employees,
+        }),
+      ]),
+    );
+  }, [activeCompany?.employees, activeRoomBindings, activeRoomRecords, recentAgentSessions]);
   const isCeoSession = emp?.metaRole === "ceo";
   const isFreshConversation = Boolean(
     isCeoSession &&
@@ -2202,7 +2337,7 @@ export function ChatPage() {
               return;
             }
             const sessions = (sessionResult.sessions ?? [])
-              .filter((session) => parseAgentIdFromSessionKey(session.key) === historyAgentId)
+              .filter((session) => resolveSessionActorId(session) === historyAgentId)
               .sort((left, right) => resolveSessionUpdatedAt(right) - resolveSessionUpdatedAt(left))
               .slice(0, 16);
             setRecentAgentSessions(sessions);
@@ -2864,7 +2999,7 @@ export function ChatPage() {
       const companyAgentIds = new Set(activeCompany.employees.map((employee) => employee.agentId));
       const companySessions = sessionResult.sessions
         .filter((session) => {
-        const sessionAgentId = parseAgentIdFromSessionKey(session.key);
+        const sessionAgentId = resolveSessionActorId(session);
         return sessionAgentId ? companyAgentIds.has(sessionAgentId) : false;
         })
         .sort((left, right) => resolveSessionUpdatedAt(right) - resolveSessionUpdatedAt(left));
@@ -2901,7 +3036,7 @@ export function ChatPage() {
         await Promise.all(
           sessionsToCheck.map(async (session) => {
             const history = await gateway.getChatHistory(session.key, 20);
-            const sessionAgentId = parseAgentIdFromSessionKey(session.key);
+            const sessionAgentId = resolveSessionActorId(session);
             const normalizedMessages = (history.messages ?? []).map(normalizeMessage);
             const snapshotMessages = createRequirementMessageSnapshots(normalizedMessages, {
               limit: REQUIREMENT_SNAPSHOT_MESSAGE_LIMIT,
@@ -2933,23 +3068,7 @@ export function ChatPage() {
                         exists: mirroredArtifact.status !== "archived",
                       } satisfies RequirementArtifactCheck;
                     }
-
-                    const parsed = parseAgentFileReference(absolutePath);
-                    if (!parsed || !providerCapabilities.agentFiles) {
-                      return null;
-                    }
-                    try {
-                      const result = await gateway.getAgentFile(parsed.agentId, parsed.name);
-                      return {
-                        path: absolutePath,
-                        exists: !result.file.missing,
-                      } satisfies RequirementArtifactCheck;
-                    } catch {
-                      return {
-                        path: absolutePath,
-                        exists: false,
-                      } satisfies RequirementArtifactCheck;
-                    }
+                    return null;
                   }),
               )
             ).filter((item): item is RequirementArtifactCheck => Boolean(item));
@@ -3525,7 +3644,6 @@ export function ChatPage() {
     const roomOwnerAgentId =
       activeRequirementRoom?.ownerActorId ??
       activeRequirementRoom?.ownerAgentId ??
-      parseAgentIdFromSessionKey(effectiveGroupSessionKey ?? "") ??
       activeCompany?.employees.find((employee) => employee.metaRole === "ceo")?.agentId ??
       targetAgentId ??
       null;
@@ -4359,7 +4477,7 @@ export function ChatPage() {
       pickConversationMissionRecord({
         missions: activeMissionRecords,
         sessionKey,
-        roomId: isGroup ? sessionKey : null,
+        roomId: productRoomId,
         topicKey: requirementOverview?.topicKey ?? groupTopicKey ?? null,
         startedAt: requirementOverview?.startedAt ?? activeRequirementRoom?.createdAt ?? null,
       }),
@@ -4368,6 +4486,7 @@ export function ChatPage() {
       activeRequirementRoom?.createdAt,
       groupTopicKey,
       isGroup,
+      productRoomId,
       requirementOverview?.startedAt,
       requirementOverview?.topicKey,
       sessionKey,
@@ -4378,7 +4497,7 @@ export function ChatPage() {
       pickWorkItemRecord({
         items: activeWorkItems,
         sessionKey,
-        roomId: (isGroup ? groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : sessionKey : null) ?? null,
+        roomId: productRoomId,
         topicKey: requirementOverview?.topicKey ?? groupTopicKey ?? null,
         startedAt: requirementOverview?.startedAt ?? activeRequirementRoom?.createdAt ?? null,
       }),
@@ -4389,6 +4508,7 @@ export function ChatPage() {
       groupTopicKey,
       groupWorkItemId,
       isGroup,
+      productRoomId,
       requirementOverview?.startedAt,
       requirementOverview?.topicKey,
       sessionKey,
@@ -4450,7 +4570,7 @@ export function ChatPage() {
     return buildConversationMissionRecord({
       sessionKey,
       topicKey: requirementOverview?.topicKey ?? groupTopicKey ?? null,
-      roomId: isGroup ? sessionKey : null,
+      roomId: productRoomId,
       startedAt: requirementOverview?.startedAt ?? activeRequirementRoom?.createdAt ?? latestMessageTimestamp,
       title: conversationMission.title,
       statusLabel: conversationMission.statusLabel,
@@ -4478,6 +4598,7 @@ export function ChatPage() {
     isRequirementBootstrapPending,
     missionIsCompleted,
     groupTopicKey,
+    productRoomId,
     requirementOverview?.topicKey,
     sessionKey,
   ]);
@@ -4500,12 +4621,7 @@ export function ChatPage() {
       artifacts: activeArtifacts,
       dispatches: activeDispatches,
       fallbackSessionKey: sessionKey,
-      fallbackRoomId:
-        (isGroup
-          ? groupWorkItemId
-            ? buildRoomRecordIdFromWorkItem(groupWorkItemId)
-            : sessionKey
-          : null) ?? null,
+      fallbackRoomId: productRoomId,
     });
     if (workItemRecord) {
       upsertWorkItemRecord(workItemRecord);
@@ -4520,6 +4636,7 @@ export function ChatPage() {
     isGroup,
     linkedRequirementRoom,
     persistedWorkItem,
+    productRoomId,
     requirementOverview,
     sessionKey,
     shouldPersistConversationTruth,
@@ -4544,35 +4661,35 @@ export function ChatPage() {
     const roomId = buildRoomRecordIdFromWorkItem(workItemId);
     const existingRoom =
       activeRoomRecords.find((room) => room.id === roomId || room.workItemId === workItemId) ?? null;
+    const nextRoomRecord = buildRequirementRoomRecord({
+      companyId: activeCompany.id,
+      workItemId,
+      sessionKey: existingRoom?.sessionKey ?? `room:${roomId}`,
+      title: requirementTeam.title,
+      memberIds: requirementTeam.memberIds,
+      ownerAgentId:
+        requirementTeam.ownerAgentId ??
+        persistedWorkItem?.ownerActorId ??
+        effectiveOwnerAgentId ??
+        targetAgentId ??
+        null,
+      topicKey: requirementTeam.topicKey,
+      transcript: existingRoom?.transcript ?? [],
+      createdAt: existingRoom?.createdAt ?? persistedWorkItem?.startedAt ?? Date.now(),
+      updatedAt: existingRoom?.updatedAt ?? Date.now(),
+    });
+    const nextRoomSignature = buildRequirementRoomRecordSignature(nextRoomRecord);
+    const existingRoomSignature = buildRequirementRoomRecordSignature(existingRoom);
+
     if (
-      existingRoom &&
-      existingRoom.workItemId === workItemId &&
-      existingRoom.title === requirementTeam.title &&
-      existingRoom.topicKey === requirementTeam.topicKey &&
-      existingRoom.memberIds.length >= requirementTeam.memberIds.length
+      nextRoomSignature === lastSyncedRoomSignatureRef.current ||
+      (existingRoom && existingRoomSignature === nextRoomSignature)
     ) {
       return;
     }
 
-    upsertRoomRecord(
-      buildRequirementRoomRecord({
-        companyId: activeCompany.id,
-        workItemId,
-        sessionKey: existingRoom?.sessionKey ?? `room:${roomId}`,
-        title: requirementTeam.title,
-        memberIds: requirementTeam.memberIds,
-        ownerAgentId:
-          requirementTeam.ownerAgentId ??
-          persistedWorkItem?.ownerActorId ??
-          effectiveOwnerAgentId ??
-          targetAgentId ??
-          null,
-        topicKey: requirementTeam.topicKey,
-        transcript: existingRoom?.transcript ?? [],
-        createdAt: existingRoom?.createdAt ?? persistedWorkItem?.startedAt ?? Date.now(),
-        updatedAt: existingRoom?.updatedAt ?? Date.now(),
-      }),
-    );
+    lastSyncedRoomSignatureRef.current = nextRoomSignature;
+    upsertRoomRecord(nextRoomRecord);
   }, [
     activeCompany,
     activeRoomRecords,
@@ -5113,7 +5230,7 @@ export function ChatPage() {
               updateStreamText(null);
             }
           } else if (isGroup) {
-            const existingRoom = activeRequirementRoom?.sessionKey === actualKey ? activeRequirementRoom : null;
+            const existingRoom = activeRequirementRoom ?? null;
             if (existingRoom) {
               const nextMessages = convertRequirementRoomRecordToChatMessages(existingRoom);
               setMessages((previous) =>
@@ -5150,12 +5267,25 @@ export function ChatPage() {
                 sessionKey: actualKey,
                 title: groupTitle,
                 memberIds: requirementRoomTargetAgentIds,
-                ownerAgentId: parseAgentIdFromSessionKey(actualKey),
+                ownerAgentId:
+                  existingRoom?.ownerActorId ??
+                  existingRoom?.ownerAgentId ??
+                  effectiveOwnerAgentId ??
+                  targetAgentId ??
+                  null,
                 topicKey: groupTopicKey ?? null,
                 sessions: histories,
                 providerId,
               });
-              upsertRoomRecord(roomRecord);
+              const roomRecordSignature = buildRequirementRoomRecordSignature(roomRecord);
+              const existingRoomSignature = buildRequirementRoomRecordSignature(existingRoom);
+              if (
+                roomRecordSignature !== lastSyncedRoomSignatureRef.current &&
+                roomRecordSignature !== existingRoomSignature
+              ) {
+                lastSyncedRoomSignatureRef.current = roomRecordSignature;
+                upsertRoomRecord(roomRecord);
+              }
               upsertRoomConversationBindings(
                 buildRoomConversationBindingsFromSessions({
                   roomId: roomRecord.id,
@@ -5234,7 +5364,24 @@ export function ChatPage() {
       if (payload.state === "final") {
         const incoming = payload.message ? normalizeMessage(payload.message) : null;
         if (isGroup) {
-          const agentKey = parseAgentIdFromSessionKey(payload.sessionKey);
+          const roomId = productRoomId ?? activeRequirementRoom?.id ?? null;
+          const payloadSourceActorId =
+            incoming &&
+            typeof incoming.provenance === "object" &&
+            incoming.provenance &&
+            typeof (incoming.provenance as Record<string, unknown>).sourceActorId === "string"
+              ? String((incoming.provenance as Record<string, unknown>).sourceActorId)
+              : null;
+          const agentKey =
+            requirementRoomSessions.find((session) => session.sessionKey === payload.sessionKey)?.agentId ??
+            activeRoomBindings.find(
+              (binding) =>
+                binding.roomId === roomId &&
+                binding.conversationId === payload.sessionKey &&
+                typeof binding.actorId === "string" &&
+                binding.actorId.trim().length > 0,
+            )?.actorId ??
+            payloadSourceActorId;
           const roomMessage =
             incoming && agentKey
               ? createIncomingRequirementRoomMessage({
@@ -5242,20 +5389,17 @@ export function ChatPage() {
                   message: incoming,
                   sessionKey: payload.sessionKey,
                   agentId: agentKey,
-                  roomId:
-                    activeRequirementRoom?.id ??
-                    (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : sessionKey ?? undefined),
+                  roomId: roomId ?? undefined,
                   ownerAgentId:
-                    activeRequirementRoom?.ownerAgentId ?? parseAgentIdFromSessionKey(sessionKey),
+                    activeRequirementRoom?.ownerAgentId ??
+                    activeRequirementRoom?.ownerActorId ??
+                    targetAgentId,
                 })
               : null;
           if (roomMessage && sessionKey && agentKey) {
-            const roomId =
-              activeRequirementRoom?.id ??
-              (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : sessionKey);
             upsertRoomConversationBindings([
               {
-                roomId,
+                roomId: roomId ?? "room:unknown",
                 providerId,
                 conversationId: payload.sessionKey,
                 actorId: agentKey,
@@ -5273,7 +5417,7 @@ export function ChatPage() {
             });
             dispatchUpdates.forEach((dispatch) => upsertDispatchRecord(dispatch));
             appendRoomMessages(
-              roomId,
+              roomId ?? "room:unknown",
               [roomMessage],
               {
                 sessionKey,
@@ -5285,9 +5429,11 @@ export function ChatPage() {
                 ownerActorId:
                   activeRequirementRoom?.ownerActorId ??
                   activeRequirementRoom?.ownerAgentId ??
-                  parseAgentIdFromSessionKey(sessionKey),
+                  targetAgentId,
                 ownerAgentId:
-                  activeRequirementRoom?.ownerAgentId ?? parseAgentIdFromSessionKey(sessionKey),
+                  activeRequirementRoom?.ownerAgentId ??
+                  activeRequirementRoom?.ownerActorId ??
+                  targetAgentId,
                 topicKey: groupTopicKey ?? undefined,
               },
             );
@@ -5437,6 +5583,7 @@ export function ChatPage() {
     isArchiveView,
     isGroup,
     persistedWorkItem?.id,
+    productRoomId,
     providerId,
     requirementRoomSessionKeys,
     requirementRoomTargetAgentIds,
@@ -5549,13 +5696,11 @@ export function ChatPage() {
         const fulfilledDispatches = results
           .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof sendTurnToCompanyActor>>> => result.status === "fulfilled")
           .map((result) => result.value);
-        const roomId =
-          activeRequirementRoom?.id ??
-          (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : sessionKey);
+        const roomId = productRoomId ?? activeRequirementRoom?.id ?? null;
         const workItemId = groupWorkItemId ?? persistedWorkItem?.id ?? conversationMissionRecord?.id ?? null;
         upsertRoomConversationBindings(
           fulfilledDispatches.map((dispatch) => ({
-            roomId: roomId ?? sessionKey ?? "room:unknown",
+            roomId: roomId ?? "room:unknown",
             ...dispatch.providerConversationRef,
             updatedAt: dispatchStartedAt,
           })),
@@ -5582,11 +5727,11 @@ export function ChatPage() {
           });
         }
         appendRoomMessages(
-          roomId ?? sessionKey ?? "room:unknown",
+          roomId ?? "room:unknown",
           [
             createOutgoingRequirementRoomMessage({
               roomId: roomId ?? undefined,
-              sessionKey: activeRequirementRoom?.sessionKey ?? sessionKey ?? `room:${roomId ?? "unknown"}`,
+              sessionKey: roomId ?? productRoomId ?? activeRequirementRoom?.id ?? "room:unknown",
               text,
               audienceAgentIds: roomAudienceAgentIds,
             }),
@@ -5601,9 +5746,11 @@ export function ChatPage() {
             ownerActorId:
               activeRequirementRoom?.ownerActorId ??
               activeRequirementRoom?.ownerAgentId ??
-              parseAgentIdFromSessionKey(sessionKey),
+              targetAgentId,
             ownerAgentId:
-              activeRequirementRoom?.ownerAgentId ?? parseAgentIdFromSessionKey(sessionKey),
+              activeRequirementRoom?.ownerAgentId ??
+              activeRequirementRoom?.ownerActorId ??
+              targetAgentId,
             topicKey: groupTopicKey ?? undefined,
           },
         );
@@ -5668,7 +5815,7 @@ export function ChatPage() {
       const archivedRoomId =
         (isGroup
           ? activeRequirementRoom?.id ??
-            (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : sessionKey)
+            (groupWorkItemId ? buildRoomRecordIdFromWorkItem(groupWorkItemId) : null)
           : null) ?? null;
       const archivedTitle =
         activeConversationMission?.title ||
@@ -5914,7 +6061,7 @@ export function ChatPage() {
     };
 
     const normalizeRenderableText = (text: string) =>
-      stripChatControlMetadata(text)
+      stripTruthInternalMonologue(stripChatControlMetadata(text))
         .replace(/\bANNOUNCE_SKIP\b/g, "")
         .trim();
 
@@ -6104,13 +6251,12 @@ export function ChatPage() {
       typeof msg.provenance === "object" && msg.provenance
         ? (msg.provenance as Record<string, unknown>)
         : null;
-    const sourceSessionKey =
-      provenance && typeof provenance.sourceSessionKey === "string"
-        ? provenance.sourceSessionKey
-        : null;
     const sourceTool =
       provenance && typeof provenance.sourceTool === "string" ? provenance.sourceTool : null;
-    const sourceAgentId = parseAgentIdFromSessionKey(sourceSessionKey ?? "");
+    const sourceAgentId =
+      provenance && typeof provenance.sourceActorId === "string"
+        ? provenance.sourceActorId
+        : null;
     const sourcedEmployee =
       sourceAgentId && activeCompany
         ? activeCompany.employees.find((employee) => employee.agentId === sourceAgentId) ?? null
@@ -6125,7 +6271,9 @@ export function ChatPage() {
         ? activeCompany.employees.find((employee) => employee.agentId === roomAgentId) ?? null
         : null;
     const roomSessionAgentId =
-      typeof msg.roomSessionKey === "string" ? parseAgentIdFromSessionKey(msg.roomSessionKey) : null;
+      typeof msg.roomAgentId === "string" && msg.roomAgentId.length > 0
+        ? msg.roomAgentId
+        : null;
     const roomSessionEmployee =
       roomSessionAgentId && activeCompany
         ? activeCompany.employees.find((employee) => employee.agentId === roomSessionAgentId) ?? null
@@ -6494,6 +6642,7 @@ export function ChatPage() {
                     ) : (
                       recentAgentSessions.map((session) => {
                         const isCurrentLiveSession = session.key === sessionKey && !isArchiveView;
+                        const presentation = historySessionPresentations.get(session.key);
                         return (
                           <div
                             key={session.key}
@@ -6505,12 +6654,16 @@ export function ChatPage() {
                             <button
                               type="button"
                               disabled={isCurrentLiveSession}
-                              onClick={() => navigate(`/chat/${encodeURIComponent(session.key)}`)}
+                              onClick={() =>
+                                navigate(
+                                  presentation?.route ?? `/chat/${encodeURIComponent(session.key)}`,
+                                )
+                              }
                               className="min-w-0 flex-1 text-left disabled:cursor-default"
                             >
                               <div className="flex w-full items-center justify-between gap-2">
                                 <span className="line-clamp-1 text-sm font-medium text-slate-800">
-                                  {resolveSessionTitle(session)}
+                                  {presentation?.title ?? resolveSessionTitle(session)}
                                 </span>
                                 {isCurrentLiveSession ? (
                                   <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">
@@ -6579,7 +6732,7 @@ export function ChatPage() {
                                 </span>
                                 <div className="flex items-center gap-1">
                                   <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-700">
-                                    {archive.source === "product" ? "产品归档" : "后端归档"}
+                                    {archive.source === "product" ? "产品轮次" : "同步镜像"}
                                   </span>
                                   {isCurrentArchive ? (
                                     <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">

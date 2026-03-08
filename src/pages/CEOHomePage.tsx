@@ -26,6 +26,8 @@ import {
 } from "../features/org/org-advisor";
 import {
   gateway,
+  resolveCompanyActorConversation,
+  sendTurnToCompanyActor,
   type ChatMessage,
   type GatewaySessionRow,
 } from "../features/backend";
@@ -38,9 +40,10 @@ import {
 import { getActiveHandoffs } from "../features/handoffs/active-handoffs";
 import { resolveCompanyKnowledge } from "../features/knowledge/shared-knowledge";
 import { toast } from "../features/ui/toast-store";
+import { resolveConversationPresentation, resolveSessionPresentation } from "../lib/chat-routes";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
   resolveSessionTitle,
   resolveSessionUpdatedAt,
 } from "../lib/sessions";
@@ -89,7 +92,11 @@ export function CEOHomePage() {
   const navigate = useNavigate();
   const activeCompany = useCompanyStore((state) => state.activeCompany);
   const updateCompany = useCompanyStore((state) => state.updateCompany);
+  const activeRoomRecords = useCompanyStore((state) => state.activeRoomRecords);
+  const activeRoomBindings = useCompanyStore((state) => state.activeRoomBindings);
+  const activeWorkItems = useCompanyStore((state) => state.activeWorkItems);
   const connected = useGatewayStore((state) => state.connected);
+  const manifest = useGatewayStore((state) => state.manifest);
   const isPageVisible = usePageVisibility();
 
   const [inputValue, setInputValue] = useState("");
@@ -100,6 +107,7 @@ export function CEOHomePage() {
   const [currentTime, setCurrentTime] = useState(() => Date.now());
 
   const ceo = activeCompany?.employees.find((employee) => employee.metaRole === "ceo") ?? null;
+  const companyEmployees = activeCompany?.employees ?? [];
   const orgAutopilotEnabled = activeCompany ? isOrgAutopilotEnabled(activeCompany) : false;
   const ceoSurface = useMemo(
     () => (activeCompany ? buildCeoControlSurface(activeCompany) : null),
@@ -155,10 +163,23 @@ export function CEOHomePage() {
     let cancelled = false;
     const loadHistory = async () => {
       try {
-        const session = await gateway.resolveSession(ceo.agentId);
-        const history = await gateway.getChatHistory(session.key, 8);
+        const resolved = await resolveCompanyActorConversation({
+          backend: gateway,
+          manifest,
+          company: activeCompany,
+          actorId: ceo.agentId,
+          kind: "direct",
+        });
+        const history = await gateway.readConversation(resolved.conversationRef, 8);
         if (!cancelled) {
-          setCeoHistory(history.messages ?? []);
+          setCeoHistory(
+            (history.messages ?? []).map((message) => ({
+              role: message.role,
+              text: message.text,
+              content: message.content,
+              timestamp: message.timestamp,
+            })),
+          );
         }
       } catch (error) {
         console.error("Failed to load CEO history", error);
@@ -168,7 +189,7 @@ export function CEOHomePage() {
     return () => {
       cancelled = true;
     };
-  }, [ceo, connected, isPageVisible]);
+  }, [activeCompany, ceo, connected, isPageVisible, manifest]);
 
   if (!activeCompany || !ceo || !ceoSurface || !orgAdvisor) {
     return <div className="p-8 text-center text-muted-foreground">未选择正在运营的公司组织</div>;
@@ -176,7 +197,7 @@ export function CEOHomePage() {
 
   const companyAgentIds = new Set(activeCompany.employees.map((employee) => employee.agentId));
   const companySessions = sessions
-    .map((session) => ({ ...session, agentId: parseAgentIdFromSessionKey(session.key) }))
+    .map((session) => ({ ...session, agentId: resolveSessionActorId(session) }))
     .filter((session): session is GatewaySessionRow & { agentId: string } => {
       return typeof session.agentId === "string" && companyAgentIds.has(session.agentId);
     })
@@ -259,17 +280,41 @@ export function CEOHomePage() {
   const activityItems = [
     ...companySessions.slice(0, 5).map((session) => ({
       id: session.key,
-      title: resolveSessionTitle(session),
+      title: resolveSessionPresentation({
+        session,
+        rooms: activeRoomRecords,
+        bindings: activeRoomBindings,
+        employees: companyEmployees,
+      }).title,
       summary: session.lastMessagePreview ?? "最近一次会话更新",
       ts: resolveSessionUpdatedAt(session),
-      href: `/chat/${encodeURIComponent(session.key)}`,
+      href: resolveSessionPresentation({
+        session,
+        rooms: activeRoomRecords,
+        bindings: activeRoomBindings,
+        employees: companyEmployees,
+      }).route,
     })),
     ...activeHandoffs.slice(-3).map((handoff) => ({
       id: handoff.id,
       title: `交接: ${handoff.title}`,
       summary: handoff.summary,
       ts: handoff.updatedAt,
-      href: `/chat/${encodeURIComponent(handoff.sessionKey)}`,
+      href:
+        resolveConversationPresentation({
+          sessionKey: handoff.sessionKey,
+          actorId:
+            activeWorkItems.find((item) => item.id === handoff.taskId)?.ownerActorId ??
+            activeWorkItems.find(
+              (item) =>
+                item.sourceConversationId === handoff.sessionKey ||
+                item.sourceSessionKey === handoff.sessionKey,
+            )?.ownerActorId ??
+            null,
+          rooms: activeRoomRecords,
+          bindings: activeRoomBindings,
+          employees: companyEmployees,
+        }).route,
     })),
   ]
     .sort((left, right) => right.ts - left.ts)
@@ -289,8 +334,14 @@ export function CEOHomePage() {
 
     setSending(true);
     try {
-      const session = await gateway.resolveSession(ceo.agentId);
-      await gateway.sendChatMessage(session.key, trimmed);
+      await sendTurnToCompanyActor({
+        backend: gateway,
+        manifest,
+        company: activeCompany,
+        actorId: ceo.agentId,
+        message: trimmed,
+        targetActorIds: [ceo.agentId],
+      });
       setInputValue("");
       navigate(`/chat/${ceo.agentId}`);
     } catch (error) {

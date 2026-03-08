@@ -1,4 +1,4 @@
-import { gateway } from "../features/backend";
+import { gateway, sendTurnToCompanyActor, resolveCompanyActorConversation } from "../features/backend";
 import type { Company } from "../features/company/types";
 import { useCompanyStore } from "../features/company/store";
 import { CONFIG_PROMPTS, resolveMetaAgentId, type MetaTarget } from "./chat-as-config";
@@ -42,9 +42,53 @@ function normalizeNonEmptyString(value: string): string {
 async function sendPromptToMetaAgent(company: Company, target: MetaTarget, prompt: string) {
   ensureConnected();
   const agentId = ensureMetaAgent(company, target);
-  const session = await gateway.resolveSession(agentId);
-  await gateway.sendChatMessage(session.key, prompt);
-  return { agentId, sessionKey: session.key };
+  const manifest = useGatewayStore.getState().manifest;
+  const result = await sendTurnToCompanyActor({
+    backend: gateway,
+    manifest,
+    company,
+    actorId: agentId,
+    message: prompt,
+    targetActorIds: [agentId],
+  });
+  return {
+    agentId,
+    sessionKey: result.conversationRef.conversationId,
+    providerConversationId: result.providerConversationRef.conversationId,
+  };
+}
+
+async function resolveActorConversation(company: Company | null | undefined, actorId: string) {
+  const manifest = useGatewayStore.getState().manifest;
+  return resolveCompanyActorConversation({
+    backend: gateway,
+    manifest,
+    company,
+    actorId,
+    kind: "direct",
+  });
+}
+
+async function sendPromptToActor(input: {
+  company: Company | null | undefined;
+  actorId: string;
+  message: string;
+  timeoutMs?: number;
+  attachments?: Array<{ type: string; mimeType: string; content: string }>;
+  targetActorIds?: string[];
+}) {
+  ensureConnected();
+  const manifest = useGatewayStore.getState().manifest;
+  return sendTurnToCompanyActor({
+    backend: gateway,
+    manifest,
+    company: input.company,
+    actorId: input.actorId,
+    message: input.message,
+    timeoutMs: input.timeoutMs,
+    attachments: input.attachments,
+    targetActorIds: input.targetActorIds,
+  });
 }
 
 async function requestGatewayMethod<T>(method: string, params: unknown, options?: RequestOptions): Promise<T> {
@@ -191,10 +235,15 @@ export const AgentOps = {
     const targetAgentId = normalizeNonEmptyString(agentId);
     const taskText = normalizeNonEmptyString(task);
     try {
-      const session = await gateway.resolveSession(targetAgentId);
-      await gateway.sendChatMessage(session.key, taskText);
+      const activeCompany = useCompanyStore.getState().activeCompany;
+      const result = await sendPromptToActor({
+        company: activeCompany,
+        actorId: targetAgentId,
+        message: taskText,
+        targetActorIds: [targetAgentId],
+      });
       toast.success("任务已分配", "已将任务发送到目标员工会话");
-      return { agentId: targetAgentId, sessionKey: session.key };
+      return { agentId: targetAgentId, sessionKey: result.conversationRef.conversationId };
     } catch (error) {
       toast.error("任务分配失败", toErrorMessage(error));
       throw error;
@@ -293,11 +342,14 @@ export const AgentOps = {
     if (!hrAgentId) {
       throw new Error("无 HR 节点，离线更新职级失败。");
     }
-    const session = await gateway.resolveSession(hrAgentId);
-    await gateway.sendChatMessage(
-      session.key,
+    await sendPromptToActor({
+      company: activeCompany,
+      actorId: hrAgentId,
+      message:
       `[ADMIN_ACTION] 角色职务调整。请将员工 ${targetInfo.nickname} (${id}) 的岗位更新为 "${role}"，职责描述更新为: "${description}"。务必更新档并在系统里生效。`
-    );
+      ,
+      targetActorIds: [hrAgentId],
+    });
     toast.success("执行中", "HR 已接管调岗流程。在处理完成并重载系统前，可能需要耐心等待数分钟。");
   },
 
@@ -320,11 +372,14 @@ export const AgentOps = {
     if (!hrAgentId) {
        throw new Error("公司组织结构树中无 HR 节点，离职转交失败！");
     }
-    const session = await gateway.resolveSession(hrAgentId);
-    await gateway.sendChatMessage(
-      session.key,
+    await sendPromptToActor({
+      company: activeCompany,
+      actorId: hrAgentId,
+      message:
       `[ADMIN_ACTION] 执行销毁计算节点请求。请彻底解雇员工 ${targetName} (${id})，完成系统档注销、清理运行时状态。`
-    );
+      ,
+      targetActorIds: [hrAgentId],
+    });
     toast.success("执行中", "HR 已接管解雇流程，请稍后刷新检查员工名片薄。");
   },
 
@@ -405,7 +460,10 @@ export const AgentOps = {
   },
 
   async resolveSessionForAgent(agentId: string) {
-    return gateway.resolveSession(normalizeNonEmptyString(agentId));
+    const targetAgentId = normalizeNonEmptyString(agentId);
+    const activeCompany = useCompanyStore.getState().activeCompany;
+    const resolved = await resolveActorConversation(activeCompany, targetAgentId);
+    return { ok: true as const, key: resolved.conversationRef.conversationId };
   },
 
   async getRuntimeStatus() {

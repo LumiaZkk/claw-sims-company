@@ -11,6 +11,28 @@ import type {
 } from "../company/types";
 import type { RequirementExecutionOverview } from "./requirement-overview";
 import { isParticipantCompletedStatus } from "./requirement-kind";
+import { parseAgentIdFromSessionKey } from "../../lib/sessions";
+
+function resolveWorkItemSourceActorId(input: {
+  sourceActorId?: string | null;
+  legacySourceSessionKey?: string | null;
+  ownerActorId?: string | null;
+}): string | null {
+  return (
+    input.sourceActorId?.trim() ||
+    // Compatibility-only migration from legacy mission/session inputs.
+    parseAgentIdFromSessionKey(input.legacySourceSessionKey ?? "") ||
+    input.ownerActorId?.trim() ||
+    null
+  );
+}
+
+function resolveWorkItemSourceActorLabel(input: {
+  sourceActorLabel?: string | null;
+  ownerLabel?: string | null;
+}): string | null {
+  return input.sourceActorLabel?.trim() || input.ownerLabel?.trim() || null;
+}
 
 function normalizeWorkItemStatus(
   mission: ConversationMissionRecord,
@@ -61,6 +83,16 @@ export function buildWorkItemRecordFromMission(input: {
     companyId,
     sessionKey: mission.sessionKey,
     topicKey: mission.topicKey,
+    sourceActorId: resolveWorkItemSourceActorId({
+      legacySourceSessionKey: mission.sessionKey,
+      ownerActorId: mission.ownerAgentId,
+    }),
+    sourceActorLabel: resolveWorkItemSourceActorLabel({
+      ownerLabel: mission.ownerLabel,
+    }),
+    sourceSessionKey: mission.sessionKey,
+    sourceConversationId: mission.sessionKey,
+    providerId: null,
     title: mission.title,
     goal: mission.summary,
     status: normalizeWorkItemStatus(mission),
@@ -118,6 +150,16 @@ export function buildWorkItemRecordFromRequirementOverview(input: {
     companyId,
     sessionKey: ownerSessionKey ?? undefined,
     topicKey: overview.topicKey,
+    sourceActorId: resolveWorkItemSourceActorId({
+      legacySourceSessionKey: ownerSessionKey,
+      ownerActorId: overview.currentOwnerAgentId,
+    }),
+    sourceActorLabel: resolveWorkItemSourceActorLabel({
+      ownerLabel: overview.currentOwnerLabel,
+    }),
+    sourceSessionKey: ownerSessionKey ?? null,
+    sourceConversationId: ownerSessionKey ?? null,
+    providerId: null,
     title: overview.title,
     goal: overview.summary,
     status: normalizeWorkItemStatusFromOverview(overview),
@@ -192,6 +234,9 @@ function scoreWorkItemMatch(input: {
   if (roomId && item.roomId === roomId) {
     score += 40;
   }
+  if (sessionKey && item.sourceConversationId === sessionKey) {
+    score += 30;
+  }
   if (sessionKey && item.sessionKey === sessionKey) {
     score += 20;
   }
@@ -199,6 +244,22 @@ function scoreWorkItemMatch(input: {
     score += 5;
   }
   return score;
+}
+
+export function matchesWorkItemSourceActor(
+  item: WorkItemRecord,
+  actorId: string | null | undefined,
+): boolean {
+  if (!actorId) {
+    return false;
+  }
+  if (item.sourceActorId === actorId) {
+    return true;
+  }
+  if (item.ownerActorId === actorId && !item.sourceActorId) {
+    return true;
+  }
+  return false;
 }
 
 export function pickWorkItemRecord(input: {
@@ -242,6 +303,10 @@ export function buildRoomRecordIdFromWorkItem(workItemId: string): string {
   return `workitem:${workItemId}`;
 }
 
+export function isRoomBackedWorkItem(item: WorkItemRecord): boolean {
+  return typeof item.roomId === "string" && item.roomId.trim().length > 0;
+}
+
 export function buildRoundRecord(input: {
   companyId: string;
   title: string;
@@ -260,8 +325,15 @@ export function buildRoundRecord(input: {
   restorable?: boolean;
 }): RoundRecord {
   const archivedAt = input.archivedAt ?? Date.now();
+  const roundIdentity =
+    input.workItemId ??
+    input.roomId ??
+    input.sourceActorId ??
+    input.sourceConversationId ??
+    input.sourceSessionKey ??
+    input.title;
   return {
-    id: `${input.workItemId ?? input.sourceSessionKey ?? input.title}@${Math.floor(archivedAt)}`,
+    id: `${roundIdentity}@${Math.floor(archivedAt)}`,
     companyId: input.companyId,
     workItemId: input.workItemId ?? null,
     roomId: input.roomId ?? null,

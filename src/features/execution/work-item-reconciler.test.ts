@@ -139,6 +139,8 @@ describe("reconcileWorkItemRecord", () => {
 
     expect(reconciled).toMatchObject({
       id: "mission:consistency-platform",
+      sourceActorId: "co-ceo",
+      sourceConversationId: "agent:co-ceo:main",
       ownerActorId: "co-ceo",
       batonActorId: "co-ceo",
       roomId: buildRoomRecordIdFromWorkItem("mission:consistency-platform"),
@@ -163,6 +165,8 @@ describe("reconcileWorkItemRecord", () => {
       batonActorId: "co-ceo",
       batonLabel: "CEO",
       roomId: buildRoomRecordIdFromWorkItem("mission:consistency-platform"),
+      sourceActorId: "co-ceo",
+      sourceConversationId: "agent:co-ceo:main",
       artifactIds: [],
       dispatchIds: [],
       startedAt: 1_000,

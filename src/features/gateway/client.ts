@@ -41,6 +41,7 @@ export interface AgentsListResult {
 
 export interface GatewaySessionRow {
   key: string;
+  actorId?: string | null;
   kind?: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -65,6 +66,20 @@ export interface SessionsListResult {
   path: string;
   count: number;
   sessions: GatewaySessionRow[];
+}
+
+function parseSessionActorId(sessionKey: string): string | null {
+  if (!sessionKey.startsWith("agent:")) {
+    return null;
+  }
+
+  const parts = sessionKey.split(":");
+  if (parts.length < 3) {
+    return null;
+  }
+
+  const actorId = parts[1]?.trim();
+  return actorId && actorId.length > 0 ? actorId : null;
 }
 
 export interface SessionsArchivesListResult {
@@ -504,7 +519,17 @@ export class CyberGateway {
   }
 
   async listSessions(opts?: SessionsListParams): Promise<SessionsListResult> {
-    return this.client!.request("sessions.list", opts ?? {});
+    const result = await this.client!.request<SessionsListResult>("sessions.list", opts ?? {});
+    return {
+      ...result,
+      sessions: (result.sessions ?? []).map((session) => ({
+        ...session,
+        actorId:
+          typeof session.actorId === "string" && session.actorId.trim().length > 0
+            ? session.actorId
+            : parseSessionActorId(session.key),
+      })),
+    };
   }
 
   async resetSession(

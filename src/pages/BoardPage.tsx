@@ -20,19 +20,21 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { useCompanyStore } from "../features/company/store";
-import { pickConversationMissionRecord } from "../features/execution/conversation-mission";
 import { buildRequirementRoomHrefFromRecord, buildRequirementRoomRoute } from "../features/execution/requirement-room";
 import type {
-  ConversationMissionRecord,
   TaskExecutionState,
   TaskStep,
   TrackedTask,
   WorkItemRecord,
 } from "../features/company/types";
 import {
+  isRoomBackedWorkItem,
+  matchesWorkItemSourceActor,
   pickWorkItemRecord,
 } from "../features/execution/work-item";
 import { reconcileWorkItemRecord } from "../features/execution/work-item-reconciler";
+import { isReliableWorkItemRecord } from "../features/execution/work-item-signal";
+import { isSyntheticWorkflowPromptText } from "../features/execution/message-truth";
 import {
   resolveExecutionState,
   type ResolvedExecutionState,
@@ -52,6 +54,7 @@ import {
   filterRequirementSlaAlerts,
 } from "../features/execution/requirement-scope";
 import {
+  isArtifactRequirementTopic,
   isParticipantCompletedStatus,
   isStrategicRequirementTopic,
 } from "../features/execution/requirement-kind";
@@ -64,9 +67,10 @@ import { buildTaskObjectSnapshot } from "../features/tasks/task-object";
 import { gateway, type GatewaySessionRow, type ChatMessage } from "../features/backend";
 import { useGatewayStore } from "../features/gateway/store";
 import { toast } from "../features/ui/toast-store";
+import { resolveConversationPresentation } from "../lib/chat-routes";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
   resolveSessionUpdatedAt,
 } from "../lib/sessions";
 import { usePageVisibility } from "../lib/use-page-visibility";
@@ -83,18 +87,6 @@ type TaskStepSummary = {
   currentStep: TaskStep | null;
   upcomingSteps: TaskStep[];
 };
-
-function isWorkItemRecord(
-  mission: ConversationMissionRecord | WorkItemRecord | null,
-): mission is WorkItemRecord {
-  return Boolean(mission && "stageLabel" in mission);
-}
-
-function isConversationMissionRecord(
-  mission: ConversationMissionRecord | WorkItemRecord | null,
-): mission is ConversationMissionRecord {
-  return Boolean(mission && "currentStepLabel" in mission);
-}
 
 const TASK_LANE_META: Record<
   Exclude<TaskLane, "done">,
@@ -440,13 +432,13 @@ function isCanonicalWorkItemRecord(
   workItem: WorkItemRecord,
   ceoAgentId: string | null | undefined,
 ): boolean {
-  if (workItem.sessionKey?.includes(":group:")) {
-    return true;
-  }
-  if (!ceoAgentId || !workItem.sessionKey) {
+  if (!isReliableWorkItemRecord(workItem)) {
     return false;
   }
-  return parseAgentIdFromSessionKey(workItem.sessionKey) === ceoAgentId;
+  if (isRoomBackedWorkItem(workItem)) {
+    return true;
+  }
+  return matchesWorkItemSourceActor(workItem, ceoAgentId);
 }
 
 function mapWorkStepStatusToTaskStepStatus(status: WorkItemRecord["steps"][number]["status"]): TaskStep["status"] {
@@ -513,7 +505,6 @@ export function BoardPage() {
   const navigate = useNavigate();
   const {
     activeCompany,
-    activeMissionRecords,
     activeRoomRecords,
     activeWorkItems,
     activeArtifacts,
@@ -523,6 +514,7 @@ export function BoardPage() {
     updateCompany,
   } = useCompanyStore();
   const connected = useGatewayStore((state) => state.connected);
+  const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
   const isPageVisible = usePageVisibility();
   const [sessions, setSessions] = useState<GatewaySessionRow[]>([]);
   const [, setLoading] = useState(true);
@@ -562,7 +554,7 @@ export function BoardPage() {
       }
 
       // Try to load TASK-BOARD.md from CEO's workspace
-      if (activeCompany) {
+      if (activeCompany && supportsAgentFiles) {
         const ceo = activeCompany.employees.find((e) => e.metaRole === "ceo");
         if (ceo) {
           try {
@@ -575,12 +567,24 @@ export function BoardPage() {
             // TASK-BOARD.md doesn't exist yet – that's fine
           }
         }
+      } else if (activeCompany) {
+        const mirroredTaskBoard = activeArtifacts.find((artifact) => {
+          const sourceName = artifact.sourceName?.trim().toLowerCase();
+          const title = artifact.title.trim().toLowerCase();
+          return sourceName === "task-board.md" || title === "task-board.md";
+        });
+        if (mirroredTaskBoard?.content) {
+          const ceo = activeCompany.employees.find((e) => e.metaRole === "ceo");
+          setFileTasks(parseTaskBoardMd(mirroredTaskBoard.content, ceo?.agentId ?? "co-ceo"));
+        } else {
+          setFileTasks([]);
+        }
       }
     }
     loadBoard();
     const t = setInterval(loadBoard, 15000);
     return () => clearInterval(t);
-  }, [activeCompany, connected, isPageVisible]);
+  }, [activeArtifacts, activeCompany, connected, isPageVisible, supportsAgentFiles]);
 
   const extractText = useCallback((msg: ChatMessage): string => {
     if (typeof msg.text === "string" && msg.text.trim()) {
@@ -643,7 +647,7 @@ export function BoardPage() {
             key,
             { topic: truncatedTopic || "(未检测到任务指令)", msgCount: messages.length },
           ]);
-          const sessionAgentId = session ? parseAgentIdFromSessionKey(session.key) : null;
+          const sessionAgentId = session ? resolveSessionActorId(session) : null;
           if (sessionAgentId) {
             snapshots.push({
               agentId: sessionAgentId,
@@ -660,7 +664,7 @@ export function BoardPage() {
             return next;
           });
           if (execution.state === "manual_takeover_required") {
-            const sessionAgentId = session ? parseAgentIdFromSessionKey(session.key) : null;
+            const sessionAgentId = session ? resolveSessionActorId(session) : null;
             const ownerLabel =
               activeCompany?.employees.find((employee) => employee.agentId === sessionAgentId)
                 ?.nickname ??
@@ -767,7 +771,7 @@ export function BoardPage() {
   const companyAgentIds = new Set(activeCompany.employees.map((e) => e.agentId));
   const companySessions = [
     ...sessions
-      .map((session) => ({ ...session, agentId: parseAgentIdFromSessionKey(session.key) }))
+      .map((session) => ({ ...session, agentId: resolveSessionActorId(session) }))
       .filter((session): session is GatewaySessionRow & { agentId: string } => {
         const agentId = session.agentId;
         return typeof agentId === "string" && companyAgentIds.has(agentId);
@@ -789,24 +793,65 @@ export function BoardPage() {
     return emp ? emp.nickname : agentId;
   };
   const ceo = activeCompany.employees.find((employee) => employee.metaRole === "ceo") ?? null;
+  const ceoInstructionHint = useMemo(() => {
+    if (!ceo) {
+      return null;
+    }
+    const ceoSnapshot = companySessionSnapshots.find((snapshot) => snapshot.agentId === ceo.agentId);
+    const latestUserMessage = [...(ceoSnapshot?.messages ?? [])]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "user" &&
+          message.text.trim().length > 12 &&
+          !isSyntheticWorkflowPromptText(message.text),
+      );
+    if (!latestUserMessage) {
+      return null;
+    }
+    return {
+      text: latestUserMessage.text,
+      timestamp: latestUserMessage.timestamp,
+    };
+  }, [ceo, companySessionSnapshots]);
+  const shouldBootstrapRequirementOverview = Boolean(
+    ceoInstructionHint?.text ||
+      activeWorkItems.some(
+        (item) =>
+          isReliableWorkItemRecord(item) &&
+          item.status !== "completed" &&
+          item.status !== "archived",
+      ),
+  );
 
-  const requirementOverview = useMemo(
+  const rawRequirementOverview = useMemo(
     () =>
-      activeCompany
+      activeCompany && shouldBootstrapRequirementOverview
         ? buildRequirementExecutionOverview({
             company: activeCompany,
             sessionSnapshots: companySessionSnapshots,
+            preferredTopicText: ceoInstructionHint?.text ?? null,
+            preferredTopicTimestamp: ceoInstructionHint?.timestamp ?? null,
+            includeArtifactTopics: false,
             now: currentTime,
           })
         : null,
-    [activeCompany, companySessionSnapshots, currentTime],
-  );
-  const requirementScope = useMemo(
-    () => (activeCompany ? buildRequirementScope(activeCompany, requirementOverview) : null),
-    [activeCompany, requirementOverview],
+    [
+      activeCompany,
+      ceoInstructionHint?.text,
+      ceoInstructionHint?.timestamp,
+      companySessionSnapshots,
+      currentTime,
+      shouldBootstrapRequirementOverview,
+    ],
   );
   const canonicalWorkItems = useMemo(
-    () => activeWorkItems.filter((item) => isCanonicalWorkItemRecord(item, ceo?.agentId)),
+    () =>
+      activeWorkItems.filter(
+        (item) =>
+          isCanonicalWorkItemRecord(item, ceo?.agentId) &&
+          !isArtifactRequirementTopic(item.topicKey),
+      ),
     [activeWorkItems, ceo?.agentId],
   );
   const latestOpenWorkItem = useMemo(
@@ -823,37 +868,26 @@ export function BoardPage() {
         })[0] ?? null,
     [canonicalWorkItems],
   );
-  const requirementTopicKeyHint = requirementOverview?.topicKey ?? latestOpenWorkItem?.topicKey ?? null;
-  const requirementStartedAtHint = requirementOverview?.startedAt ?? latestOpenWorkItem?.startedAt ?? null;
+  const latestStrategicWorkItem = useMemo(
+    () =>
+      [...canonicalWorkItems]
+        .filter(
+          (item) =>
+            isStrategicRequirementTopic(item.topicKey) &&
+            item.status !== "completed" &&
+            item.status !== "archived",
+        )
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
+    [canonicalWorkItems],
+  );
+  const requirementTopicKeyHint = rawRequirementOverview?.topicKey ?? latestOpenWorkItem?.topicKey ?? null;
+  const requirementStartedAtHint = rawRequirementOverview?.startedAt ?? latestOpenWorkItem?.startedAt ?? null;
   const currentRequirementSessionKey =
-    requirementOverview?.currentOwnerAgentId
-      ? companySessions.find((session) => session.agentId === requirementOverview.currentOwnerAgentId)?.key
+    rawRequirementOverview?.currentOwnerAgentId
+      ? companySessions.find((session) => session.agentId === rawRequirementOverview.currentOwnerAgentId)?.key
       : latestOpenWorkItem?.ownerActorId
         ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key
         : undefined;
-  const activeMission = useMemo(
-    () =>
-      pickConversationMissionRecord({
-        missions: activeMissionRecords,
-        sessionKey: currentRequirementSessionKey ?? null,
-        topicKey: requirementTopicKeyHint,
-        startedAt: requirementStartedAtHint,
-      }),
-    [activeMissionRecords, currentRequirementSessionKey, requirementStartedAtHint, requirementTopicKeyHint],
-  );
-  const latestMission = useMemo(
-    () =>
-      [...activeMissionRecords]
-        .sort((left, right) => {
-          const leftSpecific = Number(Boolean(left.topicKey));
-          const rightSpecific = Number(Boolean(right.topicKey));
-          if (leftSpecific !== rightSpecific) {
-            return rightSpecific - leftSpecific;
-          }
-          return Number(left.completed) - Number(right.completed) || right.updatedAt - left.updatedAt;
-        })[0] ?? null,
-    [activeMissionRecords],
-  );
   const matchedWorkItem = useMemo(
     () =>
       pickWorkItemRecord({
@@ -865,14 +899,17 @@ export function BoardPage() {
     [canonicalWorkItems, currentRequirementSessionKey, requirementStartedAtHint, requirementTopicKeyHint],
   );
   const bootstrapRequirementWorkItem = useMemo(() => {
-    if (!activeCompany || !requirementOverview) {
+    if (!activeCompany || !rawRequirementOverview) {
+      return null;
+    }
+    if (isArtifactRequirementTopic(rawRequirementOverview.topicKey)) {
       return null;
     }
 
     const currentWorkItemMatches =
       matchedWorkItem &&
-      matchedWorkItem.topicKey === requirementOverview.topicKey &&
-      Math.abs((matchedWorkItem.startedAt ?? 0) - requirementOverview.startedAt) <= 1_000;
+      matchedWorkItem.topicKey === rawRequirementOverview.topicKey &&
+      Math.abs((matchedWorkItem.startedAt ?? 0) - rawRequirementOverview.startedAt) <= 1_000;
     if (currentWorkItemMatches) {
       return null;
     }
@@ -880,7 +917,7 @@ export function BoardPage() {
     return reconcileWorkItemRecord({
       companyId: activeCompany.id,
       existingWorkItem: matchedWorkItem,
-      overview: requirementOverview,
+      overview: rawRequirementOverview,
       room: activeRoomRecords.find((room) => room.workItemId === matchedWorkItem?.id) ?? null,
       artifacts: activeArtifacts,
       dispatches: activeDispatches,
@@ -893,7 +930,7 @@ export function BoardPage() {
     activeRoomRecords,
     currentRequirementSessionKey,
     matchedWorkItem,
-    requirementOverview,
+    rawRequirementOverview,
   ]);
   const activeWorkItem = useMemo(() => {
     if (bootstrapRequirementWorkItem) {
@@ -904,6 +941,42 @@ export function BoardPage() {
     }
     return matchedWorkItem ?? latestOpenWorkItem;
   }, [bootstrapRequirementWorkItem, latestOpenWorkItem, matchedWorkItem]);
+  const scopedRequirementWorkItem = useMemo(
+    () =>
+      rawRequirementOverview && isStrategicRequirementTopic(rawRequirementOverview.topicKey)
+        ? latestStrategicWorkItem ?? activeWorkItem
+        : activeWorkItem,
+    [activeWorkItem, latestStrategicWorkItem, rawRequirementOverview],
+  );
+  const currentWorkItem = useMemo(
+    () =>
+      scopedRequirementWorkItem && isReliableWorkItemRecord(scopedRequirementWorkItem)
+        ? scopedRequirementWorkItem
+        : null,
+    [scopedRequirementWorkItem],
+  );
+  const requirementOverview = useMemo(
+    () => {
+      if (!currentWorkItem || !rawRequirementOverview) {
+        return null;
+      }
+      if (
+        currentWorkItem.topicKey &&
+        rawRequirementOverview.topicKey !== currentWorkItem.topicKey
+      ) {
+        return null;
+      }
+      return rawRequirementOverview;
+    },
+    [currentWorkItem, rawRequirementOverview],
+  );
+  const requirementScope = useMemo(
+    () =>
+      activeCompany
+        ? buildRequirementScope(activeCompany, requirementOverview, currentWorkItem)
+        : null,
+    [activeCompany, currentWorkItem, requirementOverview],
+  );
 
   useEffect(() => {
     if (!bootstrapRequirementWorkItem) {
@@ -911,75 +984,56 @@ export function BoardPage() {
     }
     upsertWorkItemRecord(bootstrapRequirementWorkItem);
   }, [bootstrapRequirementWorkItem, upsertWorkItemRecord]);
-  const primaryRequirementTopicKey =
-    activeWorkItem?.topicKey ?? activeMission?.topicKey ?? requirementTopicKeyHint;
-  const isStrategicRequirement = isStrategicRequirementTopic(primaryRequirementTopicKey);
+  const primaryRequirementTopicKey = currentWorkItem?.topicKey ?? requirementOverview?.topicKey ?? null;
+  const isStrategicRequirement = Boolean(
+    primaryRequirementTopicKey && isStrategicRequirementTopic(primaryRequirementTopicKey),
+  );
   const strategicRequirementOverview =
     requirementOverview && requirementOverview.topicKey === primaryRequirementTopicKey
       ? requirementOverview
       : null;
-  const latestWorkItem = useMemo(
-    () =>
-      [...canonicalWorkItems]
-        .sort(
-          (left, right) =>
-            Number(left.status === "completed") - Number(right.status === "completed") ||
-            right.updatedAt - left.updatedAt,
-        )[0] ?? null,
-    [canonicalWorkItems],
-  );
-  const boardMission = activeWorkItem ?? activeMission ?? latestWorkItem ?? latestMission;
   const latestRequirementRoom = useMemo(
     () =>
-      [...activeRoomRecords]
-        .filter((room) =>
-          (activeWorkItem?.id ? room.workItemId === activeWorkItem.id : true) &&
-          (Boolean(room.topicKey) || room.title.trim().length > 0),
-        )
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
-    [activeRoomRecords, activeWorkItem?.id],
+      currentWorkItem
+        ? [...activeRoomRecords]
+            .filter(
+              (room) =>
+                room.workItemId === currentWorkItem.id &&
+                (Boolean(room.topicKey) || room.title.trim().length > 0),
+            )
+            .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null
+        : null,
+    [activeRoomRecords, currentWorkItem],
   );
   const requirementDisplayTitle =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.title
-      : boardMission?.title ?? requirementOverview?.title ?? "当前需求";
+      : currentWorkItem?.title ?? requirementOverview?.title ?? "当前需求";
   const requirementDisplayCurrentStep =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.headline
-      : (isConversationMissionRecord(boardMission)
-          ? boardMission.currentStepLabel
-          : isWorkItemRecord(boardMission)
-            ? boardMission.stageLabel
-            : null) ?? requirementOverview?.headline ?? "待确认";
+      : currentWorkItem?.stageLabel ?? requirementOverview?.headline ?? "待确认";
   const requirementDisplaySummary =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.summary
-      : boardMission?.summary ?? requirementOverview?.summary ?? "待确认";
+      : currentWorkItem?.summary ?? requirementOverview?.summary ?? "待确认";
   const requirementDisplayOwner =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.currentOwnerLabel || "待确认"
-      : boardMission?.ownerLabel || requirementOverview?.currentOwnerLabel || "待确认";
+      : currentWorkItem?.ownerLabel || requirementOverview?.currentOwnerLabel || "待确认";
   const requirementDisplayStage =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.currentStage
-      : (isConversationMissionRecord(boardMission)
-          ? boardMission.currentStepLabel
-          : isWorkItemRecord(boardMission)
-            ? boardMission.stageLabel
-            : null) ?? requirementOverview?.currentStage ?? "待确认";
+      : currentWorkItem?.stageLabel ?? requirementOverview?.currentStage ?? "待确认";
   const requirementDisplayNext =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.nextAction
-      : (isConversationMissionRecord(boardMission)
-          ? boardMission.nextLabel
-          : isWorkItemRecord(boardMission)
-            ? boardMission.nextAction
-            : null) ?? requirementOverview?.nextAction ?? "待确认";
+      : currentWorkItem?.nextAction ?? requirementOverview?.nextAction ?? "待确认";
   const requirementSyntheticTask = useMemo(
     () =>
-      activeWorkItem
+      currentWorkItem
         ? buildWorkItemSyntheticTask({
-            workItem: activeWorkItem,
+            workItem: currentWorkItem,
           })
         : (strategicRequirementOverview ?? requirementOverview)
           ? buildRequirementSyntheticTask({
@@ -989,20 +1043,25 @@ export function BoardPage() {
               now: currentTime,
             })
           : null,
-    [activeWorkItem, currentRequirementSessionKey, currentTime, requirementDisplayTitle, requirementOverview, strategicRequirementOverview],
+    [
+      currentRequirementSessionKey,
+      currentTime,
+      currentWorkItem,
+      requirementDisplayTitle,
+      requirementOverview,
+      strategicRequirementOverview,
+    ],
   );
   const currentRequirementTopicKey =
     strategicRequirementOverview?.topicKey ??
-    boardMission?.topicKey ??
+    currentWorkItem?.topicKey ??
     requirementOverview?.topicKey ??
-    latestRequirementRoom?.topicKey ??
     null;
-  const currentRequirementWorkItemId = activeWorkItem?.id ?? latestRequirementRoom?.workItemId ?? null;
+  const currentRequirementWorkItemId = currentWorkItem?.id ?? null;
   const currentRequirementRoomTitle =
     strategicRequirementOverview?.title ??
-    boardMission?.title ??
+    currentWorkItem?.title ??
     requirementOverview?.title ??
-    latestRequirementRoom?.title ??
     requirementDisplayTitle;
   const requirementRoomRecords = useMemo(() => {
     if (!currentRequirementTopicKey && !currentRequirementRoomTitle) {
@@ -1028,36 +1087,23 @@ export function BoardPage() {
       if (overview) {
         return [...new Set(overview.participants.map((participant) => participant.agentId).filter(Boolean))];
       }
-      if (boardMission) {
-        if (isWorkItemRecord(boardMission)) {
+      if (currentWorkItem) {
           return [
             ...new Set(
               [
-                boardMission.ownerActorId,
-                boardMission.batonActorId,
-                ...boardMission.steps.map((step) => step.assigneeActorId),
+                currentWorkItem.ownerActorId,
+                currentWorkItem.batonActorId,
+                ...currentWorkItem.steps.map((step) => step.assigneeActorId),
               ].filter(Boolean),
             ),
           ] as string[];
-        }
-        if (!isWorkItemRecord(boardMission)) {
-          const legacyMission = boardMission as ConversationMissionRecord;
-          return [
-            ...new Set(
-              [
-                legacyMission.ownerAgentId,
-                ...legacyMission.planSteps.map((step) => step.assigneeAgentId),
-              ].filter(Boolean),
-            ),
-          ] as string[];
-        }
       }
       if (latestRequirementRoom) {
         return [...new Set(latestRequirementRoom.memberIds.filter(Boolean))];
       }
       return [];
     },
-    [boardMission, latestRequirementRoom, requirementOverview, strategicRequirementOverview],
+    [currentWorkItem, latestRequirementRoom, requirementOverview, strategicRequirementOverview],
   );
   const requirementRoomRoute = useMemo(() => {
     if ((!currentRequirementTopicKey && !currentRequirementRoomTitle) || requirementRoomMemberIds.length < 2) {
@@ -1072,16 +1118,15 @@ export function BoardPage() {
       preferredInitiatorAgentId:
         ceo?.agentId ??
         requirementOverview?.currentOwnerAgentId ??
-        (isWorkItemRecord(boardMission) ? boardMission.ownerActorId : null) ??
-        (isConversationMissionRecord(boardMission) ? boardMission.ownerAgentId : null) ??
+        currentWorkItem?.ownerActorId ??
         null,
       existingRooms: activeRoomRecords,
     });
   }, [
     activeCompany,
     activeRoomRecords,
-    boardMission,
     ceo?.agentId,
+    currentWorkItem?.ownerActorId,
     currentRequirementRoomTitle,
     currentRequirementTopicKey,
     currentRequirementWorkItemId,
@@ -1174,7 +1219,7 @@ export function BoardPage() {
           requirementScope.tasks.some((scopedTask) => scopedTask.id === task.id),
         )
       : [];
-  const shouldUseWorkItemPrimaryView = Boolean(activeWorkItem && requirementSyntheticTask);
+  const shouldUseWorkItemPrimaryView = Boolean(currentWorkItem && requirementSyntheticTask);
   const trackedTasks = (
     shouldUseWorkItemPrimaryView
       ? [requirementSyntheticTask]
@@ -1182,9 +1227,7 @@ export function BoardPage() {
         ? [requirementSyntheticTask]
         : requirementOverview && scopedTrackedTasks.length === 0 && requirementSyntheticTask
           ? [requirementSyntheticTask]
-          : requirementScope
-            ? scopedTrackedTasks
-            : mergedTrackedTasks
+          : []
   ).filter((task): task is TrackedTask => Boolean(task));
 
   useEffect(() => {
@@ -1232,11 +1275,11 @@ export function BoardPage() {
     return total > 0 && done === total;
   });
   const rawHandoffRecords = getActiveHandoffs(activeCompany.handoffs ?? []);
-  const handoffRecords = requirementScope?.handoffs ?? rawHandoffRecords;
+  const handoffRecords = currentWorkItem ? requirementScope?.handoffs ?? rawHandoffRecords : [];
   const pendingHandoffs = handoffRecords.filter((handoff) => handoff.status !== "completed");
-  const rawSlaAlerts = evaluateSlaAlerts(activeCompany, currentTime);
+  const rawSlaAlerts = currentWorkItem ? evaluateSlaAlerts(activeCompany, currentTime) : [];
   const slaAlerts = filterRequirementSlaAlerts(rawSlaAlerts, requirementScope);
-  const displayRequests = requirementScope?.requests ?? (activeCompany.requests ?? []);
+  const displayRequests = currentWorkItem ? requirementScope?.requests ?? (activeCompany.requests ?? []) : [];
   const requestHealth = summarizeRequestHealth(displayRequests);
   const visibleTakeoverCount = isStrategicRequirement ? 0 : sessionTakeoverPacks.size;
   const visiblePendingHandoffs = isStrategicRequirement ? [] : pendingHandoffs;
@@ -1669,7 +1712,16 @@ export function BoardPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs px-2 text-amber-700 hover:bg-amber-50"
-                onClick={() => navigate(`/chat/${encodeURIComponent(task.sessionKey)}`)}
+                onClick={() =>
+                  navigate(
+                    resolveConversationPresentation({
+                      sessionKey: task.sessionKey,
+                      actorId: task.ownerAgentId ?? task.agentId ?? null,
+                      rooms: activeRoomRecords,
+                      employees: activeCompany.employees,
+                    }).route,
+                  )
+                }
               >
                 查看接管包
               </Button>
@@ -1682,7 +1734,14 @@ export function BoardPage() {
                 if (task.source === "file" && task.sourceAgentId) {
                   navigate(`/chat/${encodeURIComponent(task.sourceAgentId)}`);
                 } else {
-                  navigate(`/chat/${encodeURIComponent(task.sessionKey)}`);
+                  navigate(
+                    resolveConversationPresentation({
+                      sessionKey: task.sessionKey,
+                      actorId: task.sourceAgentId ?? task.ownerAgentId ?? task.agentId ?? null,
+                      rooms: activeRoomRecords,
+                      employees: activeCompany.employees,
+                    }).route,
+                  );
                 }
               }}
             >
@@ -1797,13 +1856,13 @@ export function BoardPage() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
-              {(activeMission?.ownerAgentId ?? requirementOverview.currentOwnerAgentId) ? (
+              {(currentWorkItem?.ownerActorId ?? requirementOverview?.currentOwnerAgentId) ? (
                 <Button
                   variant="default"
                   onClick={() =>
                     navigate(
                       `/chat/${encodeURIComponent(
-                        activeMission?.ownerAgentId ?? requirementOverview.currentOwnerAgentId!,
+                        currentWorkItem?.ownerActorId ?? requirementOverview?.currentOwnerAgentId!,
                       )}`,
                     )
                   }
@@ -1822,7 +1881,7 @@ export function BoardPage() {
         </Card>
       ) : null}
 
-      {requirementOverview || requirementRoomRecords.length > 0 || requirementRoomRoute ? (
+      {currentWorkItem || requirementRoomRecords.length > 0 || requirementRoomRoute ? (
         <Card className="shrink-0 border-slate-200 bg-white">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -1883,7 +1942,7 @@ export function BoardPage() {
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-600">
-                当前需求参与成员不足，暂时不能创建需求团队房间。
+                当前还没有可靠的进行中工作项，暂时不能创建需求团队房间。
               </div>
             )}
           </CardContent>
@@ -1954,7 +2013,19 @@ export function BoardPage() {
               onClick={() => {
                 const firstSessionKey = sessionTakeoverPacks.keys().next().value;
                 if (typeof firstSessionKey === "string") {
-                  navigate(`/chat/${encodeURIComponent(firstSessionKey)}`);
+                  navigate(
+                    resolveConversationPresentation({
+                      sessionKey: firstSessionKey,
+                      actorId:
+                        sessions.find((session) => session.key === firstSessionKey)
+                          ? resolveSessionActorId(
+                              sessions.find((session) => session.key === firstSessionKey) ?? null,
+                            )
+                          : null,
+                      rooms: activeRoomRecords,
+                      employees: activeCompany.employees,
+                    }).route,
+                  );
                 }
               }}
             >
@@ -2148,10 +2219,10 @@ export function BoardPage() {
             <div className="bg-indigo-50 p-6 rounded-2xl mb-6">
               <ListChecks className="w-16 h-16 text-indigo-300" />
             </div>
-            <h3 className="text-lg font-bold text-slate-700 mb-2">还没有任何任务追踪记录</h3>
+            <h3 className="text-lg font-bold text-slate-700 mb-2">当前没有可靠的进行中工作项</h3>
             <p className="text-sm text-slate-500 max-w-md text-center leading-relaxed">
-              给 CEO 或管理者下发复合指令后，他们将自动输出结构化任务清单。
-              系统会自动解析并在此看板按批次与分组展示。
+              看板现在只展示产品真相源里的工作项，不再从旧请求、旧交接和历史会话里猜主线。
+              先去 CEO 会话确认新的规划/任务，生成当前工作项后这里会自动出现。
             </p>
             <div className="mt-6 flex gap-3">
               <Button
@@ -2171,8 +2242,8 @@ export function BoardPage() {
               <p className="text-xs text-amber-800 flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  <strong>提示：</strong>CEO 接收指令后会自动输出"当前任务总览"。
-                  任务分派后，下属完成节点会自动回传最新版清单，看板实时同步进度并将已完成项归档。
+                  <strong>提示：</strong>当前看板不再复活历史任务。只有被系统确认为当前
+                  WorkItem 的任务，才会在这里展示步骤、负责人和进度。
                 </span>
               </p>
             </div>
@@ -2246,7 +2317,16 @@ export function BoardPage() {
                           variant="ghost"
                           size="sm"
                           className="h-6 text-[10px] px-1.5"
-                          onClick={() => navigate(`/chat/${encodeURIComponent(sess.key)}`)}
+                          onClick={() =>
+                            navigate(
+                              resolveConversationPresentation({
+                                sessionKey: sess.key,
+                                actorId: resolveSessionActorId(sess),
+                                rooms: activeRoomRecords,
+                                employees: activeCompany.employees,
+                              }).route,
+                            )
+                          }
                         >
                           <MessageSquare className="w-3 h-3" />
                         </Button>

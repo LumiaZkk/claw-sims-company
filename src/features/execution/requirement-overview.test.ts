@@ -182,4 +182,40 @@ describe("requirement execution overview", () => {
     expect(overview?.currentStage).toContain("整合团队方案");
     expect(overview?.summary).toContain("CTO、COO 已回传");
   });
+
+  it("rejects malformed overview candidates that only contain generic titles or metadata fragments", () => {
+    const snapshots: RequirementSessionSnapshot[] = [
+      {
+        agentId: "co-ceo",
+        sessionKey: "agent:co-ceo:main",
+        updatedAt: 300,
+        messages: createRequirementMessageSnapshots(
+          [
+            {
+              role: "user",
+              text: "帮我看一下 growth-plan.md",
+              timestamp: 100,
+            },
+            {
+              role: "assistant",
+              text:
+                "## 📋 任务追踪\n[/] 1. { → @CTO\n[/] 2. \"count\": 20, → @COO\n[/] 3. CEO 收口 → @CEO",
+              timestamp: 120,
+            },
+          ],
+        ),
+      },
+    ];
+
+    const overview = buildRequirementExecutionOverview({
+      company,
+      preferredTopicKey: "mission:test",
+      preferredTopicText: "当前需求",
+      preferredTopicTimestamp: 100,
+      sessionSnapshots: snapshots,
+      now: 400,
+    });
+
+    expect(overview).toBeNull();
+  });
 });

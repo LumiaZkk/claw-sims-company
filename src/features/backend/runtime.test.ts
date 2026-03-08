@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { Company } from "../company/types";
 import { buildProviderManifest } from "./bootstrap";
 import { resolveCompanyActorConversation, sendTurnToCompanyActor } from "./runtime";
-import { createBackendCapabilities, type ActorRef, type BackendCore, type ConversationRef } from "./types";
+import {
+  createBackendCapabilities,
+  type ActorRef,
+  type BackendCore,
+  type ConversationKind,
+  type ConversationRef,
+} from "./types";
 
 function createCompany(): Company {
   return {
@@ -44,7 +50,7 @@ function createCore(providerId = "minimal"): BackendCore {
       { providerId, actorId: "executor", label: "Executor" },
     ]),
     ensureConversation: vi.fn(
-      async (actorRef: ActorRef, kind = "direct"): Promise<ConversationRef> => ({
+      async (actorRef: ActorRef, kind: ConversationKind = "direct"): Promise<ConversationRef> => ({
         providerId,
         conversationId: `${actorRef.actorId}:${kind}`,
         actorId: actorRef.actorId,
@@ -115,4 +121,3 @@ describe("backend runtime helpers", () => {
     );
   });
 });
-

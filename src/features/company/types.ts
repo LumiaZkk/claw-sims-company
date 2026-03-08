@@ -149,6 +149,7 @@ export interface ArtifactRecord {
   sourcePath?: string;
   sourceUrl?: string;
   summary?: string;
+  content?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -242,6 +243,11 @@ export interface WorkItemRecord {
   companyId: string;
   sessionKey?: string;
   topicKey?: string;
+  sourceActorId?: string | null;
+  sourceActorLabel?: string | null;
+  sourceSessionKey?: string | null;
+  sourceConversationId?: string | null;
+  providerId?: string | null;
   title: string;
   goal: string;
   status: WorkItemStatus;

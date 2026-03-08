@@ -7,7 +7,9 @@ import {
   requestTopicMatchesText,
 } from "../requests/topic";
 import { formatAgentLabel, formatAgentRole } from "./focus-summary";
-import { isSyntheticWorkflowPromptText } from "./message-truth";
+import { isArtifactRequirementTopic } from "./requirement-kind";
+import { isInternalAssistantMonologueText, isSyntheticWorkflowPromptText, stripTruthInternalMonologue } from "./message-truth";
+import { isReliableRequirementOverview } from "./work-item-signal";
 
 export type RequirementParticipantTone =
   | "slate"
@@ -79,6 +81,7 @@ type BuildRequirementExecutionOverviewInput = {
   preferredTopicTimestamp?: number | null;
   sessionSnapshots?: RequirementSessionSnapshot[];
   now?: number;
+  includeArtifactTopics?: boolean;
 };
 
 type RequirementInstructionCandidate = {
@@ -136,6 +139,19 @@ function extractTopicHints(values: Array<string | null | undefined>): string[] {
     .filter((value) => value.length > 0)
     .map((value) => inferRequestTopicKey([value]) ?? value)
     .filter((value, index, array) => array.indexOf(value) === index);
+}
+
+function normalizeRequirementTopicCandidate(
+  topicKey: string | null | undefined,
+  includeArtifactTopics: boolean,
+): string | null {
+  if (!topicKey) {
+    return null;
+  }
+  if (!includeArtifactTopics && isArtifactRequirementTopic(topicKey)) {
+    return null;
+  }
+  return topicKey;
 }
 
 function resolveTopicKey(
@@ -287,6 +303,9 @@ function collectInstructionCandidates(
         if (isSyntheticWorkflowPromptText(candidate.text)) {
           return false;
         }
+        if (isInternalAssistantMonologueText(candidate.text)) {
+          return false;
+        }
         if (candidate.topicKey) {
           return true;
         }
@@ -397,6 +416,7 @@ function findLatestTrackedDelegationSeed(
           message.role === "user" &&
           message.text.trim().length > 12 &&
           !isSyntheticWorkflowPromptText(message.text) &&
+          !isInternalAssistantMonologueText(message.text) &&
           !inferRequestTopicKey([message.text]) &&
           isStrategicInstruction(message.text),
       );
@@ -646,7 +666,7 @@ function extractText(message: RequirementMessageInput): string {
 }
 
 function compactRequirementMessageText(text: string): string {
-  const trimmed = text.trim().replace(/\n{3,}/g, "\n\n");
+  const trimmed = stripTruthInternalMonologue(text).trim().replace(/\n{3,}/g, "\n\n");
   if (trimmed.length <= MAX_REQUIREMENT_MESSAGE_TEXT) {
     return trimmed;
   }
@@ -787,6 +807,9 @@ function findLatestRelevantInstruction(
         if (isSyntheticWorkflowPromptText(message.text)) {
           return false;
         }
+        if (isInternalAssistantMonologueText(message.text)) {
+          return false;
+        }
         if (requestTopicMatchesText(topicKey, message.text)) {
           return true;
         }
@@ -807,7 +830,7 @@ function findLatestReplyAfter(
           return false;
         }
         const compact = message.text.trim();
-        if (compact === "ANNOUNCE_SKIP" || compact === "NO_REPLY") {
+        if (compact === "ANNOUNCE_SKIP" || compact === "NO_REPLY" || isInternalAssistantMonologueText(compact)) {
           return false;
         }
         return true;
@@ -843,6 +866,7 @@ function snapshotsMentionRestart(snapshots: RequirementSessionSnapshot[]): boole
       (message) =>
         message.role === "user" &&
         !isSyntheticWorkflowPromptText(message.text) &&
+        !isInternalAssistantMonologueText(message.text) &&
         isRestartInstruction(message.text),
     ),
   );
@@ -1421,6 +1445,7 @@ export function buildRequirementExecutionOverview(
   input: BuildRequirementExecutionOverviewInput,
 ): RequirementExecutionOverview | null {
   const { company, now = Date.now() } = input;
+  const includeArtifactTopics = input.includeArtifactTopics ?? true;
   if (!company) {
     return null;
   }
@@ -1436,7 +1461,11 @@ export function buildRequirementExecutionOverview(
           preferredTopicTimestamp: input.preferredTopicTimestamp ?? null,
         })
       : null;
-  if (trackedDelegationOverview) {
+  if (
+    trackedDelegationOverview &&
+    normalizeRequirementTopicCandidate(trackedDelegationOverview.topicKey, includeArtifactTopics) &&
+    isReliableRequirementOverview(trackedDelegationOverview)
+  ) {
     return trackedDelegationOverview;
   }
   const preferredTopicKey = input.preferredTopicKey ?? null;
@@ -1446,10 +1475,10 @@ export function buildRequirementExecutionOverview(
       ? resolveTopicKeyFromSnapshots(input.sessionSnapshots, hints)
       : null;
   const topicKey =
-    preferredTopicKey ??
-    snapshotTopic ??
-    explicitHintTopic ??
-    resolveTopicKey(activeRequests, activeHandoffs, hints);
+    normalizeRequirementTopicCandidate(preferredTopicKey, includeArtifactTopics) ??
+    normalizeRequirementTopicCandidate(snapshotTopic, includeArtifactTopics) ??
+    normalizeRequirementTopicCandidate(explicitHintTopic, includeArtifactTopics) ??
+    normalizeRequirementTopicCandidate(resolveTopicKey(activeRequests, activeHandoffs, hints), includeArtifactTopics);
   if (!topicKey) {
     return null;
   }
@@ -1458,7 +1487,7 @@ export function buildRequirementExecutionOverview(
     input.sessionSnapshots && input.sessionSnapshots.length > 0
       ? buildLiveOverview(company, topicKey, hints, input.sessionSnapshots, now)
       : null;
-  if (liveOverview) {
+  if (liveOverview && isReliableRequirementOverview(liveOverview)) {
     return liveOverview;
   }
 
@@ -1523,7 +1552,7 @@ export function buildRequirementExecutionOverview(
     nextAction = "这一步不用再追，继续盯当前真正的执行节点。";
   }
 
-  return {
+  const fallbackOverview = {
     topicKey,
     title: buildOverviewTitle(topicKey, hints),
     startedAt: Number.isFinite(startedAt) ? startedAt : now,
@@ -1535,4 +1564,5 @@ export function buildRequirementExecutionOverview(
     nextAction,
     participants: currentParticipants,
   };
+  return isReliableRequirementOverview(fallbackOverview) ? fallbackOverview : null;
 }

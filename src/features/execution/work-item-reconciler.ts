@@ -142,6 +142,33 @@ export function reconcileWorkItemRecord(input: ReconcileWorkItemInput): WorkItem
     companyId,
     sessionKey: candidate.sessionKey ?? existingWorkItem?.sessionKey ?? input.fallbackSessionKey ?? undefined,
     topicKey: candidate.topicKey ?? existingWorkItem?.topicKey,
+    sourceActorId:
+      candidate.sourceActorId ??
+      existingWorkItem?.sourceActorId ??
+      candidate.ownerActorId ??
+      existingWorkItem?.ownerActorId ??
+      null,
+    sourceActorLabel:
+      candidate.sourceActorLabel ??
+      existingWorkItem?.sourceActorLabel ??
+      candidate.ownerLabel ??
+      existingWorkItem?.ownerLabel ??
+      null,
+    sourceSessionKey:
+      candidate.sourceSessionKey ??
+      existingWorkItem?.sourceSessionKey ??
+      candidate.sessionKey ??
+      existingWorkItem?.sessionKey ??
+      input.fallbackSessionKey ??
+      null,
+    sourceConversationId:
+      candidate.sourceConversationId ??
+      existingWorkItem?.sourceConversationId ??
+      candidate.sessionKey ??
+      existingWorkItem?.sessionKey ??
+      input.fallbackSessionKey ??
+      null,
+    providerId: candidate.providerId ?? existingWorkItem?.providerId ?? null,
     roomId:
       room?.id ??
       candidate.roomId ??

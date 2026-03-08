@@ -5,8 +5,9 @@ import type {
   RequirementSessionSnapshot,
 } from "./requirement-overview";
 import { formatAgentLabel, formatAgentRole } from "./focus-summary";
-import { isSyntheticWorkflowPromptText } from "./message-truth";
+import { isInternalAssistantMonologueText, isSyntheticWorkflowPromptText, stripTruthInternalMonologue } from "./message-truth";
 import { requestTopicMatchesText } from "../requests/topic";
+import { sortRequirementRoomMemberIds } from "./requirement-room";
 
 type RequirementPlanStepLike = {
   id: string;
@@ -49,7 +50,7 @@ export type RequirementTeamTimelineEvent = {
   summary: string;
   detail?: string;
   timestamp: number;
-  sessionKey: string;
+  referenceId: string;
 };
 
 export type RequirementTeamArtifact = {
@@ -78,9 +79,11 @@ export type RequirementTeamView = {
 };
 
 function stripChatControlMetadata(text: string): string {
-  return text
-    .replace(/^Sender \(untrusted metadata\):[\s\S]*?```[\s\S]*?```\s*/i, "")
-    .trim();
+  return stripTruthInternalMonologue(
+    text
+      .replace(/^Sender \(untrusted metadata\):[\s\S]*?```[\s\S]*?```\s*/i, "")
+      .trim(),
+  );
 }
 
 function stripTaskTrackerSection(text: string): string {
@@ -112,6 +115,7 @@ function summarizeRequirementMessage(text: string): { headline: string; summary:
     cleaned === "ANNOUNCE_SKIP" ||
     cleaned === "NO_REPLY" ||
     isSyntheticWorkflowPromptText(cleaned) ||
+    isInternalAssistantMonologueText(text) ||
     /Agent-to-agent announce step/i.test(cleaned)
   ) {
     return null;
@@ -265,7 +269,7 @@ function buildTimeline(
                 headline: "房间指令",
                 summary: truncateText(message.text ?? "", 120),
                 timestamp: message.timestamp,
-                sessionKey: message.sourceSessionKey ?? overview.topicKey,
+                referenceId: `room:${message.roomId ?? overview.topicKey}`,
             });
           }
           continue;
@@ -285,7 +289,7 @@ function buildTimeline(
           summary: summary.summary,
           detail: summary.detail,
           timestamp: message.timestamp,
-          sessionKey: message.sourceSessionKey ?? `agent:${agentId}:main`,
+          referenceId: `actor:${agentId}`,
         });
     }
 
@@ -331,7 +335,7 @@ function buildTimeline(
           summary: summary.summary,
           detail: summary.detail,
           timestamp: latestDispatch.timestamp || snapshot.updatedAt,
-          sessionKey: snapshot.sessionKey,
+          referenceId: `actor:${snapshot.agentId}`,
         });
       }
     }
@@ -349,7 +353,7 @@ function buildTimeline(
           summary: summary.summary,
           detail: summary.detail,
           timestamp: latestReply.timestamp || snapshot.updatedAt,
-          sessionKey: snapshot.sessionKey,
+          referenceId: `actor:${snapshot.agentId}`,
         });
       }
     }
@@ -365,7 +369,7 @@ function buildTimeline(
       headline: member.isCurrent ? "当前关键节点" : "团队状态",
       summary: member.detail,
       timestamp: member.updatedAt,
-      sessionKey: `agent:${member.agentId}:main`,
+      referenceId: `actor:${member.agentId}`,
     }));
   }
 
@@ -449,6 +453,6 @@ export function buildRequirementTeamView(params: {
     timeline,
     artifacts,
     planSteps: plan?.steps ?? [],
-    memberIds: members.map((member) => member.agentId),
+    memberIds: sortRequirementRoomMemberIds(members.map((member) => member.agentId)),
   };
 }

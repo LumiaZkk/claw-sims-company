@@ -93,7 +93,13 @@ export function ConnectPage() {
               <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                 <div className="font-medium text-slate-800">Provider Bootstrap</div>
                 <div className="mt-1">
-                  运行模式：{manifest.actorStrategy} · 房间：{manifest.roomStrategy} · 归档：{manifest.archiveStrategy}
+                  运行模式：{manifest.actorStrategy} · 房间：{manifest.roomStrategy} · 归档：{manifest.archiveStrategy} · 存储：{manifest.storageStrategy}
+                </div>
+                <div className="mt-2 grid gap-1 text-[11px] text-slate-500 sm:grid-cols-2">
+                  <div>历史会话：{manifest.capabilities.sessionHistory ? "原生" : "产品降级"}</div>
+                  <div>归档：{manifest.capabilities.sessionArchives ? "原生" : "产品归档"}</div>
+                  <div>文件区：{manifest.capabilities.agentFiles ? "原生" : "产品产物库"}</div>
+                  <div>多 Agent：{manifest.actorStrategy === "native-multi-actor" ? "原生" : "虚拟角色"}</div>
                 </div>
                 {manifest.notes.length > 0 ? (
                   <ul className="mt-2 space-y-1">

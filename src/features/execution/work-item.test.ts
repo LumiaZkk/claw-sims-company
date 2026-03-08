@@ -139,6 +139,8 @@ describe("work-item helpers", () => {
 
     expect(workItem.id).toBe("mission:rewrite-ch02");
     expect(workItem.roomId).toBe(buildRoomRecordIdFromWorkItem("mission:rewrite-ch02"));
+    expect(workItem.sourceActorId).toBe("co-ceo");
+    expect(workItem.sourceConversationId).toBe("agent:co-ceo:main");
     expect(workItem.ownerActorId).toBe("co-emp-1");
     expect(workItem.batonActorId).toBe("co-emp-1");
     expect(workItem.steps).toHaveLength(2);
@@ -215,6 +217,8 @@ describe("work-item helpers", () => {
       companyId: "company-1",
       topicKey: "mission:consistency-platform",
       title: "一致性底座与内部审阅系统执行方案",
+      sourceActorId: "co-ceo",
+      sourceConversationId: "agent:co-ceo:main",
       ownerActorId: "co-ceo",
       batonActorId: "co-ceo",
       status: "waiting_owner",

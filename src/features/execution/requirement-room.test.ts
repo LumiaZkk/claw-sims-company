@@ -3,6 +3,7 @@ import type { Company } from "../company/types";
 import type { ChatMessage } from "../backend";
 import {
   areRequirementRoomChatMessagesEqual,
+  areRequirementRoomRecordsEquivalent,
   buildRoomConversationBindingsFromSessions,
   buildRequirementRoomHrefFromRecord,
   buildRequirementRoomRecordFromSessions,
@@ -12,6 +13,7 @@ import {
   mergeRequirementRoomRecordFromSessions,
   mergeRequirementRoomMessages,
   searchRequirementRoomMentionCandidates,
+  sortRequirementRoomMemberIds,
   resolveRequirementRoomMentionTargets,
 } from "./requirement-room";
 
@@ -50,7 +52,7 @@ describe("requirement-room helpers", () => {
 
     expect(first).toBe(second);
     expect(first).toContain("title=%E9%87%8D%E6%96%B0%E5%AE%8C%E6%88%90%E7%AC%AC+2+%E7%AB%A0");
-    expect(first).toContain("sk=room%3A");
+    expect(first).not.toContain("sk=");
   });
 
   it("keeps one stable room per requirement topicKey even if the title wording changes", () => {
@@ -122,6 +124,14 @@ describe("requirement-room helpers", () => {
     });
 
     expect(targets).toEqual(["co-emp-1", "co-cto"]);
+  });
+
+  it("sorts room member ids stably for product-room truth", () => {
+    expect(sortRequirementRoomMemberIds(["co-emp-2", "co-ceo", "co-emp-1", "co-ceo"])).toEqual([
+      "co-ceo",
+      "co-emp-1",
+      "co-emp-2",
+    ]);
   });
 
   it("surfaces mention candidates for Chinese nicknames and roles", () => {
@@ -246,11 +256,33 @@ describe("requirement-room helpers", () => {
 
     expect(roomRecord.transcript).toHaveLength(2);
     expect(roomRecord.transcript[0]?.audienceAgentIds).toEqual(["co-emp-1", "co-emp-2"]);
-    expect(roomRecord.providerConversationRefs ?? []).toHaveLength(0);
+    expect(roomRecord.providerConversationRefs).toBeUndefined();
 
     const roomChatMessages = convertRequirementRoomRecordToChatMessages(roomRecord);
     expect(roomChatMessages).toHaveLength(2);
     expect(roomChatMessages[1]?.roomAgentId).toBe("co-emp-1");
+    expect(roomChatMessages[1]?.roomSessionKey).toBe(roomRecord.id);
+  });
+
+  it("treats semantically identical room records as equivalent even when member order differs", () => {
+    const left = buildRequirementRoomRecordFromSessions({
+      company: createCompany(),
+      companyId: "company-1",
+      workItemId: "mission:consistency-foundation",
+      sessionKey: "room:workitem:mission-consistency-foundation",
+      title: "一致性底座与内部审阅系统执行方案",
+      memberIds: ["co-cto", "co-ceo", "co-emp-1"],
+      ownerAgentId: "co-ceo",
+      topicKey: "mission:consistency-foundation",
+      sessions: [],
+    });
+    const right = {
+      ...left,
+      memberIds: ["co-emp-1", "co-ceo", "co-cto"],
+      memberActorIds: ["co-emp-1", "co-ceo", "co-cto"],
+    };
+
+    expect(areRequirementRoomRecordsEquivalent(left, right)).toBe(true);
   });
 
   it("merges persisted room transcript back into the canonical room record on resync", () => {
@@ -289,6 +321,8 @@ describe("requirement-room helpers", () => {
       expect.stringContaining("user:agent:co-emp-1:group:rewrite-ch02-abc123"),
       "local:user:1",
     ]);
+    const roomChatMessages = convertRequirementRoomRecordToChatMessages(roomRecord);
+    expect(roomChatMessages[0]?.roomSessionKey).toBe(roomRecord.id);
   });
 
   it("incrementally merges source sessions into an existing room without dropping prior transcript", () => {
@@ -361,5 +395,52 @@ describe("requirement-room helpers", () => {
       conversationId: "agent:co-cto:group:mission-consistency-abc123",
       actorId: "co-cto",
     });
+  });
+
+  it("prefers explicit room bindings over legacy provider refs when resolving room sessions", () => {
+    const company = createCompany();
+    const sessions = buildRequirementRoomSessions({
+      company,
+      room: {
+        id: "workitem:mission-consistency-foundation",
+        sessionKey: "room:workitem:mission-consistency-foundation",
+        title: "一致性底座与内部审阅系统执行方案",
+        topicKey: "mission:consistency-foundation",
+        memberIds: ["co-ceo", "co-cto"],
+        memberActorIds: ["co-ceo", "co-cto"],
+        status: "active",
+        ownerAgentId: "co-ceo",
+        providerConversationRefs: [
+          {
+            providerId: "legacy",
+            conversationId: "agent:co-ceo:group:legacy-room",
+            actorId: "co-ceo",
+          },
+        ],
+        transcript: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      bindings: [
+        {
+          roomId: "workitem:mission-consistency-foundation",
+          providerId: "minimal",
+          conversationId: "agent:co-cto:group:mission-consistency-abc123",
+          actorId: "co-cto",
+          updatedAt: 10,
+        },
+      ],
+      targetSessionKey: "room:workitem:mission-consistency-foundation",
+      memberIds: ["co-ceo", "co-cto"],
+    });
+
+    expect(sessions).toEqual([
+      {
+        agentId: "co-cto",
+        label: "CTO",
+        role: "Chief Technology Officer",
+        sessionKey: "agent:co-cto:group:mission-consistency-abc123",
+      },
+    ]);
   });
 });

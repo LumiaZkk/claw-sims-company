@@ -1,4 +1,6 @@
 import type { WorkItemRecord, WorkStepRecord, WorkItemStatus } from "./types";
+import { isReliableWorkItemRecord } from "../execution/work-item-signal";
+import { parseAgentIdFromSessionKey } from "../../lib/sessions";
 
 const WORK_ITEM_CACHE_PREFIX = "cyber_company_work_items:";
 const WORK_ITEM_LIMIT = 64;
@@ -51,6 +53,11 @@ function isWorkItemRecord(value: unknown): value is WorkItemRecord {
     typeof candidate.companyId === "string" &&
     typeof candidate.title === "string" &&
     typeof candidate.goal === "string" &&
+    (typeof candidate.sourceActorId === "string" || candidate.sourceActorId == null) &&
+    (typeof candidate.sourceActorLabel === "string" || candidate.sourceActorLabel == null) &&
+    (typeof candidate.sourceSessionKey === "string" || candidate.sourceSessionKey == null) &&
+    (typeof candidate.sourceConversationId === "string" || candidate.sourceConversationId == null) &&
+    (typeof candidate.providerId === "string" || candidate.providerId == null) &&
     isWorkItemStatus(candidate.status) &&
     typeof candidate.stageLabel === "string" &&
     typeof candidate.ownerLabel === "string" &&
@@ -70,6 +77,32 @@ function getWorkItemCacheKey(companyId: string) {
   return `${WORK_ITEM_CACHE_PREFIX}${companyId.trim()}`;
 }
 
+export function sanitizeWorkItemRecords(records: WorkItemRecord[]): WorkItemRecord[] {
+  const deduped = new Map<string, WorkItemRecord>();
+  for (const record of records) {
+    if (!isWorkItemRecord(record) || !isReliableWorkItemRecord(record)) {
+      continue;
+    }
+
+    const normalizedRecord: WorkItemRecord = {
+      ...record,
+      sourceActorId:
+        record.sourceActorId ??
+        parseAgentIdFromSessionKey(record.sourceConversationId ?? "") ??
+        parseAgentIdFromSessionKey(record.sourceSessionKey ?? "") ??
+        record.ownerActorId ??
+        null,
+    };
+
+    const previous = deduped.get(normalizedRecord.id);
+    if (!previous || normalizedRecord.updatedAt >= previous.updatedAt) {
+      deduped.set(normalizedRecord.id, normalizedRecord);
+    }
+  }
+
+  return [...deduped.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
 export function loadWorkItemRecords(companyId: string | null | undefined): WorkItemRecord[] {
   if (!companyId) {
     return [];
@@ -85,7 +118,7 @@ export function loadWorkItemRecords(companyId: string | null | undefined): WorkI
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isWorkItemRecord).sort((left, right) => right.updatedAt - left.updatedAt);
+    return sanitizeWorkItemRecords(parsed.filter(isWorkItemRecord));
   } catch {
     return [];
   }
@@ -99,8 +132,7 @@ export function persistWorkItemRecords(
     return;
   }
 
-  const trimmed = [...records]
-    .sort((left, right) => right.updatedAt - left.updatedAt)
+  const trimmed = sanitizeWorkItemRecords(records)
     .slice(0, WORK_ITEM_LIMIT);
   localStorage.setItem(getWorkItemCacheKey(companyId), JSON.stringify(trimmed));
 }

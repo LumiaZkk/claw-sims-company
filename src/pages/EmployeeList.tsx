@@ -42,8 +42,14 @@ import { ImmersiveHireDialog, type HireConfig } from "../components/ui/immersive
 import { OrgChart } from "../components/ui/org-chart";
 import { useCompanyStore } from "../features/company/store";
 import type { Department } from "../features/company/types";
-import { gateway, type AgentListEntry, type GatewaySessionRow } from "../features/backend";
+import {
+  gateway,
+  sendTurnToCompanyActor,
+  type AgentListEntry,
+  type GatewaySessionRow,
+} from "../features/backend";
 import type { ChatMessage } from "../features/backend";
+import { useGatewayStore } from "../features/gateway/store";
 import { buildEmployeeOperationalInsights } from "../features/insights/company-insights";
 import { toast } from "../features/ui/toast-store";
 import { AgentOps } from "../lib/agent-ops";
@@ -58,7 +64,7 @@ import {
 } from "../lib/org-departments";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
   resolveSessionUpdatedAt,
 } from "../lib/sessions";
 import { formatTime, getAvatarUrl } from "../lib/utils";
@@ -66,6 +72,8 @@ import { formatTime, getAvatarUrl } from "../lib/utils";
 export function EmployeeList() {
   const navigate = useNavigate();
   const { activeCompany, updateCompany } = useCompanyStore();
+  const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
+  const manifest = useGatewayStore((state) => state.manifest);
 
   const [agents, setAgents] = useState<AgentListEntry[]>([]);
   const [sessions, setSessions] = useState<GatewaySessionRow[]>([]);
@@ -119,6 +127,10 @@ export function EmployeeList() {
   };
 
   const handleOpenFile = async (agentId: string, fileName: string) => {
+    if (!supportsAgentFiles) {
+      toast.info("当前后端不提供文件区", "请改从工作目录里的产品产物库查看或同步文件。");
+      return;
+    }
     setEditingFile({ agentId, name: fileName, content: "", loaded: false, saving: false });
     try {
       const res = await gateway.getAgentFile(agentId, fileName);
@@ -196,7 +208,7 @@ export function EmployeeList() {
         setAgents(aRes.agents || []);
         setSessions(sRes.sessions || []);
 
-        if (aRes.agents) {
+        if (aRes.agents && supportsAgentFiles) {
           const filesMap: Record<string, { workspace: string; files: any[] }> = {};
           await Promise.all(
             aRes.agents.map(async (a) => {
@@ -207,6 +219,8 @@ export function EmployeeList() {
             }),
           );
           setAgentFiles(filesMap);
+        } else if (!supportsAgentFiles) {
+          setAgentFiles({});
         }
       } catch (e) {
         console.error("Failed to load employee data", e);
@@ -215,7 +229,7 @@ export function EmployeeList() {
     loadData();
     const t = setInterval(loadData, 15000);
     return () => clearInterval(t);
-  }, []);
+  }, [supportsAgentFiles]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -344,12 +358,24 @@ export function EmployeeList() {
     setHrPlanDialogState({ status: "waiting", sessionKey: "", runId: null });
 
     try {
-      const hrSession = await gateway.resolveSession(hrAgentId);
       const prompt = buildHrBootstrapPrompt();
-      const ack = await gateway.sendChatMessage(hrSession.key, prompt, { timeoutMs: 300_000 });
+      const ack = await sendTurnToCompanyActor({
+        backend: gateway,
+        manifest,
+        company: activeCompany,
+        actorId: hrAgentId,
+        message: prompt,
+        timeoutMs: 300_000,
+        targetActorIds: [hrAgentId],
+      });
       const runId = ack?.runId ?? null;
+      const providerConversationId = ack.providerConversationRef.conversationId;
 
-      setHrPlanDialogState({ status: "waiting", sessionKey: hrSession.key, runId });
+      setHrPlanDialogState({
+        status: "waiting",
+        sessionKey: ack.conversationRef.conversationId,
+        runId,
+      });
 
       const unsubscribe = gateway.subscribe("chat", (rawPayload) => {
         if (!rawPayload || typeof rawPayload !== "object") {
@@ -364,7 +390,7 @@ export function EmployeeList() {
         if (!sessionKey || !state) {
           return;
         }
-        if (sessionKey !== hrSession.key) {
+        if (sessionKey !== providerConversationId) {
           return;
         }
 
@@ -375,7 +401,7 @@ export function EmployeeList() {
         if (state === "error") {
           setHrPlanDialogState({
             status: "error",
-            sessionKey: hrSession.key,
+            sessionKey: ack.conversationRef.conversationId,
             runId,
             message: typeof payload.errorMessage === "string" ? payload.errorMessage : "chat error",
           });
@@ -389,7 +415,7 @@ export function EmployeeList() {
           const msgText = extractTextFromMessage(message);
           setHrPlanDialogState({
             status: "ready",
-            sessionKey: hrSession.key,
+            sessionKey: ack.conversationRef.conversationId,
             runId,
             rawText: msgText,
           });
@@ -528,7 +554,7 @@ export function EmployeeList() {
   }
 
   const parsedSessions = sessions
-    .map((session) => ({ ...session, agentId: parseAgentIdFromSessionKey(session.key) }))
+    .map((session) => ({ ...session, agentId: resolveSessionActorId(session) }))
     .filter((session): session is GatewaySessionRow & { agentId: string } => {
       return typeof session.agentId === "string";
     });

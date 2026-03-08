@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createBackendCapabilities, type ActorRef, type BackendCore, type ConversationRef } from "./types";
+import {
+  createBackendCapabilities,
+  type ActorRef,
+  type BackendCore,
+  type ConversationKind,
+  type ConversationRef,
+} from "./types";
 import { createBackendProviderFromCore } from "./providers";
 
 function createMinimalCore(providerId = "minimal"): BackendCore {
@@ -14,7 +20,7 @@ function createMinimalCore(providerId = "minimal"): BackendCore {
       { providerId, actorId: "executor", label: "Executor" },
     ]),
     ensureConversation: vi.fn(
-      async (actorRef: ActorRef, kind = "direct"): Promise<ConversationRef> => ({
+      async (actorRef: ActorRef, kind: ConversationKind = "direct"): Promise<ConversationRef> => ({
         providerId,
         conversationId: `${actorRef.actorId}:${kind}`,
         actorId: actorRef.actorId,

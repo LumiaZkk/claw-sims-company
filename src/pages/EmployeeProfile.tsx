@@ -10,13 +10,15 @@ import { useGatewayStore } from "../features/gateway/store";
 import type { Department } from "../features/company/types";
 import {
   gateway,
+  resolveCompanyActorConversation,
+  sendTurnToCompanyActor,
   type AgentControlSnapshot,
   type GatewayModelChoice,
   type GatewaySessionRow,
 } from "../features/backend";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
   resolveSessionTitle,
   resolveSessionUpdatedAt,
 } from "../lib/sessions";
@@ -94,7 +96,7 @@ function resolveModelDraftFromSnapshot(
 export function EmployeeProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { connected, modelsVersion } = useGatewayStore();
+  const { connected, modelsVersion, manifest } = useGatewayStore();
   const { activeCompany, updateCompany } = useCompanyStore();
   const previousModelsVersionRef = useRef(modelsVersion);
 
@@ -193,7 +195,7 @@ export function EmployeeProfile() {
         ]);
 
         const sessionRows = (sessionResult.sessions ?? [])
-          .map((session) => ({ ...session, agentId: parseAgentIdFromSessionKey(session.key) }))
+          .map((session) => ({ ...session, agentId: resolveSessionActorId(session) }))
           .filter((session): session is GatewaySessionRow & { agentId: string } => {
             return session.agentId === agentId;
           })
@@ -301,8 +303,14 @@ export function EmployeeProfile() {
       const modelToApply = modelDraft.trim() || controlSnapshot?.defaultModel?.trim() || "";
       if (modelToApply) {
         try {
-          const session = await gateway.resolveSession(id);
-          await gateway.sendChatMessage(session.key, `/model ${modelToApply}`);
+          await sendTurnToCompanyActor({
+            backend: gateway,
+            manifest,
+            company: activeCompany,
+            actorId: id,
+            message: `/model ${modelToApply}`,
+            targetActorIds: [id],
+          });
         } catch (err) {
           console.warn("Failed to apply session model", err);
         }
@@ -355,7 +363,14 @@ export function EmployeeProfile() {
     setNotice(null);
     setError(null);
     try {
-      const sessionKey = `agent:${id}:main`;
+      const resolved = await resolveCompanyActorConversation({
+        backend: gateway,
+        manifest,
+        company: activeCompany,
+        actorId: id,
+        kind: "direct",
+      });
+      const sessionKey = resolved.conversationRef.conversationId;
       await gateway.resetSession(sessionKey);
       await loadDetails(id, { silent: true });
       setNotice(`已重置主会话上下文：${sessionKey}`);

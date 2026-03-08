@@ -19,7 +19,7 @@ import { toast } from "../features/ui/toast-store";
 import { attributeUsageSessionsToCompany } from "../features/usage/company-usage-attribution";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
 } from "../lib/sessions";
 import { formatTime } from "../lib/utils";
 
@@ -169,7 +169,7 @@ export function DashboardPage() {
 
   const companyAgentIds = new Set(activeCompany.employees.map((employee) => employee.agentId));
   const companySessions = sessions
-    .map((session) => ({ ...session, agentId: parseAgentIdFromSessionKey(session.key) }))
+    .map((session) => ({ ...session, agentId: resolveSessionActorId(session) }))
     .filter((session): session is GatewaySessionRow & { agentId: string } => {
       return typeof session.agentId === "string" && companyAgentIds.has(session.agentId);
     });

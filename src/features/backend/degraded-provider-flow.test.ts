@@ -3,7 +3,13 @@ import type { Company } from "../company/types";
 import { appendRequirementRoomMessages, buildRequirementRoomRecord } from "../execution/requirement-room";
 import { buildProviderManifest } from "./bootstrap";
 import { sendTurnToCompanyActor } from "./runtime";
-import { createBackendCapabilities, type ActorRef, type BackendCore, type ConversationRef } from "./types";
+import {
+  createBackendCapabilities,
+  type ActorRef,
+  type BackendCore,
+  type ConversationKind,
+  type ConversationRef,
+} from "./types";
 
 function createCompany(): Company {
   return {
@@ -34,7 +40,7 @@ function createSingleExecutorCore(providerId = "codex-like"): BackendCore {
       { providerId, actorId: "executor", label: "Executor" },
     ]),
     ensureConversation: vi.fn(
-      async (actorRef: ActorRef, kind = "direct"): Promise<ConversationRef> => ({
+      async (actorRef: ActorRef, kind: ConversationKind = "direct"): Promise<ConversationRef> => ({
         providerId,
         conversationId: `${actorRef.actorId}:${kind}`,
         actorId: actorRef.actorId,

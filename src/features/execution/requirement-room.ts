@@ -1,12 +1,10 @@
 import type {
   Company,
-  ProviderConversationRef,
   RoomConversationBindingRecord,
   RequirementRoomMessage,
   RequirementRoomRecord,
 } from "../company/types";
 import type { ChatMessage } from "../backend";
-import { parseAgentIdFromSessionKey } from "../../lib/sessions";
 import { buildRoomRecordIdFromWorkItem } from "./work-item";
 
 export type RequirementRoomSession = {
@@ -127,6 +125,12 @@ function dedupeAgentIds(agentIds: Array<string | null | undefined>): string[] {
   return [...new Set(agentIds.map((agentId) => agentId?.trim()).filter((agentId): agentId is string => Boolean(agentId)))];
 }
 
+export function sortRequirementRoomMemberIds(
+  agentIds: Array<string | null | undefined>,
+): string[] {
+  return dedupeAgentIds(agentIds).sort((left, right) => left.localeCompare(right, "en"));
+}
+
 function normalizeRoomTopicKey(value: string | null | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
   return normalized && normalized.length > 0 ? normalized : null;
@@ -136,13 +140,8 @@ function normalizeRoomTitle(value: string | null | undefined): string {
   return value?.trim().replace(/\s+/g, " ").toLowerCase() ?? "";
 }
 
-function isProductRoomSessionKey(value: string | null | undefined): boolean {
-  const normalized = value?.trim() ?? "";
-  return normalized.startsWith("room:") || normalized.startsWith("workitem:");
-}
-
 function buildRoomMemberSignature(memberIds: string[]): string {
-  return dedupeAgentIds(memberIds).sort().join(",");
+  return sortRequirementRoomMemberIds(memberIds).join(",");
 }
 
 function buildStableGroupSuffix(topic: string, memberIds: string[]): string {
@@ -255,7 +254,6 @@ export function buildRequirementRoomRoute(input: {
         `${input.company.id}|${normalizedTopicKey ?? input.topic}`,
         [initiatorAgentId, ...uniqueMembers],
       )}`;
-  const sessionKey = `room:${roomId}`;
   const params = new URLSearchParams();
   params.set("m", uniqueMembers.join(","));
   params.set("title", input.topic.trim() || "需求团队");
@@ -265,7 +263,6 @@ export function buildRequirementRoomRoute(input: {
   if (input.workItemId?.trim()) {
     params.set("wi", input.workItemId.trim());
   }
-  params.set("sk", sessionKey);
 
   return `/chat/${encodeURIComponent(`room:${roomId}`)}?${params.toString()}`;
 }
@@ -284,7 +281,6 @@ export function buildRequirementRoomHrefFromRecord(room: RequirementRoomRecord):
   if (room.workItemId?.trim()) {
     params.set("wi", room.workItemId.trim());
   }
-  params.set("sk", room.sessionKey);
   return `/chat/${encodeURIComponent(`room:${room.id}`)}?${params.toString()}`;
 }
 
@@ -295,13 +291,13 @@ export function buildRequirementRoomSessions(input: {
   targetSessionKey: string | null;
   memberIds: string[];
 }): RequirementRoomSession[] {
-  const { company, room, targetSessionKey } = input;
+  const { company, targetSessionKey } = input;
   if (!company) {
     return [];
   }
   const order = new Map(company.employees.map((employee, index) => [employee.agentId, index]));
 
-  const providerSessions = (input.bindings ?? room?.providerConversationRefs ?? [])
+  const providerSessions = (input.bindings ?? [])
     .map((ref) => {
       const agentId = ref.actorId?.trim();
       if (!agentId) {
@@ -335,7 +331,11 @@ export function buildRequirementRoomSessions(input: {
     return [];
   }
 
-  const targetAgentId = parseAgentIdFromSessionKey(targetSessionKey);
+  const targetAgentId =
+    input.room?.ownerActorId?.trim() ||
+    input.room?.ownerAgentId?.trim() ||
+    input.memberIds[0]?.trim() ||
+    null;
   const allMemberIds = dedupeAgentIds([targetAgentId, ...input.memberIds]);
 
   return allMemberIds
@@ -419,6 +419,7 @@ export function annotateRequirementRoomMessage(input: {
   message: ChatMessage;
   sessionKey: string;
   agentId: string;
+  roomId?: string;
   ownerAgentId?: string | null;
 }): ChatMessage | null {
   const normalized: ChatMessage = {
@@ -440,7 +441,7 @@ export function annotateRequirementRoomMessage(input: {
 
   const roomMessage: ChatMessage = {
     ...normalized,
-    roomSessionKey: input.sessionKey,
+    roomSessionKey: input.roomId ?? input.sessionKey,
   };
 
   if (normalized.role === "assistant") {
@@ -591,23 +592,11 @@ export function buildRequirementRoomRecord(input: {
   updatedAt?: number;
   lastSourceSyncAt?: number;
   providerId?: string;
-  providerConversationRefs?: ProviderConversationRef[];
 }): RequirementRoomRecord {
   const now = input.updatedAt ?? Date.now();
   const workItemId = input.workItemId?.trim() || undefined;
   const roomId = workItemId ? buildRoomRecordIdFromWorkItem(workItemId) : input.sessionKey;
-  const providerConversationRefs =
-    input.providerConversationRefs ??
-    (input.providerId && !isProductRoomSessionKey(input.sessionKey)
-      ? [
-          {
-            providerId: input.providerId,
-            conversationId: input.sessionKey,
-            actorId: parseAgentIdFromSessionKey(input.sessionKey),
-            nativeRoom: input.sessionKey.includes(":group:"),
-          },
-        ]
-      : []);
+  const memberIds = sortRequirementRoomMemberIds(input.memberIds);
   return {
     id: roomId,
     companyId: input.companyId,
@@ -616,10 +605,9 @@ export function buildRequirementRoomRecord(input: {
     title: input.title.trim() || "需求团队",
     topicKey: normalizeRoomTopicKey(input.topicKey) ?? undefined,
     ownerActorId: input.ownerAgentId ?? null,
-    memberActorIds: dedupeAgentIds(input.memberIds),
+    memberActorIds: memberIds,
     status: "active",
-    providerConversationRefs,
-    memberIds: dedupeAgentIds(input.memberIds),
+    memberIds,
     ownerAgentId: input.ownerAgentId ?? null,
     transcript: mergeRequirementRoomTranscript(input.transcript ?? []),
     createdAt: input.createdAt ?? now,
@@ -775,7 +763,7 @@ export function appendRequirementRoomMessages(input: {
   return {
     ...input.room,
     ...input.meta,
-    memberIds: dedupeAgentIds([...(input.room.memberIds ?? []), ...(input.meta?.memberIds ?? [])]),
+    memberIds: sortRequirementRoomMemberIds([...(input.room.memberIds ?? []), ...(input.meta?.memberIds ?? [])]),
     topicKey: normalizeRoomTopicKey(input.meta?.topicKey) ?? input.room.topicKey,
     transcript: mergeRequirementRoomTranscript([...input.room.transcript, ...input.messages]),
     updatedAt: latestTimestamp,
@@ -840,8 +828,59 @@ export function convertRequirementRoomRecordToChatMessages(
     timestamp: message.timestamp,
     roomAgentId: message.senderAgentId,
     roomAudienceAgentIds: message.audienceAgentIds,
-    roomSessionKey: message.sourceSessionKey ?? room.sessionKey,
+    roomSessionKey: room.id,
   }));
+}
+
+function buildRoomMessageSignature(message: RequirementRoomMessage): string {
+  const audience = sortRequirementRoomMemberIds(
+    message.audienceAgentIds ?? message.targetActorIds ?? [],
+  ).join(",");
+  return [
+    message.id,
+    message.role,
+    message.senderAgentId ?? "",
+    message.visibility ?? "public",
+    message.source ?? "",
+    message.timestamp,
+    message.text ?? "",
+    audience,
+  ].join("|");
+}
+
+function buildRoomTranscriptSignature(transcript: RequirementRoomMessage[]): string {
+  if (transcript.length === 0) {
+    return "0";
+  }
+  const tail = transcript.slice(-24).map(buildRoomMessageSignature).join("||");
+  return `${transcript.length}:${tail}`;
+}
+
+export function buildRequirementRoomRecordSignature(
+  room: RequirementRoomRecord | null | undefined,
+): string {
+  if (!room) {
+    return "room:null";
+  }
+
+  return [
+    room.id,
+    room.companyId ?? "",
+    room.workItemId ?? "",
+    room.title,
+    room.topicKey ?? "",
+    room.ownerActorId ?? room.ownerAgentId ?? "",
+    room.status ?? "active",
+    buildRoomMemberSignature(room.memberActorIds ?? room.memberIds),
+    buildRoomTranscriptSignature(room.transcript),
+  ].join("::");
+}
+
+export function areRequirementRoomRecordsEquivalent(
+  left: RequirementRoomRecord | null | undefined,
+  right: RequirementRoomRecord | null | undefined,
+): boolean {
+  return buildRequirementRoomRecordSignature(left) === buildRequirementRoomRecordSignature(right);
 }
 
 function normalizeRoomAudienceIds(value: unknown): string[] {

@@ -18,6 +18,7 @@ function isArtifactRecord(value: unknown): value is ArtifactRecord {
     typeof candidate.title === "string" &&
     typeof candidate.kind === "string" &&
     isArtifactStatus(candidate.status) &&
+    (typeof candidate.content === "string" || candidate.content == null) &&
     typeof candidate.createdAt === "number" &&
     typeof candidate.updatedAt === "number"
   );
@@ -25,6 +26,20 @@ function isArtifactRecord(value: unknown): value is ArtifactRecord {
 
 function getArtifactCacheKey(companyId: string) {
   return `${ARTIFACT_CACHE_PREFIX}${companyId.trim()}`;
+}
+
+export function sanitizeArtifactRecords(records: ArtifactRecord[]): ArtifactRecord[] {
+  const deduped = new Map<string, ArtifactRecord>();
+  for (const record of records) {
+    if (!isArtifactRecord(record)) {
+      continue;
+    }
+    const previous = deduped.get(record.id);
+    if (!previous || record.updatedAt >= previous.updatedAt) {
+      deduped.set(record.id, record);
+    }
+  }
+  return [...deduped.values()].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
 export function loadArtifactRecords(companyId: string | null | undefined): ArtifactRecord[] {
@@ -42,7 +57,7 @@ export function loadArtifactRecords(companyId: string | null | undefined): Artif
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed.filter(isArtifactRecord).sort((left, right) => right.updatedAt - left.updatedAt);
+    return sanitizeArtifactRecords(parsed.filter(isArtifactRecord));
   } catch {
     return [];
   }
@@ -56,8 +71,7 @@ export function persistArtifactRecords(
     return;
   }
 
-  const trimmed = [...artifacts]
-    .sort((left, right) => right.updatedAt - left.updatedAt)
+  const trimmed = sanitizeArtifactRecords(artifacts)
     .slice(0, ARTIFACT_LIMIT);
   localStorage.setItem(getArtifactCacheKey(companyId), JSON.stringify(trimmed));
 }

@@ -44,11 +44,13 @@ import { summarizeRequestHealth } from "../features/requests/request-health";
 import { requestTopicMatchesText } from "../features/requests/topic";
 import { useCompanyStore } from "../features/company/store";
 import { buildCompanyBlueprint } from "../features/company/blueprint";
-import { pickConversationMissionRecord } from "../features/execution/conversation-mission";
 import {
+  isRoomBackedWorkItem,
+  matchesWorkItemSourceActor,
   pickWorkItemRecord,
 } from "../features/execution/work-item";
 import { reconcileWorkItemRecord } from "../features/execution/work-item-reconciler";
+import { isReliableWorkItemRecord } from "../features/execution/work-item-signal";
 import { useGatewayStore } from "../features/gateway/store";
 import {
   isBlockedExecutionState,
@@ -72,6 +74,7 @@ import {
   filterRequirementSlaAlerts,
 } from "../features/execution/requirement-scope";
 import {
+  isArtifactRequirementTopic,
   isStrategicRequirementTopic,
 } from "../features/execution/requirement-kind";
 import { isSyntheticWorkflowPromptText } from "../features/execution/message-truth";
@@ -90,9 +93,10 @@ import {
 } from "../features/backend";
 import { toast } from "../features/ui/toast-store";
 import { AgentOps } from "../lib/agent-ops";
+import { resolveConversationPresentation } from "../lib/chat-routes";
 import {
   isSessionActive,
-  parseAgentIdFromSessionKey,
+  resolveSessionActorId,
   resolveSessionTitle,
   resolveSessionUpdatedAt,
 } from "../lib/sessions";
@@ -159,20 +163,19 @@ function isCanonicalWorkItemRecord(
   workItem: WorkItemRecord,
   ceoAgentId: string | null | undefined,
 ): boolean {
-  if (workItem.sessionKey?.includes(":group:")) {
-    return true;
-  }
-  if (!ceoAgentId || !workItem.sessionKey) {
+  if (!isReliableWorkItemRecord(workItem)) {
     return false;
   }
-  return parseAgentIdFromSessionKey(workItem.sessionKey) === ceoAgentId;
+  if (isRoomBackedWorkItem(workItem)) {
+    return true;
+  }
+  return matchesWorkItemSourceActor(workItem, ceoAgentId);
 }
 
 export function CompanyLobby() {
   const navigate = useNavigate();
   const {
     activeCompany,
-    activeMissionRecords,
     activeRoomRecords,
     activeWorkItems,
     activeArtifacts,
@@ -251,7 +254,7 @@ export function CompanyLobby() {
   const companySessions = sessionsCache
     .map((session) => ({
       ...session,
-      agentId: parseAgentIdFromSessionKey(session.key),
+      agentId: resolveSessionActorId(session),
     }))
     .filter((session): session is GatewaySessionRow & { agentId: string } => {
       const agentId = session.agentId;
@@ -392,29 +395,196 @@ export function CompanyLobby() {
       timestamp: latestUserMessage.timestamp,
     };
   }, [ceoEmployee, companySessionSnapshots]);
-  const requirementOverview = useMemo(
+  const shouldBootstrapRequirementOverview = Boolean(
+    ceoInstructionHint?.text ||
+      activeWorkItems.some(
+        (item) =>
+          isReliableWorkItemRecord(item) &&
+          item.status !== "completed" &&
+          item.status !== "archived",
+      ),
+  );
+  const rawRequirementOverview = useMemo(
     () =>
-      activeCompany
+      activeCompany && shouldBootstrapRequirementOverview
         ? buildRequirementExecutionOverview({
             company: activeCompany,
             sessionSnapshots: companySessionSnapshots,
             preferredTopicText: ceoInstructionHint?.text ?? null,
             preferredTopicTimestamp: ceoInstructionHint?.timestamp ?? null,
+            includeArtifactTopics: false,
             now: currentTime,
           })
         : null,
-    [activeCompany, ceoInstructionHint?.text, ceoInstructionHint?.timestamp, companySessionSnapshots, currentTime],
+    [
+      activeCompany,
+      ceoInstructionHint?.text,
+      ceoInstructionHint?.timestamp,
+      companySessionSnapshots,
+      currentTime,
+      shouldBootstrapRequirementOverview,
+    ],
+  );
+  const requirementCurrentOwner =
+    rawRequirementOverview?.currentOwnerAgentId
+      ? activeCompany.employees.find((employee) => employee.agentId === rawRequirementOverview.currentOwnerAgentId) ??
+        null
+      : null;
+  const canonicalWorkItems = useMemo(
+    () =>
+      activeWorkItems.filter(
+        (item) =>
+          isCanonicalWorkItemRecord(item, ceoEmployee?.agentId) &&
+          !isArtifactRequirementTopic(item.topicKey),
+      ),
+    [activeWorkItems, ceoEmployee?.agentId],
+  );
+  const latestOpenWorkItem = useMemo(
+    () =>
+      [...canonicalWorkItems]
+        .filter((item) => item.status !== "completed" && item.status !== "archived")
+        .sort((left, right) => {
+          const leftSpecific = Number(Boolean(left.topicKey));
+          const rightSpecific = Number(Boolean(right.topicKey));
+          if (leftSpecific !== rightSpecific) {
+            return rightSpecific - leftSpecific;
+          }
+          return right.updatedAt - left.updatedAt;
+        })[0] ?? null,
+    [canonicalWorkItems],
+  );
+  const latestStrategicWorkItem = useMemo(
+    () =>
+      [...canonicalWorkItems]
+        .filter(
+          (item) =>
+            isStrategicRequirementTopic(item.topicKey) &&
+            item.status !== "completed" &&
+            item.status !== "archived",
+        )
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
+    [canonicalWorkItems],
+  );
+  const requirementTopicKeyHint = rawRequirementOverview?.topicKey ?? latestOpenWorkItem?.topicKey ?? null;
+  const requirementStartedAtHint = rawRequirementOverview?.startedAt ?? latestOpenWorkItem?.startedAt ?? null;
+  const matchedWorkItem = useMemo(
+    () =>
+      pickWorkItemRecord({
+        items: canonicalWorkItems,
+        sessionKey:
+          requirementCurrentOwner && companySessions.length > 0
+            ? companySessions.find((session) => session.agentId === requirementCurrentOwner.agentId)?.key ?? null
+            : latestOpenWorkItem?.ownerActorId
+              ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
+              : null,
+        topicKey: requirementTopicKeyHint,
+        startedAt: requirementStartedAtHint,
+      }),
+    [
+      canonicalWorkItems,
+      companySessions,
+      latestOpenWorkItem?.ownerActorId,
+      requirementCurrentOwner,
+      requirementStartedAtHint,
+      requirementTopicKeyHint,
+    ],
+  );
+  const bootstrapRequirementWorkItem = useMemo(() => {
+    if (!activeCompany || !rawRequirementOverview) {
+      return null;
+    }
+    if (isArtifactRequirementTopic(rawRequirementOverview.topicKey)) {
+      return null;
+    }
+
+    const currentWorkItemMatches =
+      matchedWorkItem &&
+      matchedWorkItem.topicKey === rawRequirementOverview.topicKey &&
+      Math.abs((matchedWorkItem.startedAt ?? 0) - rawRequirementOverview.startedAt) <= 1_000;
+    if (currentWorkItemMatches) {
+      return null;
+    }
+
+    return reconcileWorkItemRecord({
+      companyId: activeCompany.id,
+      existingWorkItem: matchedWorkItem,
+      overview: rawRequirementOverview,
+      room: activeRoomRecords.find((room) => room.workItemId === matchedWorkItem?.id) ?? null,
+      artifacts: activeArtifacts,
+      dispatches: activeDispatches,
+      fallbackSessionKey:
+        requirementCurrentOwner && companySessions.length > 0
+          ? companySessions.find((session) => session.agentId === requirementCurrentOwner.agentId)?.key ?? null
+          : latestOpenWorkItem?.ownerActorId
+            ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
+            : null,
+    });
+  }, [
+    activeArtifacts,
+    activeCompany,
+    activeDispatches,
+    activeRoomRecords,
+    companySessions,
+    latestOpenWorkItem?.ownerActorId,
+    matchedWorkItem,
+    requirementCurrentOwner,
+    rawRequirementOverview,
+  ]);
+  const activeWorkItem = useMemo(
+    () => {
+      if (bootstrapRequirementWorkItem) {
+        return bootstrapRequirementWorkItem;
+      }
+      if (latestOpenWorkItem?.topicKey && !matchedWorkItem?.topicKey) {
+        return latestOpenWorkItem;
+      }
+      return matchedWorkItem ?? latestOpenWorkItem;
+    },
+    [bootstrapRequirementWorkItem, latestOpenWorkItem, matchedWorkItem],
+  );
+  const scopedRequirementWorkItem = useMemo(
+    () =>
+      rawRequirementOverview && isStrategicRequirementTopic(rawRequirementOverview.topicKey)
+        ? latestStrategicWorkItem ?? activeWorkItem
+        : activeWorkItem,
+    [activeWorkItem, latestStrategicWorkItem, rawRequirementOverview],
+  );
+  const currentWorkItem = useMemo(
+    () =>
+      scopedRequirementWorkItem && isReliableWorkItemRecord(scopedRequirementWorkItem)
+        ? scopedRequirementWorkItem
+        : null,
+    [scopedRequirementWorkItem],
+  );
+  const requirementOverview = useMemo(
+    () => {
+      if (!currentWorkItem || !rawRequirementOverview) {
+        return null;
+      }
+      if (
+        currentWorkItem.topicKey &&
+        rawRequirementOverview.topicKey !== currentWorkItem.topicKey
+      ) {
+        return null;
+      }
+      return rawRequirementOverview;
+    },
+    [currentWorkItem, rawRequirementOverview],
   );
   const requirementScope = useMemo(
-    () => buildRequirementScope(activeCompany, requirementOverview),
-    [activeCompany, requirementOverview],
+    () => (currentWorkItem ? buildRequirementScope(activeCompany, requirementOverview, currentWorkItem) : null),
+    [activeCompany, currentWorkItem, requirementOverview],
   );
-  const companyTasks = requirementScope?.tasks ?? (activeCompany.tasks ?? []);
-  const companyHandoffs = requirementScope?.handoffs ?? getActiveHandoffs(activeCompany.handoffs ?? []);
-  const companyRequests = requirementScope?.requests ?? activeCompany.requests ?? [];
-  const rawSlaAlerts = evaluateSlaAlerts(activeCompany, currentTime);
+  const companyTasks = currentWorkItem ? requirementScope?.tasks ?? [] : [];
+  const companyHandoffs = currentWorkItem ? requirementScope?.handoffs ?? getActiveHandoffs(activeCompany.handoffs ?? []) : [];
+  const companyRequests = currentWorkItem ? requirementScope?.requests ?? (activeCompany.requests ?? []) : [];
+  const rawSlaAlerts = currentWorkItem ? evaluateSlaAlerts(activeCompany, currentTime) : [];
   const slaAlerts = filterRequirementSlaAlerts(rawSlaAlerts, requirementScope);
-  const ceoSurface = buildCeoControlSurface(activeCompany);
+  const ceoSurface = buildCeoControlSurface(
+    currentWorkItem
+      ? activeCompany
+      : { ...activeCompany, tasks: [], handoffs: [], requests: [] },
+  );
 
   function buildEmployeeFocusSummary(input: {
     agentId: string;
@@ -642,124 +812,7 @@ export function CompanyLobby() {
     employeeInsights,
   });
   const requestHealth = summarizeRequestHealth(companyRequests);
-  const requirementCurrentOwner =
-    requirementOverview?.currentOwnerAgentId
-      ? activeCompany.employees.find((employee) => employee.agentId === requirementOverview.currentOwnerAgentId) ??
-        null
-      : null;
-  const canonicalWorkItems = useMemo(
-    () => activeWorkItems.filter((item) => isCanonicalWorkItemRecord(item, ceoEmployee?.agentId)),
-    [activeWorkItems, ceoEmployee?.agentId],
-  );
-  const latestOpenWorkItem = useMemo(
-    () =>
-      [...canonicalWorkItems]
-        .filter((item) => item.status !== "completed" && item.status !== "archived")
-        .sort((left, right) => {
-          const leftSpecific = Number(Boolean(left.topicKey));
-          const rightSpecific = Number(Boolean(right.topicKey));
-          if (leftSpecific !== rightSpecific) {
-            return rightSpecific - leftSpecific;
-          }
-          return right.updatedAt - left.updatedAt;
-        })[0] ?? null,
-    [canonicalWorkItems],
-  );
-  const requirementTopicKeyHint = requirementOverview?.topicKey ?? latestOpenWorkItem?.topicKey ?? null;
-  const requirementStartedAtHint = requirementOverview?.startedAt ?? latestOpenWorkItem?.startedAt ?? null;
-  const activeMission = useMemo(
-    () =>
-      pickConversationMissionRecord({
-        missions: activeMissionRecords,
-        sessionKey:
-          requirementCurrentOwner && companySessions.length > 0
-            ? companySessions.find((session) => session.agentId === requirementCurrentOwner.agentId)?.key ?? null
-            : latestOpenWorkItem?.ownerActorId
-              ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
-              : null,
-        topicKey: requirementTopicKeyHint,
-        startedAt: requirementStartedAtHint,
-      }),
-    [activeMissionRecords, companySessions, latestOpenWorkItem?.ownerActorId, requirementCurrentOwner, requirementStartedAtHint, requirementTopicKeyHint],
-  );
-  const matchedWorkItem = useMemo(
-    () =>
-      pickWorkItemRecord({
-        items: canonicalWorkItems,
-        sessionKey:
-          requirementCurrentOwner && companySessions.length > 0
-            ? companySessions.find((session) => session.agentId === requirementCurrentOwner.agentId)?.key ?? null
-            : latestOpenWorkItem?.ownerActorId
-              ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
-              : null,
-        topicKey: requirementTopicKeyHint,
-        startedAt: requirementStartedAtHint,
-      }),
-    [canonicalWorkItems, companySessions, latestOpenWorkItem?.ownerActorId, requirementCurrentOwner, requirementStartedAtHint, requirementTopicKeyHint],
-  );
-  const bootstrapRequirementWorkItem = useMemo(() => {
-    if (!activeCompany || !requirementOverview) {
-      return null;
-    }
-
-    const currentWorkItemMatches =
-      matchedWorkItem &&
-      matchedWorkItem.topicKey === requirementOverview.topicKey &&
-      Math.abs((matchedWorkItem.startedAt ?? 0) - requirementOverview.startedAt) <= 1_000;
-    if (currentWorkItemMatches) {
-      return null;
-    }
-
-    return reconcileWorkItemRecord({
-      companyId: activeCompany.id,
-      existingWorkItem: matchedWorkItem,
-      overview: requirementOverview,
-      room: activeRoomRecords.find((room) => room.workItemId === matchedWorkItem?.id) ?? null,
-      artifacts: activeArtifacts,
-      dispatches: activeDispatches,
-      fallbackSessionKey:
-        requirementCurrentOwner && companySessions.length > 0
-          ? companySessions.find((session) => session.agentId === requirementCurrentOwner.agentId)?.key ?? null
-          : latestOpenWorkItem?.ownerActorId
-            ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
-            : null,
-    });
-  }, [
-    activeArtifacts,
-    activeCompany,
-    activeDispatches,
-    activeRoomRecords,
-    companySessions,
-    latestOpenWorkItem?.ownerActorId,
-    matchedWorkItem,
-    requirementCurrentOwner,
-    requirementOverview,
-  ]);
-  const activeWorkItem = useMemo(
-    () => {
-      if (bootstrapRequirementWorkItem) {
-        return bootstrapRequirementWorkItem;
-      }
-      if (latestOpenWorkItem?.topicKey && !matchedWorkItem?.topicKey) {
-        return latestOpenWorkItem;
-      }
-      return matchedWorkItem ?? latestOpenWorkItem;
-    },
-    [bootstrapRequirementWorkItem, latestOpenWorkItem, matchedWorkItem],
-  );
-  const latestStrategicWorkItem = useMemo(
-    () =>
-      [...canonicalWorkItems]
-        .filter(
-          (item) =>
-            isStrategicRequirementTopic(item.topicKey) &&
-            item.status !== "completed" &&
-            item.status !== "archived",
-        )
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null,
-    [canonicalWorkItems],
-  );
-  const primaryWorkItem = latestStrategicWorkItem ?? activeWorkItem;
+  const primaryWorkItem = currentWorkItem;
 
   useEffect(() => {
     if (!bootstrapRequirementWorkItem) {
@@ -768,9 +821,10 @@ export function CompanyLobby() {
     upsertWorkItemRecord(bootstrapRequirementWorkItem);
   }, [bootstrapRequirementWorkItem, upsertWorkItemRecord]);
   const currentRequirementWorkItemId = primaryWorkItem?.id ?? null;
-  const primaryRequirementTopicKey =
-    primaryWorkItem?.topicKey ?? activeMission?.topicKey ?? requirementTopicKeyHint;
-  const isStrategicRequirement = isStrategicRequirementTopic(primaryRequirementTopicKey);
+  const primaryRequirementTopicKey = primaryWorkItem?.topicKey ?? requirementOverview?.topicKey ?? null;
+  const isStrategicRequirement = Boolean(
+    primaryRequirementTopicKey && isStrategicRequirementTopic(primaryRequirementTopicKey),
+  );
   const strategicRequirementOverview =
     requirementOverview && requirementOverview.topicKey === primaryRequirementTopicKey
       ? requirementOverview
@@ -778,27 +832,27 @@ export function CompanyLobby() {
   const requirementDisplayTitle =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.title
-      : primaryWorkItem?.title ?? activeMission?.title ?? requirementOverview?.title ?? "当前需求";
+      : primaryWorkItem?.title ?? requirementOverview?.title ?? "当前需求";
   const requirementDisplayCurrentStep =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.headline
-      : primaryWorkItem?.stageLabel ?? activeMission?.currentStepLabel ?? requirementOverview?.headline ?? "待确认";
+      : primaryWorkItem?.stageLabel ?? requirementOverview?.headline ?? "待确认";
   const requirementDisplaySummary =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.summary
-      : primaryWorkItem?.summary ?? activeMission?.summary ?? requirementOverview?.summary ?? "待确认";
+      : primaryWorkItem?.summary ?? requirementOverview?.summary ?? "待确认";
   const requirementDisplayOwner =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.currentOwnerLabel || "待确认"
-      : primaryWorkItem?.ownerLabel || activeMission?.ownerLabel || requirementOverview?.currentOwnerLabel || "待确认";
+      : primaryWorkItem?.ownerLabel || requirementOverview?.currentOwnerLabel || "待确认";
   const requirementDisplayStage =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.currentStage
-      : primaryWorkItem?.stageLabel ?? activeMission?.currentStepLabel ?? requirementOverview?.currentStage ?? "待确认";
+      : primaryWorkItem?.stageLabel ?? requirementOverview?.currentStage ?? "待确认";
   const requirementDisplayNext =
     isStrategicRequirement && strategicRequirementOverview
       ? strategicRequirementOverview.nextAction
-      : primaryWorkItem?.nextAction ?? activeMission?.nextLabel ?? requirementOverview?.nextAction ?? "待确认";
+      : primaryWorkItem?.nextAction ?? requirementOverview?.nextAction ?? "待确认";
   const primaryOwnerEmployee =
     primaryWorkItem?.ownerActorId
       ? activeCompany.employees.find((employee) => employee.agentId === primaryWorkItem.ownerActorId) ?? null
@@ -832,6 +886,9 @@ export function CompanyLobby() {
     : requestHealth;
   const visibleSlaAlerts = isStrategicRequirement ? [] : slaAlerts;
   const visibleManualCount = isStrategicRequirement ? 0 : manualCount;
+  const showOperationalQueues = !primaryWorkItem;
+  const completedWorkSteps = primaryWorkItem?.steps.filter((step) => step.status === "done").length ?? 0;
+  const totalWorkSteps = primaryWorkItem?.steps.length ?? 0;
   const teamHealthLabel =
     visibleManualCount > 0
       ? `${visibleManualCount} 处需人工介入`
@@ -964,8 +1021,7 @@ export function CompanyLobby() {
     if (!quickTaskTarget || !quickTaskInput.trim()) return;
     setQuickTaskSubmitting(true);
     try {
-      const session = await gateway.resolveSession(quickTaskTarget);
-      await gateway.sendChatMessage(session.key, quickTaskInput.trim());
+      await AgentOps.assignTask(quickTaskTarget, quickTaskInput.trim());
       toast.success("指令派发成功", "任务已交给对应成员。");
       setQuickTaskInput("");
     } catch (err: any) {
@@ -1077,12 +1133,12 @@ export function CompanyLobby() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
-              {(activeMission?.ownerAgentId ?? requirementCurrentOwner?.agentId) ? (
+              {(primaryWorkItem?.ownerActorId ?? requirementCurrentOwner?.agentId) ? (
                 <Button
                   onClick={() =>
                     navigate(
                       `/chat/${encodeURIComponent(
-                        activeMission?.ownerAgentId ?? requirementCurrentOwner!.agentId,
+                        primaryWorkItem?.ownerActorId ?? requirementCurrentOwner!.agentId,
                       )}`,
                     )
                   }
@@ -1170,7 +1226,7 @@ export function CompanyLobby() {
       </div>
 
       <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-        {requirementOverview ? (
+        {primaryWorkItem ? (
           <>
             <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
               当前负责人：{requirementDisplayOwner}
@@ -1181,19 +1237,14 @@ export function CompanyLobby() {
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
               下一步：{requirementDisplayNext}
             </span>
-            {visibleHandoffRecords.length > 0 ? (
-              <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-xs text-violet-700">
-                当前需求交接待处理 {visiblePendingHandoffs} 项
+            {totalWorkSteps > 0 ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
+                进度：{completedWorkSteps}/{totalWorkSteps}
               </span>
             ) : null}
-            {visibleRequestHealth.total > 0 ? (
-              <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-xs text-sky-700">
-                当前需求请求待闭环 {visibleRequestHealth.active} 项
-              </span>
-            ) : null}
-            {visibleSlaAlerts.length > 0 ? (
-              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
-                当前需求超时提醒 {visibleSlaAlerts.length} 项
+            {visibleManualCount > 0 ? (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                当前需求需人工介入 {visibleManualCount} 项
               </span>
             ) : null}
           </>
@@ -1227,12 +1278,12 @@ export function CompanyLobby() {
             <span className="text-xs text-slate-500">
               {visibleManualCount > 0 ? `${visibleManualCount} 位成员已进入人工接管态` : `${runningCount} 位成员仍在执行中`}
             </span>
-            {handoffRecords.length > 0 && (
+            {showOperationalQueues && handoffRecords.length > 0 && (
               <span className="text-xs text-slate-500">
                 交接 {visibleHandoffRecords.length} 条，待完成 {visiblePendingHandoffs}，阻塞 {visibleBlockedHandoffs}
               </span>
             )}
-            {visibleRequestHealth.total > 0 && (
+            {showOperationalQueues && visibleRequestHealth.total > 0 && (
               <span className="text-xs text-slate-500">
                 请求 {visibleRequestHealth.total} 条，活跃 {visibleRequestHealth.active}，阻塞 {visibleRequestHealth.blocked}
               </span>
@@ -1245,11 +1296,11 @@ export function CompanyLobby() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-slate-950">
-              {requirementOverview ? "本次需求的卡点与下一步" : "先处理这些异常与下一步"}
+              {primaryWorkItem ? "本次需求的卡点与下一步" : "先处理这些异常与下一步"}
             </div>
             <div className="mt-1 text-xs text-slate-500">
-              {requirementOverview
-                ? "这里默认只保留本次需求的异常与下一步，历史遗留内容已经隐藏。"
+              {primaryWorkItem
+                ? "这里默认只保留本次需求的负责人、阶段和下一步；旧请求、交接和 SLA 已降到次级视图。"
                 : "这里是后台总览。先在 CEO 首页推进工作，再来这里排障和查看全局状态。"}
             </div>
           </div>
@@ -1257,15 +1308,23 @@ export function CompanyLobby() {
             <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">
               阻塞 {blockedCount}
             </Badge>
-            <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
-              交接 {visiblePendingHandoffs}
-            </Badge>
-            <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
-              请求 {visibleRequestHealth.active}
-            </Badge>
-            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
-              SLA {visibleSlaAlerts.length}
-            </Badge>
+            {showOperationalQueues ? (
+              <>
+                <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
+                  交接 {visiblePendingHandoffs}
+                </Badge>
+                <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-700">
+                  请求 {visibleRequestHealth.active}
+                </Badge>
+                <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                  SLA {visibleSlaAlerts.length}
+                </Badge>
+              </>
+            ) : totalWorkSteps > 0 ? (
+              <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                进度 {completedWorkSteps}/{totalWorkSteps}
+              </Badge>
+            ) : null}
             <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
               接管 {visibleManualCount}
             </Badge>
@@ -1280,7 +1339,7 @@ export function CompanyLobby() {
             </Button>
           </div>
         </div>
-        {requirementOverview ? (
+        {primaryWorkItem ? (
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
             {primaryOwnerEmployee ? (
               <button
@@ -1370,7 +1429,14 @@ export function CompanyLobby() {
                   (session) => sessionExecutions.get(session.key)?.state === "manual_takeover_required",
                 );
                 if (manualSession) {
-                  navigate(`/chat/${encodeURIComponent(manualSession.key)}`);
+                  navigate(
+                    resolveConversationPresentation({
+                      sessionKey: manualSession.key,
+                      actorId: resolveSessionActorId(manualSession),
+                      rooms: activeRoomRecords,
+                      employees: activeCompany.employees,
+                    }).route,
+                  );
                 }
               }}
             >
@@ -1380,15 +1446,15 @@ export function CompanyLobby() {
         </div>
       )}
 
-      {visibleRequestHealth.active > 0 && (
+      {showOperationalQueues && visibleRequestHealth.active > 0 && (
         <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-sky-950">
-                {requirementOverview ? "当前需求请求闭环" : "请求闭环队列"}
+                {primaryWorkItem ? "当前需求请求闭环" : "请求闭环队列"}
               </div>
               <div className="mt-1 text-xs text-sky-800">
-                {requirementOverview
+                {primaryWorkItem
                   ? `当前这条主线还有 ${visibleRequestHealth.active} 条请求未真正闭环，其中阻塞 ${visibleRequestHealth.blocked} 条；历史请求已隐藏。`
                   : `当前有 ${visibleRequestHealth.active} 条请求仍未真正闭环，其中阻塞 ${visibleRequestHealth.blocked} 条。`}
               </div>
@@ -1406,21 +1472,21 @@ export function CompanyLobby() {
         </div>
       )}
 
-      {visibleSlaAlerts.length > 0 && (
+      {showOperationalQueues && visibleSlaAlerts.length > 0 && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-rose-950">
-                {requirementOverview ? "当前需求超时提醒" : "SLA 升级队列"}
+                {primaryWorkItem ? "当前需求超时提醒" : "SLA 升级队列"}
               </div>
               <div className="mt-1 text-xs text-rose-800">
-                {requirementOverview
+                {primaryWorkItem
                   ? `当前这条主线有 ${visibleSlaAlerts.length} 条升级提醒，历史超时项已隐藏。`
                   : `当前有 ${visibleSlaAlerts.length} 条规则触发升级，CEO 不需要手动轮询即可看到这些异常。`}
               </div>
             </div>
           </div>
-          {requirementOverview ? (
+          {primaryWorkItem ? (
             <div className="mt-3 rounded-lg border border-rose-200 bg-white/80 px-3 py-3 text-xs leading-6 text-slate-700">
               具体超时条目已收起，避免旧提醒再次抢占视线。默认先按上面的“当前负责人 / 下一步 / 查看工作看板”推进主线。
             </div>
@@ -1814,7 +1880,16 @@ export function CompanyLobby() {
                         <button
                           type="button"
                           className="mt-2 inline-flex text-[11px] font-medium text-amber-800 hover:text-amber-900"
-                          onClick={() => navigate(`/chat/${encodeURIComponent(item.key)}`)}
+                          onClick={() =>
+                            navigate(
+                              resolveConversationPresentation({
+                                sessionKey: item.key,
+                                actorId: item.employee?.agentId ?? null,
+                                rooms: activeRoomRecords,
+                                employees: activeCompany.employees,
+                              }).route,
+                            )
+                          }
                         >
                           查看接管包
                         </button>

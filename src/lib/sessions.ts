@@ -14,6 +14,21 @@ export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
   return agentId && agentId.length > 0 ? agentId : null;
 }
 
+export function resolveSessionActorId(
+  session: Pick<GatewaySessionRow, "key" | "actorId"> | string | null | undefined,
+): string | null {
+  if (!session) {
+    return null;
+  }
+  if (typeof session === "string") {
+    return parseAgentIdFromSessionKey(session);
+  }
+  if (typeof session.actorId === "string" && session.actorId.trim().length > 0) {
+    return session.actorId.trim();
+  }
+  return parseAgentIdFromSessionKey(session.key);
+}
+
 export function resolveSessionUpdatedAt(session: GatewaySessionRow): number {
   return typeof session.updatedAt === "number" ? session.updatedAt : 0;
 }

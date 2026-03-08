@@ -1,4 +1,5 @@
 import type { RequirementRoomRecord } from "./types";
+import { sortRequirementRoomMemberIds } from "../execution/requirement-room";
 
 const ROOM_CACHE_PREFIX = "cyber_company_room_records:";
 const ROOM_LIMIT = 24;
@@ -42,10 +43,10 @@ function normalizeRequirementRoomRecord(
   room: RequirementRoomRecord,
   companyId: string,
 ): RequirementRoomRecord {
-  const memberIds = [...new Set((room.memberIds ?? []).filter(Boolean))];
+  const memberIds = sortRequirementRoomMemberIds(room.memberIds ?? []);
   const memberActorIds =
     room.memberActorIds && room.memberActorIds.length > 0
-      ? [...new Set(room.memberActorIds.filter(Boolean))]
+      ? sortRequirementRoomMemberIds(room.memberActorIds)
       : memberIds;
 
   return {
@@ -56,6 +57,7 @@ function normalizeRequirementRoomRecord(
     memberIds,
     memberActorIds,
     status: room.status ?? "active",
+    providerConversationRefs: undefined,
     transcript: [...room.transcript].sort((left, right) => left.timestamp - right.timestamp),
   };
 }

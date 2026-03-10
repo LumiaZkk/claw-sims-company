@@ -330,6 +330,10 @@ class OpenClawBackendAdapter implements AgentBackend {
     return this.gateway.alignAgentSkillsToDefaults(agentIds);
   }
 
+  removeAgentConfigEntries(agentIds: string[]) {
+    return this.gateway.removeAgentConfigEntries(agentIds);
+  }
+
   getAgentControlSnapshot(agentId: string) {
     return this.gateway.getAgentControlSnapshot(agentId);
   }

@@ -873,6 +873,67 @@ export class CyberGateway {
     return { updated: 0, defaultSkills: null };
   }
 
+  async removeAgentConfigEntries(
+    agentIds: string[],
+  ): Promise<{ updated: number }> {
+    const targetIds = new Set(agentIds.map((id) => id.trim()).filter((id) => id.length > 0));
+
+    if (targetIds.size === 0) {
+      return { updated: 0 };
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const snapshot = await this.getConfigSnapshot();
+      if (!snapshot.valid) {
+        throw new Error("Gateway config is invalid; cannot remove deleted agents from config.");
+      }
+
+      const hash = typeof snapshot.hash === "string" ? snapshot.hash.trim() : "";
+      if (!hash) {
+        throw new Error("Gateway config hash is missing; cannot remove deleted agents from config.");
+      }
+
+      if (!isRecord(snapshot.config)) {
+        throw new Error("Gateway config payload is malformed; cannot remove deleted agents from config.");
+      }
+
+      const config = structuredClone(snapshot.config);
+      const agents = isRecord(config.agents) ? { ...config.agents } : {};
+      const list = Array.isArray(agents.list) ? [...agents.list] : [];
+      const nextList = list.filter((entry) => {
+        if (!isRecord(entry)) {
+          return true;
+        }
+        const id = normalizeNonEmptyString(entry.id);
+        return !id || !targetIds.has(id);
+      });
+      const updated = list.length - nextList.length;
+
+      if (updated === 0) {
+        return { updated: 0 };
+      }
+
+      const nextConfig: Record<string, unknown> = {
+        ...config,
+        agents: {
+          ...agents,
+          list: nextList,
+        },
+      };
+
+      try {
+        await this.setConfig(nextConfig, hash);
+        return { updated };
+      } catch (error) {
+        if (attempt === 1) {
+          throw error;
+        }
+      }
+    }
+
+    return { updated: 0 };
+  }
+
   async getAgentControlSnapshot(agentId: string): Promise<AgentControlSnapshot> {
     const normalizedAgentId = normalizeNonEmptyString(agentId);
     if (!normalizedAgentId) {

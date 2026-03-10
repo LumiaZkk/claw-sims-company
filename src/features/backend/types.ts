@@ -307,6 +307,7 @@ export interface AgentBackend extends BackendCore {
   alignAgentSkillsToDefaults(
     agentIds: string[],
   ): Promise<{ updated: number; defaultSkills: string[] | null }>;
+  removeAgentConfigEntries(agentIds: string[]): Promise<{ updated: number }>;
   getAgentControlSnapshot(agentId: string): Promise<AgentControlSnapshot>;
   setAgentModelOverride(
     agentId: string,

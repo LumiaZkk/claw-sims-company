@@ -344,6 +344,10 @@ export class BackendManager implements AgentBackend {
     return this.currentBackend.alignAgentSkillsToDefaults(agentIds);
   }
 
+  removeAgentConfigEntries(agentIds: string[]) {
+    return this.currentBackend.removeAgentConfigEntries(agentIds);
+  }
+
   getAgentControlSnapshot(agentId: string) {
     return this.currentBackend.getAgentControlSnapshot(agentId);
   }

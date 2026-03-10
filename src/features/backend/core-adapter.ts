@@ -58,6 +58,7 @@ type BackendCoreExtras = Partial<
     | "getConfigSnapshot"
     | "patchConfig"
     | "alignAgentSkillsToDefaults"
+    | "removeAgentConfigEntries"
     | "getAgentControlSnapshot"
     | "setAgentModelOverride"
     | "setAgentSkillsOverride"
@@ -285,6 +286,9 @@ export function createAgentBackendFromCore(
     alignAgentSkillsToDefaults:
       extras.alignAgentSkillsToDefaults ??
       (async () => unsupported("alignAgentSkillsToDefaults")),
+    removeAgentConfigEntries:
+      extras.removeAgentConfigEntries ??
+      (async () => unsupported("removeAgentConfigEntries")),
     getAgentControlSnapshot:
       extras.getAgentControlSnapshot ??
       (async () => unsupported("getAgentControlSnapshot")),

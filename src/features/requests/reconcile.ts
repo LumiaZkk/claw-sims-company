@@ -1,5 +1,6 @@
 import type { Company, HandoffRecord, RequestRecord, TrackedTask } from "../company/types";
 import { inferRequestTopicKey } from "./topic";
+import { extractDeliverableHeading, isPlaceholderOrBridgeText } from "./report-classifier";
 
 export type CompanyRecoverySummary = {
   requestsAdded: number;
@@ -14,15 +15,89 @@ type ReconcileCompanyCommunicationResult = {
   summary: CompanyRecoverySummary;
 };
 
+function normalizeTargetSet(targets: string[]): string {
+  return [...new Set(targets)].sort().join(",");
+}
+
+function buildRequestThemeKey(
+  request: Pick<RequestRecord, "topicKey" | "title" | "summary" | "responseSummary" | "responseDetails" | "handoffId" | "taskId" | "id">,
+): string {
+  const explicitTopic = request.topicKey ?? inferRequestTopicKey([
+    request.title,
+    request.summary,
+    request.responseSummary,
+    request.responseDetails,
+  ]);
+  if (explicitTopic) {
+    return explicitTopic;
+  }
+  const heading = extractDeliverableHeading(
+    [request.title, request.responseSummary, request.summary, request.responseDetails]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n"),
+  );
+  if (heading) {
+    return `heading:${heading.toLowerCase()}`;
+  }
+  return request.handoffId ?? request.taskId ?? request.id;
+}
+
+function buildLogicalRequestKey(request: RequestRecord): string {
+  return [
+    request.sessionKey,
+    request.fromAgentId ?? "unknown",
+    normalizeTargetSet(request.toAgentIds),
+    buildRequestThemeKey(request),
+  ].join(":");
+}
+
+function requestStatusRank(status: RequestRecord["status"]): number {
+  switch (status) {
+    case "answered":
+      return 4;
+    case "blocked":
+      return 3;
+    case "acknowledged":
+      return 2;
+    case "pending":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function requestSyncRank(syncSource: RequestRecord["syncSource"]): number {
+  switch (syncSource) {
+    case "event":
+      return 3;
+    case "normalized":
+      return 2;
+    case "history":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function isNoiseRequest(request: RequestRecord): boolean {
+  const texts = [
+    request.title,
+    request.summary,
+    request.responseSummary,
+    request.responseDetails,
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return texts.length > 0 && texts.every((text) => isPlaceholderOrBridgeText(text));
+}
+
 function mergeRequests(existing: RequestRecord[], incoming: RequestRecord[]) {
   const byId = new Map<string, RequestRecord>();
-  existing.forEach((request) => {
+  existing.filter((request) => !isNoiseRequest(request)).forEach((request) => {
     byId.set(request.id, request);
   });
 
   let requestsAdded = 0;
   let requestsUpdated = 0;
-  incoming.forEach((request) => {
+  incoming.filter((request) => !isNoiseRequest(request)).forEach((request) => {
     const current = byId.get(request.id);
     if (!current) {
       byId.set(request.id, request);
@@ -43,36 +118,50 @@ function mergeRequests(existing: RequestRecord[], incoming: RequestRecord[]) {
 }
 
 function supersedeRequests(requests: RequestRecord[]) {
-  const latestAnsweredByTopic = new Map<string, RequestRecord>();
+  const byLogicalKey = new Map<string, RequestRecord[]>();
   requests.forEach((request) => {
-    if (request.status !== "answered") {
+    const key = buildLogicalRequestKey(request);
+    const current = byLogicalKey.get(key);
+    if (current) {
+      current.push(request);
       return;
     }
-    const topicKey = request.topicKey ?? request.handoffId ?? request.taskId ?? request.id;
-    const groupKey = `${request.sessionKey}:${topicKey}`;
-    const current = latestAnsweredByTopic.get(groupKey);
-    if (!current || request.updatedAt > current.updatedAt) {
-      latestAnsweredByTopic.set(groupKey, request);
-    }
+    byLogicalKey.set(key, [request]);
+  });
+
+  const winnerByLogicalKey = new Map<string, RequestRecord>();
+  byLogicalKey.forEach((group) => {
+    const logicalKey = buildLogicalRequestKey(group[0]);
+    const winner = [...group].sort((left, right) => {
+      const byStatus = requestStatusRank(right.status) - requestStatusRank(left.status);
+      if (byStatus !== 0) {
+        return byStatus;
+      }
+      const bySync = requestSyncRank(right.syncSource) - requestSyncRank(left.syncSource);
+      if (bySync !== 0) {
+        return bySync;
+      }
+      return right.updatedAt - left.updatedAt;
+    })[0];
+    winnerByLogicalKey.set(logicalKey, winner);
   });
 
   let requestsSuperseded = 0;
   const nextRequests = requests.map((request) => {
-    if (request.status === "answered" || request.status === "superseded") {
+    const winner = winnerByLogicalKey.get(buildLogicalRequestKey(request));
+    if (!winner || winner.id === request.id) {
       return request;
     }
-    const topicKey = request.topicKey ?? request.handoffId ?? request.taskId ?? request.id;
-    const latestAnswered = latestAnsweredByTopic.get(`${request.sessionKey}:${topicKey}`);
-    if (!latestAnswered || latestAnswered.updatedAt <= request.updatedAt) {
-      return request;
+    if (request.status !== "superseded") {
+      requestsSuperseded += 1;
     }
-    requestsSuperseded += 1;
     return {
       ...request,
       status: "superseded" as const,
-      updatedAt: latestAnswered.updatedAt,
-      responseSummary: latestAnswered.responseSummary ?? request.responseSummary,
-      responseMessageTs: latestAnswered.responseMessageTs ?? request.responseMessageTs,
+      updatedAt: Math.max(request.updatedAt, winner.updatedAt),
+      responseSummary: winner.responseSummary ?? request.responseSummary,
+      responseDetails: winner.responseDetails ?? request.responseDetails,
+      responseMessageTs: winner.responseMessageTs ?? request.responseMessageTs,
     };
   });
 
@@ -81,6 +170,26 @@ function supersedeRequests(requests: RequestRecord[]) {
 
 function buildRequestTopic(request: Pick<RequestRecord, "topicKey" | "title" | "summary">): string | undefined {
   return request.topicKey ?? inferRequestTopicKey([request.title, request.summary]);
+}
+
+function requestMatchesHandoff(request: RequestRecord, handoff: HandoffRecord, handoffTopic: string | undefined) {
+  if (request.handoffId === handoff.id) {
+    return true;
+  }
+  const requestTopic = buildRequestTopic(request);
+  if (request.sessionKey === handoff.sessionKey && requestTopic && requestTopic === handoffTopic) {
+    return true;
+  }
+  if (request.sessionKey !== handoff.sessionKey) {
+    return false;
+  }
+  if (!request.fromAgentId || !handoff.toAgentIds.includes(request.fromAgentId)) {
+    return false;
+  }
+  if (!handoff.fromAgentId) {
+    return true;
+  }
+  return request.toAgentIds.length === 0 || request.toAgentIds.includes(handoff.fromAgentId);
 }
 
 function reconcileHandoffs(handoffs: HandoffRecord[], requests: RequestRecord[]) {
@@ -94,13 +203,7 @@ function reconcileHandoffs(handoffs: HandoffRecord[], requests: RequestRecord[])
         ...(handoff.artifactPaths ?? []),
       ]) ?? undefined;
     const candidates = requests
-      .filter((request) => {
-        if (request.handoffId === handoff.id) {
-          return true;
-        }
-        const requestTopic = buildRequestTopic(request);
-        return request.sessionKey === handoff.sessionKey && requestTopic && requestTopic === handoffTopic;
-      })
+      .filter((request) => requestMatchesHandoff(request, handoff, handoffTopic))
       .sort((left, right) => right.updatedAt - left.updatedAt);
     const latest = candidates[0];
     if (!latest) {

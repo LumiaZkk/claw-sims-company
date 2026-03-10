@@ -2,6 +2,10 @@ import { buildHandoffRecords } from "../handoffs/handoff-object";
 import { buildRequestRecords } from "../requests/request-object";
 import { reconcileCompanyCommunication } from "../requests/reconcile";
 import {
+  buildDerivedKnowledgeItems,
+  mergeCompanyKnowledgeItems,
+} from "../knowledge/shared-knowledge";
+import {
   createRequirementMessageSnapshots,
   REQUIREMENT_SNAPSHOT_MESSAGE_LIMIT,
   type RequirementArtifactCheck,
@@ -11,6 +15,7 @@ import type {
   ArtifactRecord,
   Company,
   DispatchRecord,
+  HandoffRecord,
 } from "./types";
 import {
   mergeDispatchRecords,
@@ -89,6 +94,74 @@ function mergeSessionSnapshots(params: {
     .slice(0, 12);
 }
 
+function matchesFallbackReferenceHandoff(params: {
+  historyHandoff: HandoffRecord;
+  referenceHandoff: HandoffRecord;
+  currentAgentId?: string | null;
+}) {
+  const { historyHandoff, referenceHandoff, currentAgentId } = params;
+  if (referenceHandoff.id === historyHandoff.id) {
+    return false;
+  }
+  if (referenceHandoff.sessionKey !== historyHandoff.sessionKey) {
+    return false;
+  }
+  if (currentAgentId && !referenceHandoff.toAgentIds.includes(currentAgentId)) {
+    return false;
+  }
+  if (
+    referenceHandoff.fromAgentId &&
+    historyHandoff.toAgentIds.length > 0 &&
+    !historyHandoff.toAgentIds.includes(referenceHandoff.fromAgentId)
+  ) {
+    return false;
+  }
+  return referenceHandoff.createdAt <= historyHandoff.updatedAt;
+}
+
+function normalizeFallbackHandoffs(params: {
+  handoffs: HandoffRecord[];
+  projectedHandoffs: HandoffRecord[];
+  existingHandoffs: HandoffRecord[];
+  currentAgentId?: string | null;
+}) {
+  const referenceHandoffs = uniqueHandoffList([
+    ...params.projectedHandoffs,
+    ...params.existingHandoffs.filter((handoff) => handoff.id.startsWith("handoff:dispatch:")),
+  ]);
+  const normalizedHandoffIds = new Set<string>();
+  const normalizedHandoffs = params.handoffs.map((handoff) => {
+    const candidate = referenceHandoffs
+      .filter((reference) =>
+        matchesFallbackReferenceHandoff({
+          historyHandoff: handoff,
+          referenceHandoff: reference,
+          currentAgentId: params.currentAgentId,
+        }),
+      )
+      .sort((left, right) => right.createdAt - left.createdAt)[0];
+    if (!candidate) {
+      return handoff;
+    }
+    normalizedHandoffIds.add(candidate.id);
+    return {
+      ...handoff,
+      id: candidate.id,
+      taskId: candidate.taskId ?? handoff.taskId,
+      title: candidate.title,
+      summary: candidate.summary,
+      sourceMessageTs: candidate.sourceMessageTs ?? handoff.sourceMessageTs,
+      createdAt: candidate.createdAt,
+      updatedAt: Math.max(handoff.updatedAt, candidate.updatedAt),
+    };
+  });
+
+  return {
+    handoffs: uniqueHandoffList(normalizedHandoffs),
+    normalizedHandoffIds,
+  };
+}
+
 async function listAllCompanyEvents(companyId: string) {
   const events: Awaited<ReturnType<typeof gateway.listCompanyEvents>>["events"] = [];
   let cursor: string | null | undefined;
@@ -134,7 +207,7 @@ export async function syncCompanyCommunicationState(input: {
   });
 
   const sessionsToCheck = companySessions
-    .filter((session) => !projected.coveredSessionKeys.has(session.key))
+    .filter((session) => !projected.responseCoveredSessionKeys.has(session.key))
     .filter((session) => {
       if (input.force) {
         return true;
@@ -160,12 +233,23 @@ export async function syncCompanyCommunicationState(input: {
         currentAgentId: sessionAgentId,
         relatedTask,
       }).map((handoff) => ({ ...handoff, syncSource: "history" as const }));
+      const normalizedFallback = normalizeFallbackHandoffs({
+        handoffs: discoveredHandoffs,
+        projectedHandoffs: projected.handoffs,
+        existingHandoffs: input.company.handoffs ?? [],
+        currentAgentId: sessionAgentId,
+      });
       const discoveredRequests = buildRequestRecords({
         sessionKey: session.key,
         messages: normalizedMessages,
-        handoffs: discoveredHandoffs,
+        handoffs: normalizedFallback.handoffs,
         relatedTask,
-      }).map((request) => ({ ...request, syncSource: "history" as const }));
+      }).map((request) => ({
+        ...request,
+        syncSource: normalizedFallback.normalizedHandoffIds.has(request.handoffId ?? "")
+          ? ("normalized" as const)
+          : ("history" as const),
+      }));
 
       const artifactChecks: RequirementArtifactCheck[] = extractArtifactPathsFromMessages(normalizedMessages)
         .slice(-2)
@@ -182,7 +266,10 @@ export async function syncCompanyCommunicationState(input: {
         });
 
       return {
-        handoffs: discoveredHandoffs,
+        agentId: sessionAgentId,
+        sessionKey: session.key,
+        historyMessages: normalizedMessages,
+        handoffs: normalizedFallback.handoffs,
         requests: discoveredRequests,
         snapshot:
           sessionAgentId && companyAgentIds.has(sessionAgentId)
@@ -223,12 +310,32 @@ export async function syncCompanyCommunicationState(input: {
     [...projected.requests, ...historyRequests],
     Date.now(),
   );
+  const nextCompany = {
+    ...input.company,
+    ...companyPatch,
+    handoffs: companyPatch.handoffs ?? mergedHandoffs,
+  } satisfies Company;
+  const derivedKnowledgeItems = buildDerivedKnowledgeItems({
+    company: nextCompany,
+    artifacts: input.activeArtifacts,
+    requests: companyPatch.requests ?? nextCompany.requests ?? [],
+    histories: discovered.map((item) => ({
+      agentId: item.agentId,
+      sessionKey: item.sessionKey,
+      messages: item.historyMessages,
+    })),
+  });
+  const knowledgeItems = mergeCompanyKnowledgeItems(
+    input.company.knowledgeItems ?? [],
+    derivedKnowledgeItems,
+  );
 
   return {
     summary,
     companyPatch: {
       ...companyPatch,
       handoffs: companyPatch.handoffs ?? mergedHandoffs,
+      knowledgeItems,
     } satisfies Partial<Company>,
     dispatches: mergeDispatchRecords(input.activeDispatches, projected.dispatches),
     sessionSnapshots: mergeSessionSnapshots({

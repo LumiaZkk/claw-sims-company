@@ -1,6 +1,6 @@
 import type { Company, CompanyWorkspaceApp } from "./types";
 
-export type WorkspaceResourceKind = "chapter" | "canon" | "review" | "tooling" | "other";
+export type WorkspaceResourceKind = "chapter" | "canon" | "review" | "knowledge" | "tooling" | "other";
 
 type WorkspaceAnchor = {
   id: string;
@@ -75,6 +75,16 @@ function buildNovelWorkspaceApps(company: Company): CompanyWorkspaceApp[] {
       ownerAgentId: ctoAgentId,
     },
     {
+      id: "knowledge-hub",
+      slug: "knowledge-hub",
+      title: "知识与验收",
+      description: "集中查看团队方案、技术方案、运营策略和 CEO 收口结果，并追踪来源产物。",
+      icon: "🧾",
+      kind: "knowledge-hub",
+      status: "ready",
+      ownerAgentId: ctoAgentId,
+    },
+    {
       id: "cto-workbench",
       slug: "cto-workbench",
       title: "CTO 工具工坊",
@@ -88,17 +98,20 @@ function buildNovelWorkspaceApps(company: Company): CompanyWorkspaceApp[] {
 }
 
 export function categorizeWorkspaceResource(name: string, path?: string | null): WorkspaceResourceKind {
-  const haystack = `${name} ${path ?? ""}`.toLowerCase();
-  if (/(第?\s*\d+\s*章|ch\d+|chapter|chapters\/|正文)/i.test(haystack)) {
-    return "chapter";
-  }
+  const haystack = `${name} ${path ?? ""}`.trim().toLowerCase();
   if (/(审校|review|终审|qa|校对|发布结果|publish)/i.test(haystack)) {
     return "review";
+  }
+  if (/(第?\s*\d+\s*章|ch\d+|chapter|chapters\/|正文)/i.test(haystack)) {
+    return "chapter";
   }
   if (/(设定|人物|时间线|世界观|伏笔|canon|timeline|foreshadow|shared-system)/i.test(haystack)) {
     return "canon";
   }
-  if (/\.(json|ya?ml|ts|js|py|sh)$/i.test(haystack) || /(tool|script|spec|方案)/i.test(haystack)) {
+  if (/(团队规划|技术方案|工具方案|运营策略|汇总方案|执行方案|治理件|策略|方案|总结|总览)/i.test(haystack)) {
+    return "knowledge";
+  }
+  if (/\.(json|ya?ml|ts|js|py|sh)$/i.test(haystack) || /(tool|script|spec)/i.test(haystack)) {
     return "tooling";
   }
   return "other";

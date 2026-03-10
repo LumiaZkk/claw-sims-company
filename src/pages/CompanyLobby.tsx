@@ -78,7 +78,7 @@ import {
   isStrategicRequirementTopic,
 } from "../features/execution/requirement-kind";
 import { isSyntheticWorkflowPromptText } from "../features/execution/message-truth";
-import { resolveCompanyKnowledge } from "../features/knowledge/shared-knowledge";
+import { formatKnowledgeKindLabel, resolveCompanyKnowledge } from "../features/knowledge/shared-knowledge";
 import {
   buildEmployeeOperationalInsights,
   buildRetrospectiveSnapshot,
@@ -1585,7 +1585,7 @@ export function CompanyLobby() {
                       <div>
                         <div className="text-sm font-semibold text-slate-900">{item.title}</div>
                         <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                          {item.kind}
+                          {formatKnowledgeKindLabel(item.kind)}
                         </div>
                       </div>
                       <Badge

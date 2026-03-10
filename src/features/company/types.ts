@@ -60,6 +60,7 @@ export interface QuickPrompt {
 export type CompanyWorkspaceAppKind =
   | "novel-reader"
   | "consistency-hub"
+  | "knowledge-hub"
   | "cto-workbench"
   | "custom";
 
@@ -403,9 +404,11 @@ export interface RequestRecord {
   resolution: RequestResolution;
   requiredItems?: string[];
   responseSummary?: string;
+  responseDetails?: string;
   sourceMessageTs?: number;
   responseMessageTs?: number;
-  syncSource?: "event" | "history";
+  syncSource?: "event" | "history" | "normalized";
+  transport?: "company_report" | "sessions_send" | "inferred";
   createdAt: number;
   updatedAt: number;
 }
@@ -415,7 +418,11 @@ export type SharedKnowledgeKind =
   | "responsibility"
   | "roadmap"
   | "workflow"
-  | "foreshadow";
+  | "foreshadow"
+  | "staffing"
+  | "technology"
+  | "operations"
+  | "summary";
 
 export type SharedKnowledgeStatus = "active" | "watch" | "draft";
 
@@ -425,8 +432,17 @@ export interface SharedKnowledgeItem {
   title: string;
   summary: string;
   details?: string;
+  content?: string;
   ownerAgentIds?: string[];
   source?: "seeded" | "derived" | "manual" | "imported";
+  sourceAgentId?: string;
+  sourceRequestId?: string;
+  sourceArtifactId?: string;
+  sourcePath?: string;
+  sourceUrl?: string;
+  transport?: "company_report" | "sessions_send" | "inferred";
+  acceptedAt?: number;
+  acceptanceMode?: "auto";
   status: SharedKnowledgeStatus;
   updatedAt: number;
 }

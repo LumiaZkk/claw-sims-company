@@ -1,5 +1,109 @@
-import type { Company, SharedKnowledgeItem, SharedKnowledgeKind } from "../company/types";
+import type {
+  ArtifactRecord,
+  Company,
+  RequestRecord,
+  SharedKnowledgeItem,
+  SharedKnowledgeKind,
+} from "../company/types";
 import { getActiveHandoffs } from "../handoffs/active-handoffs";
+import {
+  extractDeliverableHeading,
+  inferReportTransport,
+  isPlaceholderOrBridgeText,
+  looksLikeStructuredDeliverable,
+  summarizeReportText,
+} from "../requests/report-classifier";
+
+type KnowledgeScenario = "novel" | "content" | "service" | "research" | "assistant" | "generic";
+type KnowledgeRole = "hr" | "cto" | "coo" | "ceo";
+
+type KnowledgeMessageLike = {
+  role?: unknown;
+  text?: unknown;
+  content?: unknown;
+  timestamp?: unknown;
+};
+
+type DerivedKnowledgeInput = {
+  company: Company;
+  artifacts?: ArtifactRecord[];
+  requests?: RequestRecord[];
+  histories?: Array<{
+    agentId?: string | null;
+    sessionKey: string;
+    messages: KnowledgeMessageLike[];
+  }>;
+};
+
+type KnowledgeCandidate = {
+  role: KnowledgeRole;
+  title: string;
+  summary: string;
+  content?: string;
+  updatedAt: number;
+  sourceAgentId?: string;
+  sourceRequestId?: string;
+  sourceArtifactId?: string;
+  sourcePath?: string;
+  sourceUrl?: string;
+  transport?: SharedKnowledgeItem["transport"];
+  sourceType: "artifact" | "request" | "history";
+};
+
+const KNOWLEDGE_ROLE_CONFIG: Record<
+  KnowledgeRole,
+  {
+    kind: SharedKnowledgeKind;
+    defaultTitle: string;
+    keywords: RegExp;
+  }
+> = {
+  hr: {
+    kind: "staffing",
+    defaultTitle: "HR 团队架构方案",
+    keywords: /人员|岗位|组织架构|团队架构|招聘|人才|配置|职责/i,
+  },
+  cto: {
+    kind: "technology",
+    defaultTitle: "CTO 技术方案",
+    keywords: /技术方案|工具方案|系统|平台|自动化|数据监控|协作平台|ai/i,
+  },
+  coo: {
+    kind: "operations",
+    defaultTitle: "COO 运营策略",
+    keywords: /运营策略|平台规则|签约|推荐机制|发布节奏|内容策略|数据运营|收益/i,
+  },
+  ceo: {
+    kind: "summary",
+    defaultTitle: "CEO 最终汇总方案",
+    keywords: /汇总|最终方案|整合方案|总结|组建方案|执行方案/i,
+  },
+};
+
+export function formatKnowledgeKindLabel(kind: SharedKnowledgeKind): string {
+  switch (kind) {
+    case "canon":
+      return "设定";
+    case "responsibility":
+      return "职责";
+    case "roadmap":
+      return "里程碑";
+    case "workflow":
+      return "流程";
+    case "foreshadow":
+      return "风险";
+    case "staffing":
+      return "人员规划";
+    case "technology":
+      return "技术方案";
+    case "operations":
+      return "运营策略";
+    case "summary":
+      return "最终汇总";
+    default:
+      return kind;
+  }
+}
 
 function normalizeText(value: string | undefined | null): string {
   return String(value ?? "")
@@ -7,7 +111,15 @@ function normalizeText(value: string | undefined | null): string {
     .trim();
 }
 
-function inferKnowledgeScenario(company: Company): "novel" | "content" | "service" | "research" | "assistant" | "generic" {
+function normalizeLine(value: string): string {
+  return value
+    .trim()
+    .replace(/^#+\s*/, "")
+    .replace(/[🎉🎯📚✅]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function inferKnowledgeScenario(company: Company): KnowledgeScenario {
   const haystack = normalizeText(
     [company.name, company.description, company.template, ...company.employees.map((item) => item.role)].join(" "),
   );
@@ -154,7 +266,7 @@ function buildForeshadow(company: Company): { title: string; summary: string; de
   };
 }
 
-function buildItem(params: {
+function buildSeedItem(params: {
   company: Company;
   kind: SharedKnowledgeKind;
   title: string;
@@ -176,6 +288,252 @@ function buildItem(params: {
   };
 }
 
+function resolveEmployeeRole(company: Company, agentId: string | undefined | null): KnowledgeRole | null {
+  if (!agentId) {
+    return null;
+  }
+  const employee = company.employees.find((item) => item.agentId === agentId);
+  if (
+    employee?.metaRole === "hr" ||
+    employee?.metaRole === "cto" ||
+    employee?.metaRole === "coo" ||
+    employee?.metaRole === "ceo"
+  ) {
+    return employee.metaRole;
+  }
+  return null;
+}
+
+function extractHistoryText(message: KnowledgeMessageLike): string {
+  if (typeof message.text === "string" && message.text.trim().length > 0) {
+    return message.text.trim();
+  }
+  if (typeof message.content === "string" && message.content.trim().length > 0) {
+    return message.content.trim();
+  }
+  if (!Array.isArray(message.content)) {
+    return "";
+  }
+  return message.content
+    .map((block) => {
+      if (typeof block === "string") {
+        return block;
+      }
+      if (block && typeof block === "object") {
+        const record = block as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          return record.text;
+        }
+      }
+      return "";
+    })
+    .join("\n")
+    .trim();
+}
+
+function normalizeTimestamp(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function matchesKnowledgeRole(role: KnowledgeRole, text: string): boolean {
+  return KNOWLEDGE_ROLE_CONFIG[role].keywords.test(normalizeLine(text));
+}
+
+function buildKnowledgeTitle(role: KnowledgeRole, sourceTitle?: string, sourceText?: string): string {
+  const heading = sourceText ? extractDeliverableHeading(sourceText) : undefined;
+  const normalizedSourceTitle = sourceTitle ? normalizeLine(sourceTitle) : "";
+  if (heading) {
+    return normalizeLine(heading);
+  }
+  if (normalizedSourceTitle.length >= 4 && normalizedSourceTitle.length <= 48) {
+    return normalizedSourceTitle;
+  }
+  return KNOWLEDGE_ROLE_CONFIG[role].defaultTitle;
+}
+
+function buildKnowledgeSummary(text: string, fallback: string): string {
+  return text.trim() ? summarizeReportText(text) : fallback;
+}
+
+function buildArtifactCandidates(input: DerivedKnowledgeInput): KnowledgeCandidate[] {
+  return (input.artifacts ?? [])
+    .flatMap((artifact) => {
+      const role = resolveEmployeeRole(input.company, artifact.sourceActorId ?? artifact.ownerActorId);
+      if (!role) {
+        return [];
+      }
+      const text = `${artifact.title}\n${artifact.summary ?? ""}\n${artifact.content ?? ""}`.trim();
+      if (!text || isPlaceholderOrBridgeText(text) || !matchesKnowledgeRole(role, text)) {
+        return [];
+      }
+      if (!looksLikeStructuredDeliverable(text) && !(artifact.sourcePath || artifact.sourceUrl)) {
+        return [];
+      }
+      return [
+        {
+          role,
+          title: buildKnowledgeTitle(role, artifact.sourceName ?? artifact.title, artifact.content ?? text),
+          summary: buildKnowledgeSummary(artifact.summary ?? artifact.content ?? text, artifact.title),
+          content: artifact.content ?? undefined,
+          updatedAt: artifact.updatedAt,
+          sourceAgentId: artifact.sourceActorId ?? artifact.ownerActorId ?? undefined,
+          sourceArtifactId: artifact.id,
+          sourcePath: artifact.sourcePath,
+          sourceUrl: artifact.sourceUrl,
+          transport: inferReportTransport(text),
+          sourceType: "artifact",
+        } satisfies KnowledgeCandidate,
+      ];
+    })
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+function buildRequestCandidates(input: DerivedKnowledgeInput): KnowledgeCandidate[] {
+  return (input.requests ?? [])
+    .flatMap((request) => {
+      if (request.status !== "answered") {
+        return [];
+      }
+      const role = resolveEmployeeRole(input.company, request.fromAgentId);
+      if (!role) {
+        return [];
+      }
+      const responseDetails = request.responseDetails?.trim() ?? "";
+      const responseSummary = request.responseSummary?.trim() ?? "";
+      const requestSummary = request.summary?.trim() ?? "";
+      const text = responseDetails || responseSummary || requestSummary;
+      if (!text || isPlaceholderOrBridgeText(text) || !matchesKnowledgeRole(role, `${request.title}\n${text}`)) {
+        return [];
+      }
+      if (!looksLikeStructuredDeliverable(text)) {
+        return [];
+      }
+      return [
+        {
+          role,
+          title: buildKnowledgeTitle(role, request.title, text),
+          summary: buildKnowledgeSummary(responseSummary || text, request.title),
+          content: responseDetails || text,
+          updatedAt: request.updatedAt,
+          sourceAgentId: request.fromAgentId,
+          sourceRequestId: request.id,
+          transport: request.transport ?? inferReportTransport(text),
+          sourceType: "request",
+        } satisfies KnowledgeCandidate,
+      ];
+    })
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+function buildHistoryCandidates(input: DerivedKnowledgeInput): KnowledgeCandidate[] {
+  return (input.histories ?? [])
+    .flatMap((history) => {
+      const role = resolveEmployeeRole(input.company, history.agentId);
+      if (!role) {
+        return [];
+      }
+      const orderedMessages = history.messages
+        .map((message, index) => ({
+          role: message.role,
+          text: extractHistoryText(message),
+          timestamp: normalizeTimestamp(message.timestamp, index + 1),
+        }))
+        .filter((message) => message.role === "assistant" && message.text.length > 0)
+        .sort((left, right) => right.timestamp - left.timestamp);
+
+      const match = orderedMessages.find((message) => {
+        if (isPlaceholderOrBridgeText(message.text)) {
+          return false;
+        }
+        return matchesKnowledgeRole(role, message.text) && looksLikeStructuredDeliverable(message.text);
+      });
+      if (!match) {
+        return [];
+      }
+      return [
+        {
+          role,
+          title: buildKnowledgeTitle(role, undefined, match.text),
+          summary: buildKnowledgeSummary(match.text, KNOWLEDGE_ROLE_CONFIG[role].defaultTitle),
+          content: match.text,
+          updatedAt: match.timestamp,
+          sourceAgentId: history.agentId ?? undefined,
+          transport: inferReportTransport(match.text),
+          sourceType: "history",
+        } satisfies KnowledgeCandidate,
+      ];
+    })
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+function pickKnowledgeSource(candidates: KnowledgeCandidate[]): KnowledgeCandidate | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+  const score = (candidate: KnowledgeCandidate) =>
+    (candidate.content?.trim() ? 4 : 0) +
+    (candidate.sourceType === "artifact" ? 3 : candidate.sourceType === "request" ? 2 : 1) +
+    (candidate.sourcePath || candidate.sourceUrl ? 2 : 0);
+
+  return [...candidates].sort((left, right) => {
+    const byScore = score(right) - score(left);
+    if (byScore !== 0) {
+      return byScore;
+    }
+    return right.updatedAt - left.updatedAt;
+  })[0] ?? null;
+}
+
+function mergeKnowledgeCandidates(
+  role: KnowledgeRole,
+  company: Company,
+  candidates: KnowledgeCandidate[],
+): SharedKnowledgeItem | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+  const primary = pickKnowledgeSource(candidates);
+  if (!primary) {
+    return null;
+  }
+  const artifactSource =
+    candidates
+      .filter((candidate) => candidate.sourceType === "artifact" && (candidate.sourcePath || candidate.sourceUrl))
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  const requestSource =
+    candidates
+      .filter((candidate) => candidate.sourceType === "request" && candidate.content?.trim())
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  const latestUpdatedAt = Math.max(...candidates.map((candidate) => candidate.updatedAt));
+  const config = KNOWLEDGE_ROLE_CONFIG[role];
+  const content =
+    primary.content?.trim() ??
+    requestSource?.content?.trim() ??
+    artifactSource?.content?.trim() ??
+    undefined;
+
+  return {
+    id: `knowledge:${company.id}:derived:${role}`,
+    kind: config.kind,
+    title: buildKnowledgeTitle(role, primary.title, content ?? primary.summary),
+    summary: primary.summary,
+    details: primary.summary,
+    content,
+    ownerAgentIds: primary.sourceAgentId ? [primary.sourceAgentId] : [],
+    source: "derived",
+    sourceAgentId: primary.sourceAgentId ?? artifactSource?.sourceAgentId,
+    sourceRequestId: requestSource?.sourceRequestId ?? primary.sourceRequestId,
+    sourceArtifactId: artifactSource?.sourceArtifactId ?? primary.sourceArtifactId,
+    sourcePath: artifactSource?.sourcePath ?? primary.sourcePath,
+    sourceUrl: artifactSource?.sourceUrl ?? primary.sourceUrl,
+    transport: primary.transport ?? requestSource?.transport ?? artifactSource?.transport,
+    acceptedAt: latestUpdatedAt,
+    acceptanceMode: "auto",
+    status: "active",
+    updatedAt: latestUpdatedAt,
+  } satisfies SharedKnowledgeItem;
+}
+
 export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[] {
   const canon = buildScenarioCanon(company);
   const responsibilities = buildResponsibilities(company);
@@ -184,7 +542,7 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
   const foreshadow = buildForeshadow(company);
 
   return [
-    buildItem({
+    buildSeedItem({
       company,
       kind: "canon",
       title: canon.title,
@@ -194,7 +552,7 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
         .filter((employee) => employee.metaRole === "ceo" || employee.metaRole === "coo")
         .map((employee) => employee.agentId),
     }),
-    buildItem({
+    buildSeedItem({
       company,
       kind: "responsibility",
       title: "职责边界",
@@ -202,7 +560,7 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
       details: responsibilities.details,
       owners: responsibilities.owners,
     }),
-    buildItem({
+    buildSeedItem({
       company,
       kind: "roadmap",
       title: "当前里程碑",
@@ -213,7 +571,7 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
         .map((employee) => employee.agentId),
       status: "watch",
     }),
-    buildItem({
+    buildSeedItem({
       company,
       kind: "workflow",
       title: "默认交付流程",
@@ -224,7 +582,7 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
         .map((employee) => employee.agentId),
       status: "watch",
     }),
-    buildItem({
+    buildSeedItem({
       company,
       kind: "foreshadow",
       title: foreshadow.title,
@@ -238,8 +596,42 @@ export function buildSeedKnowledgeItems(company: Company): SharedKnowledgeItem[]
   ];
 }
 
+export function buildDerivedKnowledgeItems(input: DerivedKnowledgeInput): SharedKnowledgeItem[] {
+  const artifactCandidates = buildArtifactCandidates(input);
+  const requestCandidates = buildRequestCandidates(input);
+  const historyCandidates = buildHistoryCandidates(input);
+  const allCandidates = [...artifactCandidates, ...requestCandidates, ...historyCandidates];
+
+  return (["hr", "cto", "coo", "ceo"] as const)
+    .map((role) =>
+      mergeKnowledgeCandidates(
+        role,
+        input.company,
+        allCandidates.filter((candidate) => candidate.role === role),
+      ),
+    )
+    .filter((item): item is SharedKnowledgeItem => item !== null)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+export function mergeCompanyKnowledgeItems(
+  existingItems: SharedKnowledgeItem[],
+  derivedItems: SharedKnowledgeItem[],
+): SharedKnowledgeItem[] {
+  const merged = new Map<string, SharedKnowledgeItem>();
+  existingItems
+    .filter((item) => item.source !== "derived")
+    .forEach((item) => {
+      merged.set(item.id, item);
+    });
+  derivedItems.forEach((item) => {
+    merged.set(item.id, item);
+  });
+  return [...merged.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
 export function resolveCompanyKnowledge(company: Company): SharedKnowledgeItem[] {
-  const seededById = new Map(buildSeedKnowledgeItems(company).map((item) => [item.id, item]));
+  const seededById = new Map(buildSeedKnowledgeItems(company).map((item) => [item.id, item] as const));
   const storedItems = company.knowledgeItems ?? [];
 
   for (const item of storedItems) {

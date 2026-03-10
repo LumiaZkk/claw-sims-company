@@ -229,6 +229,12 @@ class AuthorityRepository {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (agent_id, name)
       );
+      CREATE TABLE IF NOT EXISTS conversation_states (
+        id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        payload_json TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS work_items (
         id TEXT PRIMARY KEY,
         company_id TEXT NOT NULL,
@@ -448,6 +454,7 @@ class AuthorityRepository {
       "runtimes",
       "conversations",
       "conversation_messages",
+      "conversation_states",
       "work_items",
       "requirement_aggregates",
       "requirement_evidence",

@@ -34,6 +34,7 @@ describe("workspace-apps", () => {
     expect(getCompanyWorkspaceApps(company).map((app) => app.id)).toEqual([
       "novel-reader",
       "consistency-hub",
+      "knowledge-hub",
       "cto-workbench",
     ]);
   });
@@ -42,6 +43,7 @@ describe("workspace-apps", () => {
     expect(categorizeWorkspaceResource("chapters/02-提前布局.md")).toBe("chapter");
     expect(categorizeWorkspaceResource("00-共享设定库.md")).toBe("canon");
     expect(categorizeWorkspaceResource("CH02-审校报告.md")).toBe("review");
+    expect(categorizeWorkspaceResource("番茄小说运营策略方案.md")).toBe("knowledge");
     expect(categorizeWorkspaceResource("consistency-check.ts")).toBe("tooling");
   });
 

@@ -141,9 +141,11 @@ export interface RequestRecord {
   resolution: RequestResolution;
   requiredItems?: string[];
   responseSummary?: string;
+  responseDetails?: string;
   sourceMessageTs?: number;
   responseMessageTs?: number;
-  syncSource?: "event" | "history";
+  syncSource?: "event" | "history" | "normalized";
+  transport?: "company_report" | "sessions_send" | "inferred";
   createdAt: number;
   updatedAt: number;
 }

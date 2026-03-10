@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useArtifactApp, useWorkspaceArtifactsQuery } from "../artifact";
+import { formatKnowledgeKindLabel, resolveCompanyKnowledge } from "../artifact/shared-knowledge";
 import {
   buildWorkspaceToolRequest,
   categorizeWorkspaceResource,
@@ -12,7 +13,7 @@ import { gateway, type AgentListEntry, useGatewayStore } from "../gateway";
 import { isStrategicRequirementTopic } from "../mission/requirement-kind";
 import { selectPrimaryRequirementProjection } from "../mission/requirement-aggregate";
 import { isReliableWorkItemRecord } from "../mission/work-item-signal";
-import type { ArtifactRecord } from "../../domain/artifact/types";
+import type { ArtifactRecord, SharedKnowledgeItem } from "../../domain/artifact/types";
 import type { Company } from "../../domain/org/types";
 import type { WorkItemRecord } from "../../domain/mission/types";
 
@@ -32,10 +33,13 @@ export type WorkspaceFileRow = {
   kind: WorkspaceResourceKind;
 };
 
+export type WorkspaceKnowledgeItemRow = SharedKnowledgeItem;
+
 export const RESOURCE_KIND_LABEL: Record<WorkspaceResourceKind, string> = {
   chapter: "正文",
   canon: "设定",
   review: "报告",
+  knowledge: "知识",
   tooling: "工具",
   other: "其他",
 };
@@ -83,10 +87,12 @@ function getWorkspaceFilePriority(kind: WorkspaceResourceKind): number {
       return 1;
     case "review":
       return 2;
-    case "tooling":
+    case "knowledge":
       return 3;
-    default:
+    case "tooling":
       return 4;
+    default:
+      return 5;
   }
 }
 
@@ -168,13 +174,69 @@ function buildArtifactMirrorRows(input: {
     });
 }
 
-export function pickDefaultWorkspaceFile(files: WorkspaceFileRow[]): WorkspaceFileRow | null {
-  return (
-    files.find((file) => file.kind === "chapter") ??
-    files.find((file) => file.kind === "canon") ??
-    files.find((file) => file.kind === "review") ??
-    null
-  );
+export function pickDefaultWorkspaceFile(
+  files: WorkspaceFileRow[],
+  preferredKinds: WorkspaceResourceKind[] = ["chapter", "canon", "review", "knowledge"],
+): WorkspaceFileRow | null {
+  for (const kind of preferredKinds) {
+    const match = files.find((file) => file.kind === kind);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function normalizeKnowledgeTitle(value: string): string {
+  return value
+    .trim()
+    .replace(/^#+\s*/, "")
+    .replace(/[🎉🎯📚✅]/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function buildKnowledgeMatcherTokens(item: SharedKnowledgeItem): string[] {
+  return [
+    item.title,
+    item.summary,
+    item.details,
+    item.sourcePath,
+    item.sourceUrl,
+    formatKnowledgeKindLabel(item.kind),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => normalizeKnowledgeTitle(value))
+    .filter((value) => value.length >= 4);
+}
+
+export function getKnowledgeSourceFilesForItem(
+  item: SharedKnowledgeItem | null,
+  files: WorkspaceFileRow[],
+): WorkspaceFileRow[] {
+  if (!item) {
+    return [];
+  }
+  const titleTokens = buildKnowledgeMatcherTokens(item);
+  return files
+    .filter((file) => file.kind === "knowledge")
+    .filter((file) => {
+      if (item.sourceArtifactId && file.artifactId === item.sourceArtifactId) {
+        return true;
+      }
+      if (item.sourcePath && file.path === item.sourcePath) {
+        return true;
+      }
+      if (item.sourceUrl && file.path === item.sourceUrl) {
+        return true;
+      }
+      if (item.sourceAgentId && file.agentId && item.sourceAgentId !== file.agentId) {
+        return false;
+      }
+      const haystack = normalizeKnowledgeTitle([file.name, file.path, file.previewText].filter(Boolean).join(" "));
+      return titleTokens.some((token) => haystack.includes(token));
+    })
+    .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0));
 }
 
 function buildWorkspaceMirrorArtifacts(input: {
@@ -435,6 +497,10 @@ export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
     () => workspaceFiles.filter((file) => !file.artifactId).length,
     [workspaceFiles],
   );
+  const knowledgeItems = useMemo(
+    () => (activeCompany ? resolveCompanyKnowledge(activeCompany) : []),
+    [activeCompany],
+  );
   const chapterFiles = useMemo(
     () => workspaceFiles.filter((file) => file.kind === "chapter"),
     [workspaceFiles],
@@ -445,6 +511,10 @@ export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
   );
   const reviewFiles = useMemo(
     () => workspaceFiles.filter((file) => file.kind === "review"),
+    [workspaceFiles],
+  );
+  const knowledgeFiles = useMemo(
+    () => workspaceFiles.filter((file) => file.kind === "knowledge"),
     [workspaceFiles],
   );
   const toolingFiles = useMemo(
@@ -481,6 +551,8 @@ export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
     loadingIndex,
     mirroredOnlyWorkspaceCount,
     providerManifest,
+    knowledgeFiles,
+    knowledgeItems,
     refreshIndex: () => setRefreshVersion((current) => current + 1),
     reviewFiles,
     shouldSyncProviderWorkspace,

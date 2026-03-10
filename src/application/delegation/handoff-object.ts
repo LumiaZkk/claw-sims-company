@@ -1,5 +1,6 @@
 import type { Company, EmployeeRef, HandoffRecord, HandoffStatus, TrackedTask } from "../../domain";
 import type { ChatMessage } from "../gateway";
+import { isPlaceholderOrBridgeText } from "./report-classifier";
 
 const URL_REGEX = /https?:\/\/[^\s<>"'`）)]+/g;
 const FILE_PATH_REGEX =
@@ -101,6 +102,9 @@ function resolveMissingItems(text: string): string[] {
     .slice(0, 5);
 }
 
+const HANDOFF_DIRECTIVE_PATTERN =
+  /交接|移交|转交|提交给|发给|发送给|同步给|抄送|回执汇报|任务追踪|请.{0,24}(?:处理|跟进|给出|制定|规划|完成|补齐|审校|review|发布|汇报|提交)/i;
+
 export function buildHandoffRecords(params: {
   sessionKey: string;
   messages: ChatMessage[];
@@ -110,9 +114,9 @@ export function buildHandoffRecords(params: {
 }): HandoffRecord[] {
   const { messages, company, sessionKey, currentAgentId, relatedTask } = params;
 
-  const records: Array<HandoffRecord | null> = messages.map((message, index) => {
+    const records: Array<HandoffRecord | null> = messages.map((message, index) => {
       const text = extractText(message);
-      if (!text) {
+      if (!text || isPlaceholderOrBridgeText(text)) {
         return null;
       }
 
@@ -120,9 +124,7 @@ export function buildHandoffRecords(params: {
         (agentId) => agentId !== currentAgentId,
       );
       const looksLikeHandoff =
-        toAgentIds.length > 0 &&
-        (/交接|移交|转交|请.*处理|请.*跟进|提交给|发给|交付|review|审校|发布|汇报/i.test(text) ||
-          text.includes("任务追踪"));
+        toAgentIds.length > 0 && (HANDOFF_DIRECTIVE_PATTERN.test(text) || text.includes("任务追踪"));
       if (!looksLikeHandoff) {
         return null;
       }

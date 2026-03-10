@@ -5,10 +5,12 @@ import {
   Compass,
   FileCode2,
   RefreshCcw,
+  ScrollText,
   Wrench,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { formatKnowledgeKindLabel } from "../../../application/artifact/shared-knowledge";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
@@ -19,6 +21,7 @@ import {
   type WorkspaceFileRow,
   type WorkspaceWorkbenchTool,
 } from "../../../application/workspace";
+import type { SharedKnowledgeItem } from "../../../domain/artifact/types";
 import { cn, formatTime } from "../../../lib/utils";
 
 type WorkspaceAppSummary = {
@@ -60,6 +63,10 @@ type WorkspacePageContentProps = {
   chapterFiles: WorkspaceFileRow[];
   canonFiles: WorkspaceFileRow[];
   reviewFiles: WorkspaceFileRow[];
+  knowledgeFiles: WorkspaceFileRow[];
+  knowledgeItems: SharedKnowledgeItem[];
+  selectedKnowledgeItem: SharedKnowledgeItem | null;
+  selectedKnowledgeSourceFiles: WorkspaceFileRow[];
   toolingFiles: WorkspaceFileRow[];
   supplementaryFiles: WorkspaceFileRow[];
   workspaceFiles: WorkspaceFileRow[];
@@ -69,6 +76,7 @@ type WorkspacePageContentProps = {
   onRefreshIndex: () => void;
   onSelectApp: (appId: string) => void;
   onSelectFile: (fileKey: string) => void;
+  onSelectKnowledge: (knowledgeId: string) => void;
   onOpenCtoWorkbench: (tool: WorkspaceWorkbenchTool) => void;
   onOpenFileChat: (agentId: string) => void;
   onOpenCtoChat: () => void;
@@ -234,6 +242,173 @@ function WorkspaceReaderSection({
   );
 }
 
+function WorkspaceKnowledgeHub({
+  knowledgeItems,
+  selectedKnowledgeItem,
+  selectedKnowledgeSourceFiles,
+  selectedFile,
+  selectedFileContent,
+  loadingFileKey,
+  onSelectKnowledge,
+  onSelectFile,
+  onOpenFileChat,
+}: Pick<
+  WorkspacePageContentProps,
+  | "knowledgeItems"
+  | "selectedKnowledgeItem"
+  | "selectedKnowledgeSourceFiles"
+  | "selectedFile"
+  | "selectedFileContent"
+  | "loadingFileKey"
+  | "onSelectKnowledge"
+  | "onSelectFile"
+  | "onOpenFileChat"
+>) {
+  const readingSelectedSource =
+    selectedFile && selectedKnowledgeSourceFiles.some((file) => file.key === selectedFile.key)
+      ? selectedFile
+      : null;
+  const knowledgeBody =
+    readingSelectedSource
+      ? selectedFileContent
+      : selectedKnowledgeItem?.content ?? selectedKnowledgeItem?.details ?? selectedKnowledgeItem?.summary ?? "";
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[300px_320px_minmax(0,1fr)]">
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">知识卡片</CardTitle>
+          <CardDescription>自动收口后的治理产物会先落成公司知识，再决定是否关联原始文件。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {knowledgeItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelectKnowledge(item.id)}
+              className={cn(
+                "w-full rounded-2xl border px-4 py-4 text-left transition-colors",
+                selectedKnowledgeItem?.id === item.id
+                  ? "border-indigo-200 bg-indigo-50 text-indigo-950"
+                  : "border-slate-200 bg-white hover:bg-slate-50",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{item.title}</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">{item.summary}</div>
+                </div>
+                <Badge variant="secondary">{formatKnowledgeKindLabel(item.kind)}</Badge>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                <Badge variant="outline">自动入库</Badge>
+                <Badge variant="outline">{item.sourceAgentId ?? "公司知识"}</Badge>
+                {item.transport ? <Badge variant="outline">{item.transport}</Badge> : null}
+              </div>
+            </button>
+          ))}
+          {knowledgeItems.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              当前还没有自动沉淀出的公司知识。闭环同步后，HR / CTO / COO / CEO 的正式方案会出现在这里。
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base">来源产物</CardTitle>
+          <CardDescription>优先显示与当前知识卡片绑定的原始方案文件；没有文件时直接回看自动收口正文。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {selectedKnowledgeSourceFiles.map((file) => (
+            <button
+              key={file.key}
+              type="button"
+              onClick={() => onSelectFile(file.key)}
+              className={cn(
+                "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                selectedFile?.key === file.key
+                  ? "border-indigo-200 bg-indigo-50 text-indigo-950"
+                  : "border-slate-200 bg-white hover:bg-slate-50",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{file.name}</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    {file.agentLabel} · {file.role}
+                  </div>
+                </div>
+                <ArrowUpRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+              </div>
+            </button>
+          ))}
+          {selectedKnowledgeSourceFiles.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              当前知识卡片没有可直接打开的源文件，正文将直接显示自动收口内容。
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardHeader className="border-b border-slate-100">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-base">
+                {readingSelectedSource?.name ?? selectedKnowledgeItem?.title ?? "选择一条知识卡片"}
+              </CardTitle>
+              <CardDescription className="mt-1">
+                {readingSelectedSource
+                  ? `${readingSelectedSource.agentLabel} · ${readingSelectedSource.role} · 原始来源`
+                  : "这里直接显示自动验收后的知识正文，并保留来源链路。"}
+              </CardDescription>
+            </div>
+            {selectedKnowledgeItem ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <Badge variant="secondary">{formatKnowledgeKindLabel(selectedKnowledgeItem.kind)}</Badge>
+                <Badge variant="outline">自动入库</Badge>
+                {selectedKnowledgeItem.transport ? (
+                  <Badge variant="outline">{selectedKnowledgeItem.transport}</Badge>
+                ) : null}
+                <span>{formatTime(selectedKnowledgeItem.updatedAt)}</span>
+                {selectedKnowledgeItem.sourceAgentId ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onOpenFileChat(selectedKnowledgeItem.sourceAgentId!)}
+                  >
+                    打开 {selectedKnowledgeItem.sourceAgentId} 会话
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="min-h-[560px] p-0">
+          {readingSelectedSource && loadingFileKey === readingSelectedSource.key ? (
+            <div className="flex h-full min-h-[560px] items-center justify-center text-sm text-slate-500">
+              正在读取 {readingSelectedSource.name}...
+            </div>
+          ) : knowledgeBody.trim().length > 0 ? (
+            <div className="h-full overflow-auto px-6 py-6">
+              <article className="prose prose-slate max-w-none prose-headings:font-semibold prose-p:text-slate-700">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{knowledgeBody}</ReactMarkdown>
+              </article>
+            </div>
+          ) : (
+            <div className="flex h-full min-h-[560px] items-center justify-center px-6 text-center text-sm text-slate-500">
+              选择一条知识卡片后，这里会展示正文、来源和自动验收结果。
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function WorkspaceConsistencyHub({
   anchors,
   chapterFiles,
@@ -372,6 +547,7 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
     shouldSyncProviderWorkspace,
     chapterFiles,
     canonFiles,
+    knowledgeItems,
     ctoLabel,
     loadingIndex,
     onRefreshIndex,
@@ -500,6 +676,7 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                     <CardTitle className="flex items-center gap-2 text-lg">
                       {selectedApp.kind === "novel-reader" ? <BookOpen className="h-5 w-5" /> : null}
                       {selectedApp.kind === "consistency-hub" ? <Compass className="h-5 w-5" /> : null}
+                      {selectedApp.kind === "knowledge-hub" ? <ScrollText className="h-5 w-5" /> : null}
                       {selectedApp.kind === "cto-workbench" ? <FileCode2 className="h-5 w-5" /> : null}
                       {selectedApp.title}
                     </CardTitle>
@@ -508,6 +685,9 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="outline">产品产物优先</Badge>
                     <Badge variant="secondary">{artifactBackedWorkspaceCount} 份产物</Badge>
+                    {selectedApp.kind === "knowledge-hub" ? (
+                      <Badge variant="outline">{knowledgeItems.length} 条知识</Badge>
+                    ) : null}
                     {shouldSyncProviderWorkspace && mirroredOnlyWorkspaceCount > 0 ? (
                       <Badge variant="outline">镜像补充 {mirroredOnlyWorkspaceCount}</Badge>
                     ) : null}
@@ -531,6 +711,7 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                 onOpenNovelReader={() => props.onSelectApp("novel-reader")}
               />
             ) : null}
+            {selectedApp.kind === "knowledge-hub" ? <WorkspaceKnowledgeHub {...props} /> : null}
             {selectedApp.kind === "cto-workbench" ? (
               <WorkspaceWorkbench onOpenCtoWorkbench={props.onOpenCtoWorkbench} />
             ) : null}

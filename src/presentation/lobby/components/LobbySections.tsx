@@ -12,6 +12,8 @@ import {
   Zap,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { formatKnowledgeKindLabel } from "../../../application/artifact/shared-knowledge";
+import type { SharedKnowledgeKind } from "../../../domain/artifact/types";
 import { ActionFormDialog } from "../../../components/ui/action-form-dialog";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -29,7 +31,7 @@ type TopAction = {
 type KnowledgeItem = {
   id: string;
   title: string;
-  kind: string;
+  kind: SharedKnowledgeKind;
   summary: string;
   details?: string;
   status: "active" | "watch" | "draft";
@@ -637,7 +639,7 @@ export function LobbyKnowledgeSection(props: {
                     <div>
                       <div className="text-sm font-semibold text-slate-900">{item.title}</div>
                       <div className="mt-1 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                        {item.kind}
+                        {formatKnowledgeKindLabel(item.kind)}
                       </div>
                     </div>
                     <Badge

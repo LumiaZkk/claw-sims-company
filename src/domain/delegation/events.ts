@@ -269,11 +269,13 @@ export function projectDelegationFromEvents(input: {
   requests: RequestRecord[];
   handoffs: HandoffRecord[];
   coveredSessionKeys: Set<string>;
+  responseCoveredSessionKeys: Set<string>;
 } {
   const dispatchById = new Map<string, DispatchRecord>();
   const requestById = new Map<string, RequestRecord>();
   const handoffById = new Map<string, HandoffRecord>();
   const coveredSessionKeys = new Set<string>();
+  const responseCoveredSessionKeys = new Set<string>();
   const existingDispatchById = new Map(
     (input.existingDispatches ?? []).map((dispatch) => [dispatch.id, dispatch] as const),
   );
@@ -285,6 +287,14 @@ export function projectDelegationFromEvents(input: {
     }
     if (event.sessionKey?.trim()) {
       coveredSessionKeys.add(event.sessionKey.trim());
+    }
+    if (
+      (event.kind === "report_acknowledged" ||
+        event.kind === "report_answered" ||
+        event.kind === "report_blocked") &&
+      event.fromActorId?.trim()
+    ) {
+      responseCoveredSessionKeys.add(`agent:${event.fromActorId.trim()}:main`);
     }
     if (!event.dispatchId) {
       return;
@@ -374,9 +384,11 @@ export function projectDelegationFromEvents(input: {
         resolution: resolveRequestResolution(event),
         requiredItems: readPayloadStringArray(event.payload, "requiredItems"),
         responseSummary: readPayloadString(event.payload, "summary"),
+        responseDetails: readPayloadString(event.payload, "summary"),
         sourceMessageTs: dispatch?.createdAt ?? event.createdAt,
         responseMessageTs: event.createdAt,
         syncSource: "event",
+        transport: "company_report",
         createdAt: currentRequest?.createdAt ?? dispatch?.createdAt ?? event.createdAt,
         updatedAt: Math.max(currentRequest?.updatedAt ?? 0, event.createdAt),
       };
@@ -403,6 +415,7 @@ export function projectDelegationFromEvents(input: {
     requests: [...requestById.values()].sort((left, right) => right.updatedAt - left.updatedAt),
     handoffs: uniqueHandoffList([...handoffById.values()]),
     coveredSessionKeys,
+    responseCoveredSessionKeys,
   };
 }
 

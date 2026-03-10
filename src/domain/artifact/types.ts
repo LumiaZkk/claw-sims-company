@@ -23,7 +23,11 @@ export type SharedKnowledgeKind =
   | "responsibility"
   | "roadmap"
   | "workflow"
-  | "foreshadow";
+  | "foreshadow"
+  | "staffing"
+  | "technology"
+  | "operations"
+  | "summary";
 
 export type SharedKnowledgeStatus = "active" | "watch" | "draft";
 
@@ -33,8 +37,17 @@ export interface SharedKnowledgeItem {
   title: string;
   summary: string;
   details?: string;
+  content?: string;
   ownerAgentIds?: string[];
   source?: "seeded" | "derived" | "manual" | "imported";
+  sourceAgentId?: string;
+  sourceRequestId?: string;
+  sourceArtifactId?: string;
+  sourcePath?: string;
+  sourceUrl?: string;
+  transport?: "company_report" | "sessions_send" | "inferred";
+  acceptedAt?: number;
+  acceptanceMode?: "auto";
   status: SharedKnowledgeStatus;
   updatedAt: number;
 }

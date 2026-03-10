@@ -65,6 +65,7 @@ export interface QuickPrompt {
 export type CompanyWorkspaceAppKind =
   | "novel-reader"
   | "consistency-hub"
+  | "knowledge-hub"
   | "cto-workbench"
   | "custom";
 

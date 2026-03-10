@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   buildWorkspaceWorkbenchRequest,
+  getKnowledgeSourceFilesForItem,
   pickDefaultWorkspaceFile,
   useWorkspaceFileContent,
   useWorkspaceViewModel,
@@ -25,6 +26,8 @@ export function WorkspacePresentationPage() {
     canonFiles,
     chapterFiles,
     ctoEmployee,
+    knowledgeFiles,
+    knowledgeItems,
     loadingIndex,
     mirroredOnlyWorkspaceCount,
     refreshIndex,
@@ -36,13 +39,27 @@ export function WorkspacePresentationPage() {
     workspaceFiles,
   } = useWorkspaceViewModel({ isPageVisible });
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
+  const [selectedKnowledgeId, setSelectedKnowledgeId] = useState<string | null>(null);
   const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null);
 
   const selectedApp =
     (selectedAppId ? workspaceApps.find((app) => app.id === selectedAppId) : null) ?? workspaceApps[0];
+  const selectedKnowledgeItem =
+    (selectedKnowledgeId ? knowledgeItems.find((item) => item.id === selectedKnowledgeId) : null) ??
+    knowledgeItems[0] ??
+    null;
+  const selectedKnowledgeSourceFiles = getKnowledgeSourceFilesForItem(
+    selectedKnowledgeItem,
+    knowledgeFiles,
+  );
   const selectedFile =
     (selectedFileKey ? workspaceFiles.find((file) => file.key === selectedFileKey) : null) ??
-    pickDefaultWorkspaceFile(workspaceFiles);
+    pickDefaultWorkspaceFile(
+      selectedApp?.kind === "knowledge-hub" ? selectedKnowledgeSourceFiles : workspaceFiles,
+      selectedApp?.kind === "knowledge-hub"
+        ? ["knowledge", "chapter", "canon", "review"]
+        : ["chapter", "canon", "review", "knowledge"],
+    );
   const { loadingFileKey, selectedFileContent } = useWorkspaceFileContent({
     activeCompanyId: activeCompany?.id ?? null,
     activeWorkspaceWorkItemId: activeWorkspaceWorkItem?.id ?? null,
@@ -114,6 +131,10 @@ export function WorkspacePresentationPage() {
       chapterFiles={chapterFiles}
       canonFiles={canonFiles}
       reviewFiles={reviewFiles}
+      knowledgeFiles={knowledgeFiles}
+      knowledgeItems={knowledgeItems}
+      selectedKnowledgeItem={selectedKnowledgeItem}
+      selectedKnowledgeSourceFiles={selectedKnowledgeSourceFiles}
       toolingFiles={toolingFiles}
       supplementaryFiles={supplementaryFiles}
       workspaceFiles={workspaceFiles}
@@ -121,8 +142,15 @@ export function WorkspacePresentationPage() {
       ctoLabel={ctoEmployee ? agentLabelById.get(ctoEmployee.agentId) ?? ctoEmployee.agentId : null}
       loadingIndex={loadingIndex}
       onRefreshIndex={refreshIndex}
-      onSelectApp={setSelectedAppId}
+      onSelectApp={(nextAppId) => {
+        setSelectedAppId(nextAppId);
+        setSelectedFileKey(null);
+      }}
       onSelectFile={setSelectedFileKey}
+      onSelectKnowledge={(knowledgeId) => {
+        setSelectedKnowledgeId(knowledgeId);
+        setSelectedFileKey(null);
+      }}
       onOpenCtoWorkbench={openCtoWorkbench}
       onOpenRequirementCenter={
         activeWorkspaceWorkItem

@@ -1,0 +1,82 @@
+import type { SharedKnowledgeItem } from "../artifact/types";
+import type { HandoffRecord, RequestRecord } from "../delegation/types";
+import type { TrackedTask } from "../mission/types";
+import type { RetrospectiveRecord } from "../governance/types";
+
+export interface CyberCompanyConfig {
+  version: 1;
+  companies: Company[];
+  activeCompanyId: string;
+  preferences: { theme: string; locale: string };
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  template: string;
+  orgSettings?: CompanyOrgSettings;
+  departments?: Department[];
+  employees: EmployeeRef[];
+  quickPrompts: QuickPrompt[];
+  workspaceApps?: CompanyWorkspaceApp[];
+  tasks?: TrackedTask[];
+  handoffs?: HandoffRecord[];
+  requests?: RequestRecord[];
+  knowledgeItems?: SharedKnowledgeItem[];
+  retrospectives?: RetrospectiveRecord[];
+  createdAt: number;
+}
+
+export interface CompanyOrgSettings {
+  autoCalibrate?: boolean;
+  lastAutoCalibratedAt?: number;
+  lastAutoCalibrationActions?: string[];
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  leadAgentId: string;
+  color?: string;
+  order?: number;
+  archived?: boolean;
+}
+
+export interface EmployeeRef {
+  agentId: string;
+  nickname: string;
+  role: string;
+  isMeta: boolean;
+  metaRole?: "ceo" | "hr" | "cto" | "coo";
+  reportsTo?: string;
+  departmentId?: string;
+  avatarJobId?: string;
+}
+
+export interface QuickPrompt {
+  label: string;
+  icon: string;
+  prompt: string;
+  targetAgentId: string;
+}
+
+export type CompanyWorkspaceAppKind =
+  | "novel-reader"
+  | "consistency-hub"
+  | "cto-workbench"
+  | "custom";
+
+export type CompanyWorkspaceAppStatus = "ready" | "recommended" | "building";
+
+export interface CompanyWorkspaceApp {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  icon: string;
+  kind: CompanyWorkspaceAppKind;
+  status: CompanyWorkspaceAppStatus;
+  ownerAgentId?: string;
+}

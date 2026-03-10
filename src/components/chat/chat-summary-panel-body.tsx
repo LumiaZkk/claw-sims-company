@@ -1,8 +1,8 @@
 import { ChevronDown, RefreshCcw, Users } from "lucide-react";
 import { Button } from "../ui/button";
 import { ExecutionStateBadge } from "../execution-state-badge";
-import { resolveExecutionState } from "../../features/execution/state";
-import type { RequirementTeamMember, RequirementTeamView } from "../../features/execution/requirement-team";
+import { resolveExecutionState } from "../../application/mission/execution-state";
+import type { RequirementTeamMember, RequirementTeamView } from "../../application/assignment/requirement-team";
 import { cn, formatTime } from "../../lib/utils";
 
 type SummaryPanelView = "owner" | "team" | "debug";
@@ -142,7 +142,7 @@ type CeoSurface = {
   manualTakeovers: number;
 };
 
-type ChatSummaryPanelBodyProps = {
+export type ChatSummaryPanelBodyProps = {
   summaryPanelView: SummaryPanelView;
   activeConversationMission: ActiveMission | null;
   latestStageGate: StageGate | null;

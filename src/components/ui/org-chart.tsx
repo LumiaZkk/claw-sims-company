@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { MoreVertical, MessageSquare, Play, Settings, UserCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import type { Department } from '../../features/company/types';
+import type { Department } from "../../domain/org/types";
 import { Avatar, AvatarFallback } from './avatar';
 import { Badge } from './badge';
 import { Button } from './button';

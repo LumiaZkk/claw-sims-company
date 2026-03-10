@@ -1,6 +1,6 @@
 import { Building2, Users, Network, ArrowRight } from "lucide-react";
 import React, { useMemo } from "react";
-import { useCompanyStore } from "../../features/company/store";
+import { useOrgQuery } from "../../application/org";
 import type { HrDepartmentPlanV1 } from "../../lib/hr-dept-plan";
 import { Badge } from "../ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card";
@@ -10,7 +10,7 @@ interface HrDepartmentPlanCardProps {
 }
 
 export const HrDepartmentPlanCard: React.FC<HrDepartmentPlanCardProps> = ({ plan }) => {
-  const { activeCompany } = useCompanyStore();
+  const { activeCompany } = useOrgQuery();
 
   const empMap = useMemo(() => {
     const map = new Map<string, { name: string; role: string; meta: string }>();

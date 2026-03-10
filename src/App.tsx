@@ -15,12 +15,11 @@ import { ApprovalModalHost } from "./components/system/approval-modal-host";
 import { GatewayNotificationHost } from "./components/system/gateway-notification-host";
 import { GatewayStatusBanner } from "./components/system/gateway-status-banner";
 import { ToastHost } from "./components/ui/toast-host";
-import { peekCachedCompanyConfig } from "./features/company/persistence";
-import { useCompanyStore } from "./features/company/store";
-import type { Company } from "./features/company/types";
-import { getCompanyWorkspaceApps } from "./features/company/workspace-apps";
-import { useGatewayStore } from "./features/gateway/store";
-import { OrgAutopilot } from "./features/org/org-autopilot";
+import { useCompanyShellCommands, useCompanyShellQuery } from "./application/company/shell";
+import { useGatewayStore } from "./application/gateway";
+import { peekCachedCompanyConfig } from "./infrastructure/company/persistence/persistence";
+import { getCompanyWorkspaceApps } from "./application/company/workspace-apps";
+import { OrgAutopilotHost } from "./presentation/org/OrgAutopilotHost";
 import { toast } from "./features/ui/toast-store";
 import { AutomationPage } from "./pages/AutomationPage";
 import { BoardPage } from "./pages/BoardPage";
@@ -81,6 +80,8 @@ function ThemeSwitcher() {
 
 export default function App() {
   const location = useLocation();
+  const { loadConfig } = useCompanyShellCommands();
+  const { loading, activeCompany, bootstrapPhase } = useCompanyShellQuery();
   const {
     connected,
     phase,
@@ -88,7 +89,6 @@ export default function App() {
     autoConnectInitialized,
     bootstrapAutoConnect,
   } = useGatewayStore();
-  const { loading, loadConfig, activeCompany, bootstrapPhase } = useCompanyStore();
   const cachedBootstrapConfig = peekCachedCompanyConfig();
   const cachedBootstrapCompany =
     cachedBootstrapConfig
@@ -102,12 +102,7 @@ export default function App() {
       : null;
   const previousConnectedRef = useRef(connected);
   const hasSeenStableConnectionRef = useRef(connected);
-  const lastStableCompanyRef = useRef<Company | null>(activeCompany ?? cachedBootstrapCompany);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
-  useEffect(() => {
-    setIsMobileMenuOpen(false);
-  }, [location.pathname]);
 
   useEffect(() => {
     bootstrapAutoConnect();
@@ -118,12 +113,6 @@ export default function App() {
       void loadConfig();
     }
   }, [connected, loadConfig]);
-
-  useEffect(() => {
-    if (activeCompany) {
-      lastStableCompanyRef.current = activeCompany;
-    }
-  }, [activeCompany]);
 
   useEffect(() => {
     // Avoid racing cached-config fallback against the initial auto-reconnect boot.
@@ -201,7 +190,7 @@ export default function App() {
         phase === "connecting" ||
         phase === "reconnecting"
       );
-    const currentCompany = activeCompany ?? lastStableCompanyRef.current;
+    const currentCompany = activeCompany ?? cachedBootstrapCompany;
     const shouldUseSilentRestoreShell = companyBootstrapPending && Boolean(currentCompany);
 
     if (companyBootstrapPending && !shouldUseSilentRestoreShell) {
@@ -254,6 +243,7 @@ export default function App() {
             />
           )}
           <aside
+            onClickCapture={() => setIsMobileMenuOpen(false)}
             className={`fixed inset-y-0 left-0 z-50 w-64 border-r flex flex-col transition-transform duration-300 md:relative md:translate-x-0 bg-background md:bg-transparent ${sidebarBg} ${
               isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
             }`}
@@ -396,7 +386,7 @@ export default function App() {
   return (
     <>
       <GatewayStatusBanner />
-      <OrgAutopilot />
+      <OrgAutopilotHost />
       {content}
       <ToastHost />
       <ApprovalModalHost />

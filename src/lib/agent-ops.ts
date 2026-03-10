@@ -1,8 +1,13 @@
-import { gateway, sendTurnToCompanyActor, resolveCompanyActorConversation } from "../features/backend";
-import type { Company } from "../features/company/types";
-import { useCompanyStore } from "../features/company/store";
+import {
+  gateway,
+  sendTurnToCompanyActor,
+  resolveCompanyActorConversation,
+  useGatewayStore,
+} from "../application/gateway";
+import type { Company } from "../domain/org/types";
+import { readCompanyRuntimeCommands } from "../infrastructure/company/runtime/commands";
+import { readCompanyRuntimeState } from "../infrastructure/company/runtime/selectors";
 import { CONFIG_PROMPTS, resolveMetaAgentId, type MetaTarget } from "./chat-as-config";
-import { useGatewayStore } from "../features/gateway/store";
 import { toast } from "../features/ui/toast-store";
 import { resolveLocalServiceOrigin } from "./utils";
 
@@ -166,7 +171,7 @@ export const AgentOps = {
       
       // 更新公司对象以关联化身
       if (avatarJobId) {
-        const store = useCompanyStore.getState();
+        const store = { ...readCompanyRuntimeState(), ...readCompanyRuntimeCommands() };
         const activeCompany = store.activeCompany;
         if (activeCompany) {
           const updatedEmployees = activeCompany.employees.map(emp => {
@@ -235,7 +240,7 @@ export const AgentOps = {
     const targetAgentId = normalizeNonEmptyString(agentId);
     const taskText = normalizeNonEmptyString(task);
     try {
-      const activeCompany = useCompanyStore.getState().activeCompany;
+      const activeCompany = readCompanyRuntimeState().activeCompany;
       const result = await sendPromptToActor({
         company: activeCompany,
         actorId: targetAgentId,
@@ -327,12 +332,12 @@ export const AgentOps = {
   },
 
   async updateRole(agentId: string, role: string, description: string) {
-    const activeCompany = useCompanyStore.getState().activeCompany;
+    const activeCompany = readCompanyRuntimeState().activeCompany;
     if (!activeCompany) {
       throw new Error("无活跃公司，无法执行调岗操作。");
     }
     const id = normalizeNonEmptyString(agentId);
-    const targetInfo = activeCompany.employees.find((e: any) => e.agentId === id);
+    const targetInfo = activeCompany.employees.find((employee) => employee.agentId === id);
     if (!targetInfo) {
       throw new Error("在当前公司结构中未查找到该员工名片。");
     }
@@ -354,12 +359,12 @@ export const AgentOps = {
   },
 
   async fireAgent(agentId: string) {
-    const activeCompany = useCompanyStore.getState().activeCompany;
+    const activeCompany = readCompanyRuntimeState().activeCompany;
     if (!activeCompany) {
       throw new Error("无活跃公司，无法执行开除操作。");
     }
     const id = normalizeNonEmptyString(agentId);
-    const targetInfo = activeCompany.employees.find((e: any) => e.agentId === id);
+    const targetInfo = activeCompany.employees.find((employee) => employee.agentId === id);
     if (!targetInfo) {
       throw new Error("在当前公司结构中未查找到该员工名片。");
     }
@@ -461,7 +466,7 @@ export const AgentOps = {
 
   async resolveSessionForAgent(agentId: string) {
     const targetAgentId = normalizeNonEmptyString(agentId);
-    const activeCompany = useCompanyStore.getState().activeCompany;
+    const activeCompany = readCompanyRuntimeState().activeCompany;
     const resolved = await resolveActorConversation(activeCompany, targetAgentId);
     return { ok: true as const, key: resolved.conversationRef.conversationId };
   },

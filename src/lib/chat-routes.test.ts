@@ -6,7 +6,7 @@ import {
   findCompaniesByAgentId,
   resolveConversationPresentation,
 } from "./chat-routes";
-import type { CyberCompanyConfig } from "../features/company/types";
+import type { CyberCompanyConfig } from "../domain/org/types";
 
 function createConfig(): CyberCompanyConfig {
   return {

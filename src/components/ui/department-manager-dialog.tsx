@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
 import { Archive, CheckCircle2, Pencil, Plus, X } from "lucide-react";
-import type { Department, EmployeeRef } from "../../features/company/types";
+import type { Department, EmployeeRef } from "../../domain/org/types";
 import { Button } from "./button";
 import { Badge } from "./badge";
 

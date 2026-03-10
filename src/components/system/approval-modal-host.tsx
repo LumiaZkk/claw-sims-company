@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { gateway } from "../../features/backend";
+import { gateway, useGatewayStore } from "../../application/gateway";
 import {
   parseExecApprovalRequested,
   parseExecApprovalResolved,
@@ -11,7 +11,6 @@ import {
   setupApprovalAudioUnlock,
 } from "../../features/approvals/sound";
 import { AgentOps, type ApprovalDecision } from "../../lib/agent-ops";
-import { useGatewayStore } from "../../features/gateway/store";
 import { toast } from "../../features/ui/toast-store";
 
 type GatewayEventEnvelope = {

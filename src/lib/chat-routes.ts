@@ -1,9 +1,9 @@
-import type { GatewaySessionRow } from "../features/backend";
-import type { Company, CyberCompanyConfig } from "../features/company/types";
+import type { GatewaySessionRow } from "../application/gateway";
+import type { Company, CyberCompanyConfig } from "../domain/org/types";
 import type {
   RequirementRoomRecord,
   RoomConversationBindingRecord,
-} from "../features/company/types";
+} from "../domain/delegation/types";
 import { resolveSessionActorId, resolveSessionTitle } from "./sessions";
 
 type EmployeeIdentity = {

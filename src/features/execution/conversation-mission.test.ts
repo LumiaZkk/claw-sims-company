@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildConversationMissionRecord,
   pickConversationMissionRecord,
-} from "./conversation-mission";
+} from "../../application/mission/conversation-mission";
 
 describe("conversation mission helpers", () => {
   it("uses topic key as the stable mission id when available", () => {

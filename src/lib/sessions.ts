@@ -1,4 +1,4 @@
-import type { GatewaySessionRow } from "../features/backend";
+import type { GatewaySessionRow } from "../application/gateway";
 
 export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
   if (!sessionKey.startsWith("agent:")) {
@@ -12,45 +12,6 @@ export function parseAgentIdFromSessionKey(sessionKey: string): string | null {
 
   const agentId = parts[1]?.trim();
   return agentId && agentId.length > 0 ? agentId : null;
-}
-
-export type LegacyConversationRoute = {
-  isLegacyConversationRoute: boolean;
-  legacyRouteSessionKey: string | null;
-  legacyRouteActorId: string | null;
-  isLegacyGroupRoute: boolean;
-  legacyGroupTopic: string | null;
-};
-
-export function resolveLegacyConversationRoute(
-  routeValue: string | null | undefined,
-): LegacyConversationRoute {
-  const normalized = routeValue?.trim() ?? "";
-  if (!normalized || !normalized.includes(":")) {
-    return {
-      isLegacyConversationRoute: false,
-      legacyRouteSessionKey: null,
-      legacyRouteActorId: null,
-      isLegacyGroupRoute: false,
-      legacyGroupTopic: null,
-    };
-  }
-
-  const legacyRouteSessionKey = normalized.split("?")[0] ?? null;
-  const isLegacyGroupRoute = Boolean(
-    legacyRouteSessionKey && legacyRouteSessionKey.includes(":group:"),
-  );
-
-  return {
-    isLegacyConversationRoute: true,
-    legacyRouteSessionKey,
-    legacyRouteActorId: isLegacyGroupRoute ? null : parseAgentIdFromSessionKey(legacyRouteSessionKey ?? ""),
-    isLegacyGroupRoute,
-    legacyGroupTopic:
-      isLegacyGroupRoute && legacyRouteSessionKey
-        ? legacyRouteSessionKey.split(":group:")[1] ?? null
-        : null,
-  };
 }
 
 export function resolveSessionActorId(

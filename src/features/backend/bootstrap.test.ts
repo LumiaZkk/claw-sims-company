@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildProviderManifest } from "./bootstrap";
-import { createBackendCapabilities } from "./types";
+import { buildProviderManifest } from "../../infrastructure/gateway/runtime/bootstrap";
+import { createBackendCapabilities } from "../../infrastructure/gateway/runtime/types";
 
 describe("backend bootstrap", () => {
   it("keeps a rich backend in native mode", () => {

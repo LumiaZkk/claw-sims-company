@@ -1,0 +1,148 @@
+import { useMemo } from "react";
+import { buildLobbyOperationsSurface } from "../governance/lobby-operations-surface";
+import { buildCeoControlSurface } from "../governance/ceo-control-surface";
+import { useCompanyLobbyViewModel } from "../governance/lobby-view-model";
+import type { AgentListEntry, CronJob, GatewaySessionRow } from "../gateway";
+import { useGatewayStore } from "../gateway";
+import { buildCurrentRequirementState } from "../mission/current-requirement-state";
+import { buildLobbyRequirementSurface } from "../mission/lobby-requirement-surface";
+import type { ResolvedExecutionState } from "../mission/execution-state";
+import { useLobbyRuntimeState } from "./runtime-state";
+import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
+import type { ArtifactRecord } from "../../domain/artifact/types";
+import type { DispatchRecord, RequirementRoomRecord } from "../../domain/delegation/types";
+import type {
+  Company,
+  ConversationStateRecord,
+  WorkItemRecord,
+} from "../../domain";
+
+type CompanyGatewaySession = GatewaySessionRow & { agentId: string };
+
+type BuildLobbyPageSurfaceInput = {
+  activeCompany: Company;
+  activeConversationStates: ConversationStateRecord[];
+  activeWorkItems: WorkItemRecord[];
+  companySessions: CompanyGatewaySession[];
+  companySessionSnapshots: RequirementSessionSnapshot[];
+  currentTime: number;
+  agentsCache: AgentListEntry[];
+  cronCache: CronJob[];
+  sessionsByAgent: Map<string, CompanyGatewaySession[]>;
+  sessionExecutions: Map<string, ResolvedExecutionState>;
+  activeArtifacts: ArtifactRecord[];
+  activeDispatches: DispatchRecord[];
+  activeRoomRecords: RequirementRoomRecord[];
+};
+
+export function buildLobbyPageSurface(input: BuildLobbyPageSurfaceInput) {
+  const ceoEmployee =
+    input.activeCompany.employees.find((employee) => employee.metaRole === "ceo") ?? null;
+
+  const requirementState = buildCurrentRequirementState({
+    company: input.activeCompany,
+    activeConversationStates: input.activeConversationStates,
+    activeWorkItems: input.activeWorkItems,
+    companySessions: input.companySessions,
+    companySessionSnapshots: input.companySessionSnapshots,
+    currentTime: input.currentTime,
+    ceoAgentId: ceoEmployee?.agentId ?? null,
+  });
+
+  const requirementSurface = buildLobbyRequirementSurface({
+    company: input.activeCompany,
+    requirementState,
+    currentTime: input.currentTime,
+  });
+
+  const ceoSurface = buildCeoControlSurface(
+    requirementSurface.currentWorkItem
+      ? input.activeCompany
+      : { ...input.activeCompany, tasks: [], handoffs: [], requests: [] },
+  );
+
+  const operationsSurface = buildLobbyOperationsSurface({
+    activeCompany: input.activeCompany,
+    agentsCache: input.agentsCache,
+    cronCache: input.cronCache,
+    currentTime: input.currentTime,
+    companySessions: input.companySessions,
+    sessionsByAgent: input.sessionsByAgent,
+    sessionExecutions: input.sessionExecutions,
+    requirementScope: requirementSurface.requirementScope,
+    companyTasks: requirementSurface.companyTasks,
+    companyHandoffs: requirementSurface.companyHandoffs,
+    companyRequests: requirementSurface.companyRequests,
+    slaAlerts: requirementSurface.slaAlerts,
+    ceoSurface,
+    primaryWorkItem: requirementSurface.currentWorkItem,
+    isStrategicRequirement: requirementSurface.isStrategicRequirement,
+  });
+
+  const primaryWorkItem = requirementSurface.currentWorkItem;
+  const showOperationalQueues = !primaryWorkItem;
+  const scopedSessions = [...operationsSurface.activeSessions, ...operationsSurface.completedSessions];
+
+  return {
+    ceoEmployee,
+    ceoSurface,
+    operationsSurface,
+    primaryWorkItem,
+    requirementState,
+    requirementSurface,
+    scopedSessions,
+    showOperationalQueues,
+  };
+}
+
+export function useLobbyPageViewModel(input: { isPageVisible: boolean }) {
+  const lobbyViewModel = useCompanyLobbyViewModel();
+  const connected = useGatewayStore((state) => state.connected);
+  const runtimeState = useLobbyRuntimeState({
+    activeCompany: lobbyViewModel.activeCompany,
+    connected,
+    isPageVisible: input.isPageVisible,
+  });
+
+  const pageSurface = useMemo(() => {
+    if (!lobbyViewModel.activeCompany) {
+      return null;
+    }
+    return buildLobbyPageSurface({
+      activeCompany: lobbyViewModel.activeCompany,
+      activeConversationStates: lobbyViewModel.activeConversationStates,
+      activeArtifacts: lobbyViewModel.activeArtifacts,
+      activeDispatches: lobbyViewModel.activeDispatches,
+      activeRoomRecords: lobbyViewModel.activeRoomRecords,
+      activeWorkItems: lobbyViewModel.activeWorkItems,
+      agentsCache: runtimeState.agentsCache,
+      companySessions: runtimeState.companySessions,
+      companySessionSnapshots: runtimeState.companySessionSnapshots,
+      cronCache: runtimeState.cronCache,
+      currentTime: runtimeState.currentTime,
+      sessionExecutions: runtimeState.sessionExecutions,
+      sessionsByAgent: runtimeState.sessionsByAgent,
+    });
+  }, [
+    lobbyViewModel.activeArtifacts,
+    lobbyViewModel.activeCompany,
+    lobbyViewModel.activeConversationStates,
+    lobbyViewModel.activeDispatches,
+    lobbyViewModel.activeRoomRecords,
+    lobbyViewModel.activeWorkItems,
+    runtimeState.agentsCache,
+    runtimeState.companySessionSnapshots,
+    runtimeState.companySessions,
+    runtimeState.cronCache,
+    runtimeState.currentTime,
+    runtimeState.sessionExecutions,
+    runtimeState.sessionsByAgent,
+  ]);
+
+  return {
+    ...lobbyViewModel,
+    connected,
+    ...runtimeState,
+    pageSurface,
+  };
+}

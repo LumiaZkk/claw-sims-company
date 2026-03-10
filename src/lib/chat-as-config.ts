@@ -1,4 +1,4 @@
-import type { Company } from "../features/company/types";
+import type { Company } from "../domain/org/types";
 
 export type MetaTarget = "ceo" | "hr" | "cto" | "coo";
 

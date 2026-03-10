@@ -24,6 +24,12 @@ const STEPS = [
   { id: "traits", title: "行为签名", icon: Fingerprint, desc: "刻画其性格表现特征" },
 ];
 
+const MODEL_TIERS: Array<{ id: HireConfig["modelTier"]; name: string; desc: string }> = [
+  { id: "standard", name: "标准核心 (Standard)", desc: "响应迅速，单价适中。适合普通写手与数据处理。" },
+  { id: "reasoning", name: "推理核心 (Reasoning)", desc: "内建深度 CoT，针对复杂逻辑推演与开发架构。" },
+  { id: "ultra", name: "超算核心 (Ultra)", desc: "汇聚全部智能权重的全知核心。成本极高。" },
+];
+
 export function ImmersiveHireDialog({ open, onOpenChange, onSubmit, busy }: ImmersiveHireDialogProps) {
   const [step, setStep] = useState(0);
   const [role, setRole] = useState("");
@@ -189,18 +195,14 @@ export function ImmersiveHireDialog({ open, onOpenChange, onSubmit, busy }: Imme
                       </div>
                       
                       <div className="grid gap-4 pt-4">
-                        {[
-                          { id: "standard", name: "标准核心 (Standard)", desc: "响应迅速，单价适中。适合普通写手与数据处理。" },
-                          { id: "reasoning", name: "推理核心 (Reasoning)", desc: "内建深度 CoT，针对复杂逻辑推演与开发架构。" },
-                          { id: "ultra", name: "超算核心 (Ultra)", desc: "汇聚全部智能权重的全知核心。成本极高。" }
-                        ].map(tier => (
+                        {MODEL_TIERS.map((tier) => (
                           <label key={tier.id} className={`flex cursor-pointer items-start gap-4 rounded-xl border p-4 transition-all ${modelTier === tier.id ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-800 bg-zinc-900 hover:border-zinc-700'}`}>
                             <input
                               type="radio"
                               name="modelTier"
                               value={tier.id}
                               checked={modelTier === tier.id}
-                              onChange={() => setModelTier(tier.id as any)}
+                              onChange={() => setModelTier(tier.id)}
                               className="mt-1 h-4 w-4 text-indigo-500 bg-zinc-900 border-zinc-700 focus:ring-indigo-500"
                             />
                             <div>

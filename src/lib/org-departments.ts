@@ -1,4 +1,4 @@
-import type { Company, Department, EmployeeRef } from "../features/company/types";
+import type { Company, Department, EmployeeRef } from "../domain/org/types";
 
 export function resolveCeoAgentId(employees: EmployeeRef[]): string | null {
   const ceo = employees.find((employee) => employee.metaRole === "ceo");

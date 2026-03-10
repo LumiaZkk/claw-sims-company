@@ -1,0 +1,26 @@
+import { useCompanyRuntimeCommands } from "../../infrastructure/company/runtime/commands";
+import { readCompanyRuntimeState, selectCompanyShellState } from "../../infrastructure/company/runtime/selectors";
+import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
+import type { CompanyBootstrapPhase } from "../../infrastructure/company/runtime/types";
+import type { Company, CyberCompanyConfig } from "../../domain/org/types";
+
+export type CompanyShellState = {
+  config: CyberCompanyConfig | null;
+  activeCompany: Company | null;
+  loading: boolean;
+  error: string | null;
+  bootstrapPhase: CompanyBootstrapPhase;
+};
+
+export function useCompanyShellQuery() {
+  return useCompanyRuntimeStore(selectCompanyShellState);
+}
+
+export function useCompanyShellCommands() {
+  const { loadConfig, saveConfig, switchCompany, deleteCompany } = useCompanyRuntimeCommands();
+  return { loadConfig, saveConfig, switchCompany, deleteCompany };
+}
+
+export function readCompanyShellState(): CompanyShellState {
+  return selectCompanyShellState(readCompanyRuntimeState());
+}

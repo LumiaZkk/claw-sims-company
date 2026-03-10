@@ -1,0 +1,66 @@
+import { useCompanyRuntimeStore } from "./store";
+
+export function useCompanyRuntimeCommands() {
+  return useCompanyRuntimeStore((state) => ({
+    loadConfig: state.loadConfig,
+    saveConfig: state.saveConfig,
+    switchCompany: state.switchCompany,
+    deleteCompany: state.deleteCompany,
+    updateCompany: state.updateCompany,
+    upsertTask: state.upsertTask,
+    upsertHandoff: state.upsertHandoff,
+    upsertRequest: state.upsertRequest,
+    upsertKnowledgeItem: state.upsertKnowledgeItem,
+    upsertRoomRecord: state.upsertRoomRecord,
+    appendRoomMessages: state.appendRoomMessages,
+    upsertRoomConversationBindings: state.upsertRoomConversationBindings,
+    deleteRoomRecord: state.deleteRoomRecord,
+    upsertMissionRecord: state.upsertMissionRecord,
+    deleteMissionRecord: state.deleteMissionRecord,
+    setConversationCurrentWorkKey: state.setConversationCurrentWorkKey,
+    clearConversationState: state.clearConversationState,
+    upsertWorkItemRecord: state.upsertWorkItemRecord,
+    deleteWorkItemRecord: state.deleteWorkItemRecord,
+    upsertRoundRecord: state.upsertRoundRecord,
+    deleteRoundRecord: state.deleteRoundRecord,
+    upsertArtifactRecord: state.upsertArtifactRecord,
+    syncArtifactMirrorRecords: state.syncArtifactMirrorRecords,
+    deleteArtifactRecord: state.deleteArtifactRecord,
+    upsertDispatchRecord: state.upsertDispatchRecord,
+    replaceDispatchRecords: state.replaceDispatchRecords,
+    deleteDispatchRecord: state.deleteDispatchRecord,
+  }));
+}
+
+export function readCompanyRuntimeCommands() {
+  const state = useCompanyRuntimeStore.getState();
+  return {
+    loadConfig: state.loadConfig,
+    saveConfig: state.saveConfig,
+    switchCompany: state.switchCompany,
+    deleteCompany: state.deleteCompany,
+    updateCompany: state.updateCompany,
+    upsertTask: state.upsertTask,
+    upsertHandoff: state.upsertHandoff,
+    upsertRequest: state.upsertRequest,
+    upsertKnowledgeItem: state.upsertKnowledgeItem,
+    upsertRoomRecord: state.upsertRoomRecord,
+    appendRoomMessages: state.appendRoomMessages,
+    upsertRoomConversationBindings: state.upsertRoomConversationBindings,
+    deleteRoomRecord: state.deleteRoomRecord,
+    upsertMissionRecord: state.upsertMissionRecord,
+    deleteMissionRecord: state.deleteMissionRecord,
+    setConversationCurrentWorkKey: state.setConversationCurrentWorkKey,
+    clearConversationState: state.clearConversationState,
+    upsertWorkItemRecord: state.upsertWorkItemRecord,
+    deleteWorkItemRecord: state.deleteWorkItemRecord,
+    upsertRoundRecord: state.upsertRoundRecord,
+    deleteRoundRecord: state.deleteRoundRecord,
+    upsertArtifactRecord: state.upsertArtifactRecord,
+    syncArtifactMirrorRecords: state.syncArtifactMirrorRecords,
+    deleteArtifactRecord: state.deleteArtifactRecord,
+    upsertDispatchRecord: state.upsertDispatchRecord,
+    replaceDispatchRecords: state.replaceDispatchRecords,
+    deleteDispatchRecord: state.deleteDispatchRecord,
+  };
+}

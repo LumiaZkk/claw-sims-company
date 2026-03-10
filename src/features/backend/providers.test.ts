@@ -5,8 +5,8 @@ import {
   type BackendCore,
   type ConversationKind,
   type ConversationRef,
-} from "./types";
-import { createBackendProviderFromCore } from "./providers";
+} from "../../infrastructure/gateway/runtime/types";
+import { createBackendProviderFromCore } from "../../infrastructure/gateway/runtime/providers";
 
 function createMinimalCore(providerId = "minimal"): BackendCore {
   return {

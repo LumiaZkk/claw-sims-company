@@ -5,10 +5,10 @@ import type {
   DispatchRecord,
   RequirementRoomRecord,
   WorkItemRecord,
-} from "../company/types";
-import type { RequirementExecutionOverview } from "./requirement-overview";
-import { applyWorkItemDisplayFields, buildRoomRecordIdFromWorkItem } from "./work-item";
-import { reconcileWorkItemRecord } from "./work-item-reconciler";
+} from "../../domain";
+import type { RequirementExecutionOverview } from "../../application/mission/requirement-overview";
+import { applyWorkItemDisplayFields, buildRoomRecordIdFromWorkItem } from "../../application/mission/work-item";
+import { reconcileWorkItemRecord } from "../../application/mission/work-item-reconciler";
 
 function createMission(overrides: Partial<ConversationMissionRecord> = {}): ConversationMissionRecord {
   return {

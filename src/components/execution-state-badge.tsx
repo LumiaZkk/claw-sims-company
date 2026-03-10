@@ -1,6 +1,6 @@
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
-import type { ResolvedExecutionState } from "../features/execution/state";
+import type { ResolvedExecutionState } from "../application/mission/execution-state";
 
 type ExecutionStateBadgeProps = {
   status: ResolvedExecutionState;

@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
-import { gateway } from '../../features/backend';
-import { useGatewayStore } from '../../features/gateway/store';
+import { gateway, useGatewayStore } from '../../application/gateway';
 import { toast } from '../../features/ui/toast-store';
 
 export function GatewayNotificationHost() {
@@ -9,16 +8,17 @@ export function GatewayNotificationHost() {
   useEffect(() => {
     if (!connected) return;
 
-    const unsubscribe = gateway.subscribe('*', (evt: any) => {
+    const unsubscribe = gateway.subscribe('*', (evt: unknown) => {
       if (!evt || typeof evt !== 'object') return;
       
-      const eventName = evt.event;
-      const eventPayload = evt.payload;
+      const eventRecord = evt as { event?: unknown; payload?: unknown };
+      const eventName = eventRecord.event;
+      const eventPayload = eventRecord.payload;
       
       if (!eventName || typeof eventName !== 'string') return;
       if (!eventPayload || typeof eventPayload !== 'object') return;
 
-      const payloadObj = eventPayload as Record<string, any>;
+      const payloadObj = eventPayload as Record<string, unknown>;
       
       let shouldAlert = false;
       let title = '系统提示';
@@ -31,7 +31,7 @@ export function GatewayNotificationHost() {
       ) {
         shouldAlert = true;
         title = `系统警告 (${eventName})`;
-        msg = payloadObj.errorMessage || payloadObj.error || payloadObj.message || '操作被拒绝或执行失败';
+        msg = String(payloadObj.errorMessage || payloadObj.error || payloadObj.message || '操作被拒绝或执行失败');
       } else if (
         payloadObj.state === 'error' || 
         payloadObj.status === 'error' || 
@@ -39,7 +39,7 @@ export function GatewayNotificationHost() {
       ) {
         shouldAlert = true;
         title = `运行异常 (${eventName})`;
-        msg = payloadObj.errorMessage || payloadObj.error || payloadObj.message || '后台任务执行发生异常';
+        msg = String(payloadObj.errorMessage || payloadObj.error || payloadObj.message || '后台任务执行发生异常');
       }
 
       if (shouldAlert && msg) {

@@ -23,4 +23,109 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/features/company/types',
+            '**/features/company/legacy-types',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/pages/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/application/**',
+            '**/domain/**',
+            '**/infrastructure/**',
+            '**/components/**',
+            '**/lib/**',
+            '**/features/backend/**',
+            '**/features/gateway/**',
+            '**/features/execution/**',
+            '**/features/org/**',
+            '**/features/company/**',
+            '**/features/company/types',
+            '**/features/company/legacy-types',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/presentation/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/infrastructure/**',
+            '**/features/backend/**',
+            '**/features/gateway/**',
+            '**/features/execution/**',
+            '**/features/org/**',
+            '**/features/company/**',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/application/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/pages/**',
+            '**/presentation/**',
+            '**/features/backend/**',
+            '**/features/gateway/**',
+            '**/features/execution/**',
+            '**/features/org/**',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/domain/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            '**/application/**',
+            '**/infrastructure/**',
+            '**/pages/**',
+            '**/components/**',
+            '**/features/company/types',
+            '**/features/company/legacy-types',
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: [
+      'src/pages/AutomationPage.tsx',
+      'src/pages/WorkspacePage.tsx',
+      'src/presentation/board/Page.tsx',
+      'src/presentation/ceo/Page.tsx',
+      'src/presentation/chat/Page.tsx',
+      'src/presentation/lobby/Page.tsx',
+    ],
+    rules: {
+      'react-hooks/exhaustive-deps': 'off',
+    },
+  },
 ])

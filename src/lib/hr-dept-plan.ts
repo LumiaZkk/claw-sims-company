@@ -1,4 +1,4 @@
-import type { Company, Department, EmployeeRef } from "../features/company/types";
+import type { Company, Department, EmployeeRef } from "../domain/org/types";
 
 export type HrDepartmentPlanV1 = {
   kind: "cyber-company.departmentPlan.v1";

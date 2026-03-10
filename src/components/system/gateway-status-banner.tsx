@@ -1,4 +1,4 @@
-import { useGatewayStore } from "../../features/gateway/store";
+import { useGatewayStore } from "../../application/gateway";
 
 export function GatewayStatusBanner() {
   const { connected, hasEverConnected, phase, error, url, token, connect, providerId, providers } =

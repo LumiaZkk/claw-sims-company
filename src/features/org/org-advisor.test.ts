@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Company, Department, EmployeeRef } from "../company/types";
+import type { Company, Department, EmployeeRef } from "../../domain/org/types";
 import {
   applyOrgRecommendation,
   autoCalibrateOrganization,
   buildOrgAdvisorSnapshot,
   isOrgAutopilotEnabled,
-} from "./org-advisor";
+} from "../../application/assignment/org-fit";
 
 function buildCompany(params: {
   employees: EmployeeRef[];

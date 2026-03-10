@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { Company } from "../company/types";
-import { buildStableStrategicTopicKey } from "./work-item";
+import type { Company } from "../../domain";
+import { buildStableStrategicTopicKey } from "../../application/mission/work-item";
+import { buildRequirementExecutionOverview } from "../../application/mission/requirement-overview";
 import {
-  buildRequirementExecutionOverview,
   createRequirementMessageSnapshots,
   type RequirementSessionSnapshot,
-} from "./requirement-overview";
+} from "../../domain/mission/requirement-snapshot";
 
 describe("requirement overview snapshots", () => {
   it("keeps only the latest bounded snapshot messages", () => {

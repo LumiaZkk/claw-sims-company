@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAutoDispatchPlan, shouldDelegateToNextBaton } from "./auto-dispatch";
-import type { Company, DispatchRecord } from "../company/types";
+import { buildAutoDispatchPlan, shouldDelegateToNextBaton } from "../../application/assignment/dispatch-planning";
+import type { Company, DispatchRecord } from "../../domain";
 
 function createCompany(): Company {
   return {

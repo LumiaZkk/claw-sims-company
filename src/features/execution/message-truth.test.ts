@@ -5,7 +5,7 @@ import {
   isSyntheticWorkflowPromptText,
   isTruthMirrorNoiseText,
   stripTruthInternalMonologue,
-} from "./message-truth";
+} from "../../application/mission/message-truth";
 
 describe("isTruthMirrorNoiseText", () => {
   it("filters task-tracker mirror hints from visible message flows", () => {

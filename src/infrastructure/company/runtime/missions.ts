@@ -5,6 +5,10 @@ import { buildWorkItemRecordFromMission } from "../../../application/mission/wor
 import { isArtifactRequirementTopic } from "../../../application/mission/requirement-kind";
 import { reconcileWorkItemRecord } from "../../../application/mission/work-item-reconciler";
 import { persistActiveWorkItems } from "./work-items";
+import {
+  persistActiveRequirementAggregates,
+  reconcileActiveRequirementState,
+} from "./requirements";
 
 export function persistActiveMissions(
   companyId: string | null | undefined,
@@ -67,7 +71,17 @@ export function buildMissionActions(
 ): Pick<CompanyRuntimeState, "upsertMissionRecord" | "deleteMissionRecord"> {
   return {
     upsertMissionRecord: (mission) => {
-      const { activeCompany, activeMissionRecords, activeRoomBindings, activeRoomRecords, activeWorkItems } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeMissionRecords,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomBindings,
+        activeRoomRecords,
+        activeWorkItems,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany) {
         return;
       }
@@ -138,9 +152,24 @@ export function buildMissionActions(
       }
 
       const sortedWorkItems = sanitizeWorkItemRecords(nextWorkItems);
-      set({ activeMissionRecords: sorted, activeWorkItems: sortedWorkItems });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems: sortedWorkItems,
+        activeRoomRecords,
+        activeRequirementEvidence,
+      });
+      set({
+        activeMissionRecords: sorted,
+        activeWorkItems: sortedWorkItems,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveMissions(activeCompany.id, sorted);
       persistActiveWorkItems(activeCompany.id, sortedWorkItems);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
 
     deleteMissionRecord: (missionId) => {

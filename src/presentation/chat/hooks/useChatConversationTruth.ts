@@ -11,6 +11,7 @@ import {
   shouldResetConversationCurrentWork,
   type ConversationMissionView,
 } from "../../../application/mission/conversation-truth";
+import { areWorkItemRecordsEquivalent } from "../../../application/mission/work-item-equivalence";
 import type { ArtifactRecord } from "../../../domain/artifact/types";
 import type { DispatchRecord, RequirementRoomRecord } from "../../../domain/delegation/types";
 import type {
@@ -189,6 +190,40 @@ export function useChatConversationTruth(input: {
       shouldPersistConversationTruth,
     ],
   );
+  const shouldPersistReconciledConversationWorkItem = useMemo(
+    () =>
+      Boolean(
+        reconciledConversationWorkItem &&
+          (!persistedWorkItem ||
+            !areWorkItemRecordsEquivalent(reconciledConversationWorkItem, persistedWorkItem)),
+      ),
+    [persistedWorkItem, reconciledConversationWorkItem],
+  );
+  const shouldPersistPreviewConversationWorkItemRecord = useMemo(
+    () =>
+      Boolean(
+        previewConversationWorkItem &&
+          (!persistedWorkItem ||
+            !areWorkItemRecordsEquivalent(previewConversationWorkItem, persistedWorkItem)),
+      ),
+    [persistedWorkItem, previewConversationWorkItem],
+  );
+  const shouldPersistPreviewWorkItem = useMemo(
+    () =>
+      shouldPersistPreviewConversationWorkItem({
+        shouldPersistConversationTruth,
+        activeCompany,
+        previewConversationWorkItem,
+        shouldPreferPreviewConversationWorkItem,
+      }) && shouldPersistPreviewConversationWorkItemRecord,
+    [
+      activeCompany,
+      previewConversationWorkItem,
+      shouldPersistConversationTruth,
+      shouldPersistPreviewConversationWorkItemRecord,
+      shouldPreferPreviewConversationWorkItem,
+    ],
+  );
   const nextRequirementTeamRoomRecord = useMemo(
     () =>
       buildRequirementTeamRoomTruth({
@@ -216,21 +251,6 @@ export function useChatConversationTruth(input: {
       persistedWorkItem,
       requirementTeam,
       targetAgentId,
-    ],
-  );
-  const shouldPersistPreviewWorkItem = useMemo(
-    () =>
-      shouldPersistPreviewConversationWorkItem({
-        shouldPersistConversationTruth,
-        activeCompany,
-        previewConversationWorkItem,
-        shouldPreferPreviewConversationWorkItem,
-      }),
-    [
-      activeCompany,
-      previewConversationWorkItem,
-      shouldPersistConversationTruth,
-      shouldPreferPreviewConversationWorkItem,
     ],
   );
   const shouldClearConversationCurrentWork = useMemo(
@@ -277,7 +297,11 @@ export function useChatConversationTruth(input: {
   ]);
 
   useEffect(() => {
-    if (!shouldPersistConversationTruth || !reconciledConversationWorkItem) {
+    if (
+      !shouldPersistConversationTruth ||
+      !reconciledConversationWorkItem ||
+      !shouldPersistReconciledConversationWorkItem
+    ) {
       return;
     }
     upsertWorkItemRecord(reconciledConversationWorkItem);
@@ -293,12 +317,16 @@ export function useChatConversationTruth(input: {
     conversationStateKey,
     reconciledConversationWorkItem,
     setConversationCurrentWorkKey,
+    shouldPersistReconciledConversationWorkItem,
     upsertWorkItemRecord,
     shouldPersistConversationTruth,
   ]);
 
   useEffect(() => {
-    if (!shouldPersistPreviewWorkItem || !previewConversationWorkItem) {
+    if (
+      !shouldPersistPreviewWorkItem ||
+      !previewConversationWorkItem
+    ) {
       return;
     }
     upsertWorkItemRecord(previewConversationWorkItem);

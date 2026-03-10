@@ -1,5 +1,13 @@
 import { UploadCloud } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCompanyShellCommands } from "../../application/company/shell";
 import { type RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
@@ -7,11 +15,15 @@ import {
   doesConversationWorkItemMatch,
 } from "../../application/mission/chat-work-item-state";
 import {
-} from "../../application/mission/conversation-work-item-view";
+  getRequirementStatusToneClass,
+  resolveRequirementProductStatus,
+} from "../../application/mission/requirement-product-status";
+import { selectPrimaryRequirementProjection } from "../../application/mission/requirement-aggregate";
 import { ChatComposerFooter } from "./components/ChatComposerFooter";
 import { ChatMessageFeed } from "./components/ChatMessageFeed";
 import { ChatMissionStrip } from "./components/ChatMissionStrip";
 import { ChatSessionHeader } from "./components/ChatSessionHeader";
+import { ChatSettledRequirementCard } from "./components/ChatSettledRequirementCard";
 import { ChatSummaryPanel } from "./components/ChatSummaryPanel";
 import { ChatWaitingBanner } from "./components/ChatWaitingBanner";
 import { useChatConversationTruth } from "./hooks/useChatConversationTruth";
@@ -68,6 +80,8 @@ export function ChatPageScreen() {
     activeMissionRecords,
     activeConversationStates,
     activeWorkItems,
+    activeRequirementAggregates,
+    primaryRequirementId,
     activeRoundRecords,
     activeArtifacts,
     activeDispatches,
@@ -123,10 +137,12 @@ export function ChatPageScreen() {
 
   const endRef = useRef<HTMLDivElement>(null);
 
-  const updateStreamText = (value: string | null) => {
+  const updateStreamText = useCallback((value: string | null) => {
     streamTextRef.current = value;
-    setStreamText(value);
-  };
+    startTransition(() => {
+      setStreamText(value);
+    });
+  }, []);
 
   const {
     agentId,
@@ -376,6 +392,8 @@ export function ChatPageScreen() {
     activeRequirementRoom,
     activeRoomRecords,
     activeWorkItems,
+    activeRequirementAggregates,
+    primaryRequirementId,
     companySessionSnapshots,
     requirementRoomSnapshots,
     requirementRoomSnapshotAgentIds,
@@ -396,6 +414,44 @@ export function ChatPageScreen() {
     isSummaryOpen,
     summaryPanelView,
   });
+  const primaryRequirementProjection = useMemo(
+    () =>
+      selectPrimaryRequirementProjection({
+        company: activeCompany,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeWorkItems,
+        activeRoomRecords,
+      }),
+    [
+      activeCompany,
+      activeRequirementAggregates,
+      activeRoomRecords,
+      activeWorkItems,
+      primaryRequirementId,
+    ],
+  );
+  const settledRequirementAggregate = primaryRequirementProjection.aggregate;
+  const settledRequirementProductStatus = resolveRequirementProductStatus({
+    aggregate: settledRequirementAggregate,
+    workItem: stableDisplayWorkItem ?? primaryRequirementProjection.workItem,
+  });
+  const settledRequirementStatusClassName = getRequirementStatusToneClass(
+    settledRequirementProductStatus.tone,
+  );
+  const requirementCenterRoute = activeCompany?.id
+    ? `/requirement?cid=${encodeURIComponent(activeCompany.id)}`
+    : "/requirement";
+  const settledRequirementOwnerAgentId =
+    settledRequirementAggregate?.ownerActorId ??
+    stableDisplayWorkItem?.ownerActorId ??
+    primaryRequirementProjection.workItem?.ownerActorId ??
+    null;
+  const showSettledRequirementCard =
+    !isArchiveView &&
+    !isGroup &&
+    isCeoSession &&
+    Boolean(settledRequirementAggregate);
   const doesWorkItemMatchCurrentConversation = useCallback(
     (item: WorkItemRecord | null | undefined) =>
       doesConversationWorkItemMatch({
@@ -769,6 +825,7 @@ export function ChatPageScreen() {
     isGenerating,
     streamText,
   });
+  const deferredStreamText = useDeferredValue(streamText);
   const chatSessionRuntime = useMemo(
     () => ({
       activeCompany,
@@ -1170,6 +1227,56 @@ export function ChatPageScreen() {
             }
           />
 
+          <ChatSettledRequirementCard
+            visible={showSettledRequirementCard}
+            title={
+              stableDisplayWorkItem?.title ??
+              primaryRequirementProjection.workItem?.title ??
+              requirementOverview?.title ??
+              settledRequirementAggregate?.summary ??
+              "当前主线需求"
+            }
+            statusLabel={settledRequirementProductStatus.label}
+            statusClassName={settledRequirementStatusClassName}
+            summary={
+              stableDisplayWorkItem?.displaySummary ??
+              stableDisplayWorkItem?.summary ??
+              requirementOverview?.summary ??
+              settledRequirementAggregate?.summary ??
+              "CEO 已经把这件事收敛成一条可推进的主线。"
+            }
+            ownerLabel={
+              stableDisplayWorkItem?.displayOwnerLabel ??
+              stableDisplayWorkItem?.ownerLabel ??
+              settledRequirementAggregate?.ownerLabel ??
+              "当前负责人"
+            }
+            stage={
+              stableDisplayWorkItem?.displayStage ??
+              stableDisplayWorkItem?.stageLabel ??
+              settledRequirementAggregate?.stage ??
+              "待推进"
+            }
+            nextAction={
+              stableDisplayWorkItem?.displayNextAction ??
+              stableDisplayWorkItem?.nextAction ??
+              settledRequirementAggregate?.nextAction ??
+              "进入需求中心继续推进。"
+            }
+            onOpenRequirementCenter={() => navigate(requirementCenterRoute)}
+            onOpenTeamRoom={
+              teamGroupRoute
+                ? () => navigate(teamGroupRoute)
+                : null
+            }
+            onOpenOwner={
+              settledRequirementOwnerAgentId
+                ? () =>
+                    navigate(buildCompanyChatRoute(settledRequirementOwnerAgentId, activeCompany?.id))
+                : null
+            }
+          />
+
       {!isGroup && latestDirectTurnSummary?.state === "waiting" ? (
         <ChatWaitingBanner
           ownerLabel={emp?.nickname ?? "负责人"}
@@ -1223,6 +1330,7 @@ export function ChatPageScreen() {
           displayItemsLength={displayItems.length}
           visibleDisplayItems={visibleDisplayItems}
           activeCompany={activeCompany}
+          activeDispatches={activeDispatches}
           activeRoomRecords={activeRoomRecords}
           isCeoSession={isCeoSession}
           isGroup={isGroup}
@@ -1237,7 +1345,7 @@ export function ChatPageScreen() {
           persistedWorkItemId={persistedWorkItem?.id ?? null}
           groupWorkItemId={groupWorkItemId ?? null}
           hasActiveRun={hasActiveRun}
-          streamText={streamText}
+          streamText={deferredStreamText}
           isGenerating={isGenerating}
           emptyStateText={emptyStateText}
           onExpandDisplayWindow={expandDisplayWindow}

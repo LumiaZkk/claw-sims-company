@@ -9,6 +9,7 @@ import type { HandoffRecord, RequirementRoomRecord, RequestRecord } from "../../
 import type { Company } from "../../../domain/org/types";
 import type {
   ConversationStateRecord,
+  RequirementAggregateRecord,
   TrackedTask,
   WorkItemRecord,
 } from "../../../domain/mission/types";
@@ -19,6 +20,8 @@ type UseChatConversationSurfaceInput = {
   activeRequirementRoom: RequirementRoomRecord | null;
   activeRoomRecords: RequirementRoomRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
   companySessionSnapshots: RequirementSessionSnapshot[];
   requirementRoomSnapshots: RequirementSessionSnapshot[];
   requirementRoomSnapshotAgentIds: string[];
@@ -51,6 +54,8 @@ export function useChatConversationSurface(
         activeRequirementRoom: input.activeRequirementRoom,
         activeRoomRecords: input.activeRoomRecords,
         activeWorkItems: input.activeWorkItems,
+        activeRequirementAggregates: input.activeRequirementAggregates,
+        primaryRequirementId: input.primaryRequirementId,
         companySessionSnapshots: input.companySessionSnapshots,
         requirementRoomSnapshots: input.requirementRoomSnapshots,
         requirementRoomSnapshotAgentIds: input.requirementRoomSnapshotAgentIds,
@@ -77,6 +82,8 @@ export function useChatConversationSurface(
       input.activeRequirementRoom,
       input.activeRoomRecords,
       input.activeWorkItems,
+      input.activeRequirementAggregates,
+      input.primaryRequirementId,
       input.companySessionSnapshots,
       input.currentTime,
       input.groupTopicKey,

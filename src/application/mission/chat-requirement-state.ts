@@ -1,9 +1,18 @@
 import type { ChatMessage } from "../gateway";
 import { inferMissionTopicKey, inferRequestTopicKey } from "../delegation/request-topic";
-import type { HandoffRecord, RequestRecord } from "../../domain/delegation/types";
-import type { WorkItemRecord, ConversationStateRecord, TrackedTask } from "../../domain/mission/types";
+import type { HandoffRecord, RequestRecord, RequirementRoomRecord } from "../../domain/delegation/types";
+import type {
+  ConversationStateRecord,
+  RequirementAggregateRecord,
+  TrackedTask,
+  WorkItemRecord,
+} from "../../domain/mission/types";
 import type { Company } from "../../domain/org/types";
 import { isArtifactRequirementTopic, isStrategicRequirementTopic } from "./requirement-kind";
+import {
+  buildAggregateBackedRequirementOverview,
+  selectPrimaryRequirementProjection,
+} from "./requirement-aggregate";
 import { buildRequirementExecutionOverview, type RequirementExecutionOverview } from "./requirement-overview";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import {
@@ -105,6 +114,7 @@ export type ChatRequirementState = {
   canonicalWorkItems: WorkItemRecord[];
   latestOpenCanonicalWorkItem: WorkItemRecord | null;
   latestStrategicCanonicalWorkItem: WorkItemRecord | null;
+  primaryRequirementAggregate: RequirementAggregateRecord | null;
   stableConversationWorkItem: WorkItemRecord | null;
   stableConversationTopicKey: string | null;
   lockedStrategicConversationWorkItem: WorkItemRecord | null;
@@ -123,6 +133,9 @@ export function buildChatRequirementState(input: {
   activeCompany: Company | null;
   activeConversationState: ConversationStateRecord | null;
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
+  activeRoomRecords: RequirementRoomRecord[];
   companySessionSnapshots: RequirementSessionSnapshot[];
   requestPreview: RequestRecord[];
   handoffPreview: HandoffRecord[];
@@ -154,6 +167,15 @@ export function buildChatRequirementState(input: {
   const canonicalWorkItems = input.activeWorkItems.filter((item) =>
     isCanonicalProductWorkItemRecord(item, input.historyAgentId),
   );
+  const primaryRequirementProjection = selectPrimaryRequirementProjection({
+    company: input.activeCompany,
+    activeRequirementAggregates: input.activeRequirementAggregates,
+    primaryRequirementId: input.primaryRequirementId,
+    activeWorkItems: canonicalWorkItems,
+    activeRoomRecords: input.activeRoomRecords,
+  });
+  const primaryRequirementAggregate = primaryRequirementProjection.aggregate;
+  const primaryRequirementWorkItem = primaryRequirementProjection.workItem;
   const latestOpenCanonicalWorkItem =
     [...canonicalWorkItems]
       .filter((item) => item.status !== "completed" && item.status !== "archived")
@@ -169,7 +191,7 @@ export function buildChatRequirementState(input: {
       .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
 
   const activeConversationState = input.activeConversationState;
-  const stableConversationWorkItem = (() => {
+  const conversationAnchoredWorkItem = (() => {
     if (!activeConversationState) {
       return null;
     }
@@ -185,13 +207,14 @@ export function buildChatRequirementState(input: {
     }
     return null;
   })();
+  const stableConversationWorkItem = primaryRequirementWorkItem ?? conversationAnchoredWorkItem;
 
-  const stableConversationTopicKey = stableConversationWorkItem?.topicKey
+  const stableConversationTopicKey = primaryRequirementAggregate?.topicKey ?? (stableConversationWorkItem?.topicKey
     ? stableConversationWorkItem.topicKey
     : (() => {
         const workKey = input.activeConversationState?.currentWorkKey?.trim() ?? "";
         return workKey.startsWith("topic:") ? workKey.slice("topic:".length) : null;
-      })();
+      })());
 
   const lockedStrategicConversationWorkItem =
     !input.isGroup &&
@@ -209,14 +232,20 @@ export function buildChatRequirementState(input: {
           company: input.activeCompany,
           includeArtifactTopics: false,
           preferredTopicKey:
-            resolvedConversationRequirementHint?.topicKey ?? stableConversationTopicKey ?? null,
+            primaryRequirementAggregate?.topicKey ??
+            resolvedConversationRequirementHint?.topicKey ??
+            stableConversationTopicKey ??
+            null,
           preferredTopicText:
             resolvedConversationRequirementHint?.text ??
+            primaryRequirementWorkItem?.title ??
+            primaryRequirementAggregate?.summary ??
             stableConversationWorkItem?.title ??
             stableConversationWorkItem?.summary ??
             null,
           preferredTopicTimestamp:
             resolvedConversationRequirementHint?.timestamp ??
+            primaryRequirementAggregate?.updatedAt ??
             stableConversationWorkItem?.updatedAt ??
             stableConversationWorkItem?.startedAt ??
             null,
@@ -258,15 +287,19 @@ export function buildChatRequirementState(input: {
     shouldReplaceLockedConversationWorkItem ? null : lockedStrategicConversationWorkItem;
 
   const preferredConversationTopicKey =
+    primaryRequirementAggregate?.topicKey ??
     effectiveLockedStrategicConversationWorkItem?.topicKey ??
     resolvedConversationRequirementHint?.topicKey ??
     stableConversationTopicKey ??
     null;
   const preferredConversationTopicText =
+    primaryRequirementWorkItem?.title ??
+    primaryRequirementAggregate?.summary ??
     effectiveLockedStrategicConversationWorkItem?.title ??
     resolvedConversationRequirementHint?.text ??
     null;
   const preferredConversationTopicTimestamp =
+    primaryRequirementAggregate?.updatedAt ??
     effectiveLockedStrategicConversationWorkItem?.updatedAt ??
     effectiveLockedStrategicConversationWorkItem?.startedAt ??
     resolvedConversationRequirementHint?.timestamp ??
@@ -274,22 +307,28 @@ export function buildChatRequirementState(input: {
 
   const requirementOverview =
     input.activeCompany && !input.isRequirementBootstrapPending && !input.isFreshConversation
-      ? buildRequirementExecutionOverview({
+      ? buildAggregateBackedRequirementOverview({
           company: input.activeCompany,
-          includeArtifactTopics: false,
-          preferredTopicKey: preferredConversationTopicKey,
-          preferredTopicText: preferredConversationTopicText,
-          preferredTopicTimestamp: preferredConversationTopicTimestamp,
-          topicHints: [
-            resolvedConversationRequirementHint?.text,
-            effectiveStableConversationWorkItem?.title,
-            effectiveStableConversationWorkItem?.summary,
-            ...input.requestPreview.map((request) => request.topicKey ?? request.title ?? request.summary),
-            ...input.handoffPreview.map((handoff) => `${handoff.title}\n${handoff.summary}`),
-            input.structuredTaskPreview?.title,
-          ],
-          sessionSnapshots: input.companySessionSnapshots,
-          now: input.currentTime,
+          aggregate: primaryRequirementAggregate,
+          workItem: effectiveStableConversationWorkItem ?? primaryRequirementWorkItem,
+          room: primaryRequirementProjection.room,
+          rawOverview: buildRequirementExecutionOverview({
+            company: input.activeCompany,
+            includeArtifactTopics: false,
+            preferredTopicKey: preferredConversationTopicKey,
+            preferredTopicText: preferredConversationTopicText,
+            preferredTopicTimestamp: preferredConversationTopicTimestamp,
+            topicHints: [
+              resolvedConversationRequirementHint?.text,
+              effectiveStableConversationWorkItem?.title,
+              effectiveStableConversationWorkItem?.summary,
+              ...input.requestPreview.map((request) => request.topicKey ?? request.title ?? request.summary),
+              ...input.handoffPreview.map((handoff) => `${handoff.title}\n${handoff.summary}`),
+              input.structuredTaskPreview?.title,
+            ],
+            sessionSnapshots: input.companySessionSnapshots,
+            now: input.currentTime,
+          }),
         })
       : null;
 
@@ -300,6 +339,7 @@ export function buildChatRequirementState(input: {
     canonicalWorkItems,
     latestOpenCanonicalWorkItem,
     latestStrategicCanonicalWorkItem,
+    primaryRequirementAggregate,
     stableConversationWorkItem,
     stableConversationTopicKey,
     lockedStrategicConversationWorkItem,

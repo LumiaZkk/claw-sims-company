@@ -1,14 +1,93 @@
 # Cyber Company PRD
 
 Status: Draft
-Last updated: 2026-03-06
-Basis: Real UI walkthrough plus live gateway-backed chat/session evidence
+Last updated: 2026-03-10
+Basis: Real UI walkthrough plus live gateway-backed chat/session evidence, plus requirement aggregate refactor and requirement-center product redesign
 
 ## 1. Product Summary
 
 `cyber-company` is a multi-agent operations console that turns raw agent/session/cron primitives into a company metaphor: companies, employees, departments, board, automation, and reports.
 
 The product is not a generic AI chat shell. Its core promise is that one operator can run a small AI team, assign work by role, monitor progress, handle failure, and keep work moving across multiple agents.
+
+## 1.1 vNext Direction
+
+`vNext` 的产品主线从“很多功能页”收敛为“一个需求中心”：
+
+- 用户先在 CEO 首页发起目标
+- 在 CEO 深聊里把模糊需求收敛成当前主线
+- 需求中心承接当前主线的摘要、执行、协作、交付和验收
+- Ops 只负责排障，不再承担主叙事
+- Workspace 只负责交付物，不再承担立项入口
+
+这次方向建立在本地 `RequirementAggregate` 主线模型之上，不额外引入新的权威状态源。
+
+## 1.2 vNext Goals
+
+- 让普通用户只靠 `CEO 首页 -> CEO 深聊 -> 需求中心` 就能推进一条需求
+- 让所有页面围绕同一条 primary requirement 读取状态，而不是各自猜当前主线
+- 明确区分“执行完成”和“用户验收完成”
+- 把需求房从“看起来像群聊”升级为“透明的协作投影视图”
+
+## 1.3 vNext Non-goals
+
+- 本期不引入新的服务端数据库权威源
+- 本期不支持多个并行 primary requirement
+- 本期不重写 OpenClaw / Gateway 的执行能力
+- 本期不移除 Board、Ops、Workspace 等高级视图
+
+## 1.4 vNext Core Journey
+
+1. 用户在 CEO 首页提出一个模糊目标。
+2. CEO 深聊负责澄清目标、边界、负责人和下一步。
+3. 系统将当前主线沉淀为本地 `RequirementAggregate`。
+4. 用户进入需求中心，查看：
+   - 需求摘要
+   - 当前负责人
+   - 当前阶段
+   - 下一步
+   - 协作入口
+   - 交付入口
+   - 验收状态
+5. 需要多人协作时进入需求房。
+6. 需要看结果时进入 Workspace。
+7. 出现阻塞时进入 Ops，再返回需求中心。
+8. 执行完成后进入“待你验收”，用户选择：
+   - 验收通过
+   - 继续修改
+   - 驳回重开
+
+## 1.5 vNext Product State Model
+
+面向用户只暴露以下状态文案：
+
+- 待澄清
+- 已立项
+- 执行中
+- 待协作回复
+- 有阻塞
+- 待你验收
+- 已完成
+- 驳回重开
+
+底层仍允许保留更细的 aggregate lifecycle 和 acceptance status。
+
+## 1.6 vNext P0 Scope
+
+- 新增一级页面 `需求中心`
+- 在 CEO 深聊增加“已收敛需求卡”
+- 在需求中心新增验收闭环
+- 在需求房消息里补足 `派给谁 / 谁回复了 / 对应哪次 dispatch`
+- 保持 Board / Workspace / Ops 与需求中心读取同一条主线
+
+## 1.7 Supporting Specs
+
+详细拆解见以下文档：
+
+- `docs/requirement-center-information-architecture.md`
+- `docs/requirement-center-glossary.md`
+- `docs/requirement-center-interaction-spec.md`
+- `docs/requirement-center-acceptance-checklists.md`
 
 ## 2. Problem Statement
 

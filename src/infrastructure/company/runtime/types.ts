@@ -9,6 +9,8 @@ import type {
 } from "../../../domain/delegation/types";
 import type {
   ConversationMissionRecord,
+  RequirementAggregateRecord,
+  RequirementEvidenceEvent,
   ConversationStateRecord,
   RoundRecord,
   TrackedTask,
@@ -27,6 +29,8 @@ export type {
 } from "../../../domain/delegation/types";
 export type {
   ConversationMissionRecord,
+  RequirementAggregateRecord,
+  RequirementEvidenceEvent,
   ConversationStateRecord,
   RoundRecord,
   TrackedTask,
@@ -43,6 +47,9 @@ export interface CompanyRuntimeState {
   activeMissionRecords: ConversationMissionRecord[];
   activeConversationStates: ConversationStateRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  activeRequirementEvidence: RequirementEvidenceEvent[];
+  primaryRequirementId: string | null;
   activeRoundRecords: RoundRecord[];
   activeArtifacts: ArtifactRecord[];
   activeDispatches: DispatchRecord[];
@@ -78,6 +85,16 @@ export interface CompanyRuntimeState {
   clearConversationState: (conversationId: string) => void;
   upsertWorkItemRecord: (workItem: WorkItemRecord) => void;
   deleteWorkItemRecord: (workItemId: string) => void;
+  setPrimaryRequirement: (aggregateId: string | null) => void;
+  applyRequirementTransition: (transition: {
+    aggregateId: string;
+    changes: Partial<
+      Omit<RequirementAggregateRecord, "id" | "companyId" | "primary" | "revision">
+    >;
+    timestamp?: number;
+    source?: RequirementEvidenceEvent["source"];
+  }) => void;
+  ingestRequirementEvidence: (event: RequirementEvidenceEvent) => void;
   upsertRoundRecord: (round: RoundRecord) => void;
   deleteRoundRecord: (roundId: string) => void;
   upsertArtifactRecord: (artifact: ArtifactRecord) => void;

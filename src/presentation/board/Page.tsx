@@ -40,9 +40,11 @@ function BoardPageContent({
   activeCompany,
   activeConversationStates,
   activeDispatches,
+  activeRequirementAggregates,
   activeRoomRecords,
   activeWorkItems,
   activeArtifacts,
+  primaryRequirementId,
   replaceDispatchRecords,
   upsertTask,
   updateCompany,
@@ -90,6 +92,8 @@ function BoardPageContent({
         company: activeCompany,
         activeConversationStates,
         activeWorkItems,
+        activeRequirementAggregates,
+        primaryRequirementId,
         companySessions,
         companySessionSnapshots,
         activeRoomRecords,
@@ -99,12 +103,14 @@ function BoardPageContent({
     [
       activeCompany,
       activeConversationStates,
+      activeRequirementAggregates,
       activeRoomRecords,
       activeWorkItems,
       companySessions,
       companySessionSnapshots,
       currentTime,
       ceo?.agentId,
+      primaryRequirementId,
     ],
   );
   const {
@@ -239,6 +245,8 @@ function BoardPageContent({
         totalSteps={totalSteps}
         globalPct={globalPct}
         canOpenCeo={Boolean(ceo)}
+        canOpenRequirementCenter={Boolean(requirementOverview || currentWorkItem)}
+        onOpenRequirementCenter={() => navigate("/requirement")}
         onOpenOps={() => navigate("/ops")}
         onOpenCeo={() => ceo && navigate(`/chat/${ceo.agentId}`)}
       />
@@ -257,6 +265,7 @@ function BoardPageContent({
             : undefined
         }
         onOpenCeo={ceo ? () => navigate(`/chat/${ceo.agentId}`) : undefined}
+        onOpenRequirementCenter={() => navigate("/requirement")}
       />
 
       <BoardRoomPanel

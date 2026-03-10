@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   Archive,
+  BookOpenCheck,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -65,8 +66,10 @@ export function BoardHeroSection(props: {
   totalSteps: number;
   globalPct: number;
   canOpenCeo: boolean;
+  canOpenRequirementCenter?: boolean;
   onOpenOps: () => void;
   onOpenCeo: () => void;
+  onOpenRequirementCenter?: () => void;
 }) {
   const {
     description,
@@ -76,8 +79,10 @@ export function BoardHeroSection(props: {
     totalSteps,
     globalPct,
     canOpenCeo,
+    canOpenRequirementCenter = false,
     onOpenOps,
     onOpenCeo,
+    onOpenRequirementCenter,
   } = props;
 
   return (
@@ -90,6 +95,12 @@ export function BoardHeroSection(props: {
         <p className="text-muted-foreground mt-1 text-sm">{description}</p>
       </div>
       <div className="flex flex-wrap gap-2 md:gap-3 items-center">
+        {canOpenRequirementCenter && onOpenRequirementCenter ? (
+          <Button variant="outline" onClick={onOpenRequirementCenter}>
+            <BookOpenCheck className="w-4 h-4 mr-2" />
+            返回需求中心
+          </Button>
+        ) : null}
         <Button variant="outline" onClick={onOpenOps}>
           <Play className="w-4 h-4 mr-2" />
           去运营大厅看监控
@@ -148,8 +159,20 @@ export function BoardRequirementCard(props: {
   nextStep: string;
   onOpenOwner?: () => void;
   onOpenCeo?: () => void;
+  onOpenRequirementCenter?: () => void;
 }) {
-  const { visible, title, currentStep, summary, owner, stage, nextStep, onOpenOwner, onOpenCeo } = props;
+  const {
+    visible,
+    title,
+    currentStep,
+    summary,
+    owner,
+    stage,
+    nextStep,
+    onOpenOwner,
+    onOpenCeo,
+    onOpenRequirementCenter,
+  } = props;
   if (!visible) {
     return null;
   }
@@ -180,6 +203,12 @@ export function BoardRequirementCard(props: {
           </div>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
+          {onOpenRequirementCenter ? (
+            <Button variant="outline" onClick={onOpenRequirementCenter}>
+              <BookOpenCheck className="w-4 h-4 mr-2" />
+              返回需求中心
+            </Button>
+          ) : null}
           {onOpenOwner ? (
             <Button variant="default" onClick={onOpenOwner}>
               <MessageSquare className="w-4 h-4 mr-2" />

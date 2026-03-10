@@ -124,6 +124,11 @@ export function WorkspacePresentationPage() {
       onSelectApp={setSelectedAppId}
       onSelectFile={setSelectedFileKey}
       onOpenCtoWorkbench={openCtoWorkbench}
+      onOpenRequirementCenter={
+        activeWorkspaceWorkItem
+          ? () => navigate("/requirement")
+          : undefined
+      }
       onOpenFileChat={(nextAgentId) => navigate(`/chat/${encodeURIComponent(nextAgentId)}`)}
       onOpenCtoChat={() => {
         if (ctoEmployee) {

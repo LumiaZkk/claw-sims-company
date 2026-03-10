@@ -1,4 +1,8 @@
 import { buildRequirementExecutionOverview, type RequirementExecutionOverview } from "./requirement-overview";
+import {
+  buildAggregateBackedRequirementOverview,
+  selectPrimaryRequirementProjection,
+} from "./requirement-aggregate";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import { buildRequirementScope, type RequirementScope } from "./requirement-scope";
 import {
@@ -13,7 +17,13 @@ import {
 } from "./work-item-signal";
 import { isArtifactRequirementTopic, isStrategicRequirementTopic } from "./requirement-kind";
 import { isSyntheticWorkflowPromptText } from "./message-truth";
-import type { Company, ConversationStateRecord, WorkItemRecord } from "../../domain";
+import type {
+  Company,
+  ConversationStateRecord,
+  RequirementAggregateRecord,
+  WorkItemRecord,
+} from "../../domain";
+import type { RequirementRoomRecord } from "../../domain/delegation/types";
 import type { GatewaySessionRow } from "../gateway";
 
 export type RequirementInstructionHint = {
@@ -29,6 +39,7 @@ export type CurrentRequirementState = {
   latestOpenWorkItem: WorkItemRecord | null;
   latestStrategicWorkItem: WorkItemRecord | null;
   ceoConversationWorkItem: WorkItemRecord | null;
+  primaryRequirementAggregate: RequirementAggregateRecord | null;
   requirementTopicKeyHint: string | null;
   requirementStartedAtHint: number | null;
   currentRequirementSessionKey: string | null;
@@ -75,6 +86,9 @@ export function buildCurrentRequirementState(params: {
   company: Company;
   activeConversationStates: ConversationStateRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
+  activeRoomRecords: RequirementRoomRecord[];
   companySessions: Array<GatewaySessionRow & { agentId: string }>;
   companySessionSnapshots: RequirementSessionSnapshot[];
   currentTime: number;
@@ -84,6 +98,9 @@ export function buildCurrentRequirementState(params: {
     company,
     activeConversationStates,
     activeWorkItems,
+    activeRequirementAggregates,
+    primaryRequirementId,
+    activeRoomRecords,
     companySessions,
     companySessionSnapshots,
     currentTime,
@@ -119,25 +136,48 @@ export function buildCurrentRequirementState(params: {
           item.status !== "archived",
       ),
   );
+  const canonicalWorkItems = activeWorkItems.filter(
+    (item) =>
+      isCanonicalProductWorkItemRecord(item, ceoAgentId) &&
+      !isArtifactRequirementTopic(item.topicKey),
+  );
+  const primaryRequirementProjection = selectPrimaryRequirementProjection({
+    company,
+    activeRequirementAggregates,
+    primaryRequirementId,
+    activeWorkItems: canonicalWorkItems,
+    activeRoomRecords,
+  });
+  const primaryRequirementAggregate = primaryRequirementProjection.aggregate;
+  const stablePrimaryWorkItem = primaryRequirementProjection.workItem;
+  const stablePrimaryRoom = primaryRequirementProjection.room;
 
   const rawRequirementOverview =
     shouldBootstrapRequirementOverview
       ? buildRequirementExecutionOverview({
           company,
           sessionSnapshots: companySessionSnapshots,
-          preferredTopicText: ceoInstructionHint?.text ?? null,
-          preferredTopicTimestamp: ceoInstructionHint?.timestamp ?? null,
+          preferredTopicKey: primaryRequirementAggregate?.topicKey ?? null,
+          preferredTopicText:
+            ceoInstructionHint?.text ??
+            stablePrimaryWorkItem?.title ??
+            primaryRequirementAggregate?.summary ??
+            null,
+          preferredTopicTimestamp:
+            ceoInstructionHint?.timestamp ??
+            primaryRequirementAggregate?.updatedAt ??
+            stablePrimaryWorkItem?.updatedAt ??
+            null,
           includeArtifactTopics: false,
           now: currentTime,
         })
       : null;
 
-  const currentRequirementOwnerAgentId = rawRequirementOverview?.currentOwnerAgentId ?? null;
-  const canonicalWorkItems = activeWorkItems.filter(
-    (item) =>
-      isCanonicalProductWorkItemRecord(item, ceoAgentId) &&
-      !isArtifactRequirementTopic(item.topicKey),
-  );
+  const currentRequirementOwnerAgentId =
+    rawRequirementOverview?.currentOwnerAgentId ??
+    primaryRequirementAggregate?.ownerActorId ??
+    stablePrimaryWorkItem?.ownerActorId ??
+    null;
   const latestOpenWorkItem = findLatestOpenWorkItem(canonicalWorkItems);
   const latestStrategicWorkItem = findLatestStrategicWorkItem(canonicalWorkItems);
   const ceoConversationWorkItem = pickConversationScopedWorkItem({
@@ -145,17 +185,27 @@ export function buildCurrentRequirementState(params: {
     conversationStates: activeConversationStates,
     actorId: ceoAgentId ?? null,
   });
-  const requirementTopicKeyHint = rawRequirementOverview?.topicKey ?? latestOpenWorkItem?.topicKey ?? null;
-  const requirementStartedAtHint = rawRequirementOverview?.startedAt ?? latestOpenWorkItem?.startedAt ?? null;
+  const requirementTopicKeyHint =
+    primaryRequirementAggregate?.topicKey ??
+    rawRequirementOverview?.topicKey ??
+    latestOpenWorkItem?.topicKey ??
+    null;
+  const requirementStartedAtHint =
+    primaryRequirementAggregate?.startedAt ??
+    rawRequirementOverview?.startedAt ??
+    stablePrimaryWorkItem?.startedAt ??
+    latestOpenWorkItem?.startedAt ??
+    null;
   const currentRequirementSessionKey =
-    currentRequirementOwnerAgentId
+    primaryRequirementAggregate?.sourceConversationId ??
+    (currentRequirementOwnerAgentId
       ? companySessions.find((session) => session.agentId === currentRequirementOwnerAgentId)?.key ?? null
       : latestOpenWorkItem?.ownerActorId
         ? companySessions.find((session) => session.agentId === latestOpenWorkItem.ownerActorId)?.key ?? null
-        : null;
+        : null);
   const matchedWorkItem = pickWorkItemRecord({
     items: canonicalWorkItems,
-    sessionKey: currentRequirementSessionKey,
+    sessionKey: currentRequirementSessionKey ?? stablePrimaryWorkItem?.sessionKey ?? null,
     topicKey: requirementTopicKeyHint,
     startedAt: requirementStartedAtHint,
   });
@@ -164,6 +214,7 @@ export function buildCurrentRequirementState(params: {
       ? reconcileWorkItemRecord({
           companyId: company.id,
           existingWorkItem:
+            stablePrimaryWorkItem ??
             ceoConversationWorkItem ??
             latestStrategicWorkItem ??
             latestOpenWorkItem ??
@@ -175,27 +226,38 @@ export function buildCurrentRequirementState(params: {
       : null;
   const shouldPreferPreviewRequirementWorkItem =
     Boolean(previewRequirementWorkItem) &&
-    (!ceoConversationWorkItem ||
-      ceoConversationWorkItem.kind !== "strategic" ||
-      ceoConversationWorkItem.topicKey !== previewRequirementWorkItem?.topicKey ||
-      ceoConversationWorkItem.title !== previewRequirementWorkItem?.title);
+    Boolean(
+      !stablePrimaryWorkItem ||
+        stablePrimaryWorkItem.id === previewRequirementWorkItem?.id ||
+        stablePrimaryWorkItem.workKey === previewRequirementWorkItem?.workKey ||
+        (stablePrimaryWorkItem.topicKey &&
+          stablePrimaryWorkItem.topicKey === previewRequirementWorkItem?.topicKey),
+    );
   const activeWorkItem =
-    shouldPreferPreviewRequirementWorkItem && previewRequirementWorkItem
+    stablePrimaryWorkItem ??
+    (shouldPreferPreviewRequirementWorkItem && previewRequirementWorkItem
       ? previewRequirementWorkItem
       : ceoConversationWorkItem ??
         latestStrategicWorkItem ??
         latestOpenWorkItem ??
-        (activeWorkItems.length === 0 ? matchedWorkItem ?? null : null);
+        (activeWorkItems.length === 0 ? matchedWorkItem ?? null : null));
   const currentWorkItem =
-    activeWorkItem && isReliableWorkItemRecord(activeWorkItem) ? activeWorkItem : null;
-  const requirementOverview =
-    currentWorkItem && rawRequirementOverview
-      ? currentWorkItem.topicKey && rawRequirementOverview.topicKey !== currentWorkItem.topicKey
-        ? null
-        : rawRequirementOverview
-      : null;
+    activeWorkItem && isReliableWorkItemRecord(activeWorkItem)
+      ? activeWorkItem
+      : stablePrimaryWorkItem ?? null;
+  const requirementOverview = buildAggregateBackedRequirementOverview({
+    company,
+    aggregate: primaryRequirementAggregate,
+    workItem: currentWorkItem ?? stablePrimaryWorkItem,
+    room: stablePrimaryRoom,
+    rawOverview: rawRequirementOverview,
+  });
   const requirementScope = buildRequirementScope(company, requirementOverview, currentWorkItem);
-  const primaryRequirementTopicKey = currentWorkItem?.topicKey ?? requirementOverview?.topicKey ?? null;
+  const primaryRequirementTopicKey =
+    primaryRequirementAggregate?.topicKey ??
+    currentWorkItem?.topicKey ??
+    requirementOverview?.topicKey ??
+    null;
   const strategicRequirementOverview =
     requirementOverview && requirementOverview.topicKey === primaryRequirementTopicKey
       ? requirementOverview
@@ -209,6 +271,7 @@ export function buildCurrentRequirementState(params: {
     latestOpenWorkItem,
     latestStrategicWorkItem,
     ceoConversationWorkItem,
+    primaryRequirementAggregate,
     requirementTopicKeyHint,
     requirementStartedAtHint,
     currentRequirementSessionKey,

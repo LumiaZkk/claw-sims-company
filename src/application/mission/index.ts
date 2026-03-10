@@ -4,18 +4,31 @@ import {
   selectMissionBoardState,
 } from "../../infrastructure/company/runtime/selectors";
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
+import { useShallow } from "zustand/react/shallow";
 
 export function useMissionBoardQuery() {
-  return useCompanyRuntimeStore(selectMissionBoardState);
+  return useCompanyRuntimeStore(useShallow(selectMissionBoardState));
 }
 
 export function useMissionBoardApp() {
-  const { replaceDispatchRecords, upsertTask, updateCompany } = useCompanyRuntimeCommands();
-  return { replaceDispatchRecords, upsertTask, updateCompany };
+  const {
+    replaceDispatchRecords,
+    upsertTask,
+    updateCompany,
+    applyRequirementTransition,
+    upsertWorkItemRecord,
+  } = useCompanyRuntimeCommands();
+  return {
+    replaceDispatchRecords,
+    upsertTask,
+    updateCompany,
+    applyRequirementTransition,
+    upsertWorkItemRecord,
+  };
 }
 
 export function useConversationWorkspaceQuery() {
-  return useCompanyRuntimeStore(selectConversationWorkspaceState);
+  return useCompanyRuntimeStore(useShallow(selectConversationWorkspaceState));
 }
 
 export function useConversationWorkspaceApp() {
@@ -56,3 +69,11 @@ export function useConversationWorkspaceApp() {
     switchCompany,
   };
 }
+
+export {
+  getRequirementStatusToneClass,
+  resolveRequirementProductStatus,
+  type RequirementProductStatus,
+  type RequirementProductStatusId,
+  type RequirementProductStatusTone,
+} from "./requirement-product-status";

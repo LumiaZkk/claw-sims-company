@@ -14,6 +14,10 @@ import type {
 } from "./types";
 import { createEmptyProductState, loadProductState } from "./bootstrap";
 import { persistActiveConversationStates } from "./conversation-state";
+import {
+  persistActiveRequirementAggregates,
+  persistActiveRequirementEvidence,
+} from "./requirements";
 import { persistActiveWorkItems } from "./work-items";
 
 type RuntimeSet = (partial: Partial<CompanyRuntimeState>) => void;
@@ -66,6 +70,9 @@ export function buildCompanyConfigActions(
             activeMissionRecords: state.loadedMissions,
             activeConversationStates: state.loadedConversationStates,
             activeWorkItems: state.loadedWorkItems,
+            activeRequirementAggregates: state.loadedRequirementAggregates,
+            activeRequirementEvidence: state.loadedRequirementEvidence,
+            primaryRequirementId: state.primaryRequirementId,
             activeRoundRecords: state.loadedRounds,
             activeArtifacts: state.loadedArtifacts,
             activeDispatches: state.loadedDispatches,
@@ -75,6 +82,8 @@ export function buildCompanyConfigActions(
           });
           if (active) {
             persistActiveWorkItems(active.id, state.loadedWorkItems);
+            persistActiveRequirementAggregates(active.id, state.loadedRequirementAggregates);
+            persistActiveRequirementEvidence(active.id, state.loadedRequirementEvidence);
           }
           return;
         }
@@ -85,6 +94,9 @@ export function buildCompanyConfigActions(
           activeMissionRecords: [],
           activeConversationStates: [],
           activeWorkItems: [],
+          activeRequirementAggregates: [],
+          activeRequirementEvidence: [],
+          primaryRequirementId: null,
           activeRoundRecords: [],
           activeArtifacts: [],
           activeDispatches: [],
@@ -100,6 +112,9 @@ export function buildCompanyConfigActions(
           activeMissionRecords: [],
           activeConversationStates: [],
           activeWorkItems: [],
+          activeRequirementAggregates: [],
+          activeRequirementEvidence: [],
+          primaryRequirementId: null,
           activeRoundRecords: [],
           activeArtifacts: [],
           activeDispatches: [],
@@ -150,6 +165,9 @@ export function buildCompanyConfigActions(
         activeMissionRecords: state.loadedMissions,
         activeConversationStates: state.loadedConversationStates,
         activeWorkItems: state.loadedWorkItems,
+        activeRequirementAggregates: state.loadedRequirementAggregates,
+        activeRequirementEvidence: state.loadedRequirementEvidence,
+        primaryRequirementId: state.primaryRequirementId,
         activeRoundRecords: state.loadedRounds,
         activeArtifacts: state.loadedArtifacts,
         activeDispatches: state.loadedDispatches,
@@ -157,6 +175,8 @@ export function buildCompanyConfigActions(
         bootstrapPhase: "ready",
       });
       persistActiveWorkItems(company.id, state.loadedWorkItems);
+      persistActiveRequirementAggregates(company.id, state.loadedRequirementAggregates);
+      persistActiveRequirementEvidence(company.id, state.loadedRequirementEvidence);
       persistActiveConversationStates(company.id, state.loadedConversationStates);
       void get().saveConfig();
     },
@@ -181,6 +201,9 @@ export function buildCompanyConfigActions(
           activeMissionRecords: nextState.loadedMissions,
           activeConversationStates: nextState.loadedConversationStates,
           activeWorkItems: nextState.loadedWorkItems,
+          activeRequirementAggregates: nextState.loadedRequirementAggregates,
+          activeRequirementEvidence: nextState.loadedRequirementEvidence,
+          primaryRequirementId: nextState.primaryRequirementId,
           activeRoundRecords: nextState.loadedRounds,
           activeArtifacts: nextState.loadedArtifacts,
           activeDispatches: nextState.loadedDispatches,
@@ -191,6 +214,8 @@ export function buildCompanyConfigActions(
 
         if (nextActiveCompany) {
           persistActiveWorkItems(nextActiveCompany.id, nextState.loadedWorkItems);
+          persistActiveRequirementAggregates(nextActiveCompany.id, nextState.loadedRequirementAggregates);
+          persistActiveRequirementEvidence(nextActiveCompany.id, nextState.loadedRequirementEvidence);
           persistActiveConversationStates(nextActiveCompany.id, nextState.loadedConversationStates);
         }
       } catch (error) {

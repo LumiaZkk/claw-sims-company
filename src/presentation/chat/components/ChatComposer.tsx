@@ -49,10 +49,21 @@ export const ChatComposer = memo(function ChatComposer({
   const [mentionStart, setMentionStart] = useState<number | null>(null);
   const [mentionSelectionIndex, setMentionSelectionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const resizeFrameRef = useRef<number | null>(null);
 
-  const resizeTextarea = (target: HTMLTextAreaElement) => {
-    target.style.height = "auto";
-    target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+  const scheduleTextareaResize = (target?: HTMLTextAreaElement | null) => {
+    const nextTarget = target ?? textareaRef.current;
+    if (!nextTarget) {
+      return;
+    }
+    if (resizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+    }
+    resizeFrameRef.current = window.requestAnimationFrame(() => {
+      resizeFrameRef.current = null;
+      nextTarget.style.height = "auto";
+      nextTarget.style.height = `${Math.min(nextTarget.scrollHeight, 200)}px`;
+    });
   };
 
   const resetDraft = () => {
@@ -135,24 +146,32 @@ export const ChatComposer = memo(function ChatComposer({
       textareaRef.current.focus();
       textareaRef.current.selectionStart = nextCursor;
       textareaRef.current.selectionEnd = nextCursor;
-      resizeTextarea(textareaRef.current);
+      scheduleTextareaResize(textareaRef.current);
     });
   };
+
+  useEffect(() => {
+    scheduleTextareaResize();
+  }, [draft]);
 
   useEffect(() => {
     if (!prefill?.text) {
       return;
     }
-    setDraft((previous) => {
-      const next = previous.trim() ? `${previous}\n\n${prefill.text}` : prefill.text;
-      requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          resizeTextarea(textareaRef.current);
-        }
-      });
-      return next;
+    const frame = window.requestAnimationFrame(() => {
+      setDraft((previous) => (previous.trim() ? `${previous}\n\n${prefill.text}` : prefill.text));
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [prefill?.id, prefill?.text]);
+
+  useEffect(
+    () => () => {
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+    },
+    [],
+  );
 
   const handleSubmit = async () => {
     const ok = await onSend(draft);
@@ -232,7 +251,6 @@ export const ChatComposer = memo(function ChatComposer({
           value={draft}
           onChange={(event) => {
             setDraft(event.target.value);
-            resizeTextarea(event.target);
             updateMentionState(event.target.value, event.target.selectionStart);
           }}
           onKeyDown={(event) => {

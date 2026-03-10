@@ -13,100 +13,25 @@ import {
   touchWorkItemArtifacts,
   touchWorkItemDispatches,
 } from "../../../application/mission/work-item";
+import {
+  areWorkItemRecordsEquivalent,
+} from "../../../application/mission/work-item-equivalence";
 import { isArtifactRequirementTopic } from "../../../application/mission/requirement-kind";
 import { reconcileWorkItemRecord } from "../../../application/mission/work-item-reconciler";
 import { persistActiveRooms } from "./rooms";
+import {
+  appendRequirementLocalEvidence,
+  emitRequirementCompanyEvent,
+  persistActiveRequirementAggregates,
+  persistActiveRequirementEvidence,
+  reconcileActiveRequirementState,
+} from "./requirements";
 
 export function persistActiveWorkItems(
   companyId: string | null | undefined,
   workItems: WorkItemRecord[],
 ) {
   persistWorkItemRecords(companyId, workItems);
-}
-
-function areStringArraysEqual(left: string[] | undefined, right: string[] | undefined): boolean {
-  const leftValues = left ?? [];
-  const rightValues = right ?? [];
-  if (leftValues.length !== rightValues.length) {
-    return false;
-  }
-  return leftValues.every((value, index) => value === rightValues[index]);
-}
-
-function areWorkStepRecordsEquivalent(
-  left: WorkItemRecord["steps"][number],
-  right: WorkItemRecord["steps"][number],
-): boolean {
-  return (
-    left.id === right.id &&
-    left.title === right.title &&
-    (left.assigneeActorId ?? null) === (right.assigneeActorId ?? null) &&
-    left.assigneeLabel === right.assigneeLabel &&
-    left.status === right.status &&
-    (left.completionCriteria ?? null) === (right.completionCriteria ?? null) &&
-    (left.detail ?? null) === (right.detail ?? null)
-  );
-}
-
-export function areWorkItemRecordsEquivalent(left: WorkItemRecord, right: WorkItemRecord): boolean {
-  if (
-    left.id !== right.id ||
-    left.workKey !== right.workKey ||
-    left.kind !== right.kind ||
-    left.roundId !== right.roundId ||
-    left.companyId !== right.companyId ||
-    (left.sessionKey ?? null) !== (right.sessionKey ?? null) ||
-    (left.topicKey ?? null) !== (right.topicKey ?? null) ||
-    (left.sourceActorId ?? null) !== (right.sourceActorId ?? null) ||
-    (left.sourceActorLabel ?? null) !== (right.sourceActorLabel ?? null) ||
-    (left.sourceSessionKey ?? null) !== (right.sourceSessionKey ?? null) ||
-    (left.sourceConversationId ?? null) !== (right.sourceConversationId ?? null) ||
-    (left.providerId ?? null) !== (right.providerId ?? null) ||
-    left.title !== right.title ||
-    left.goal !== right.goal ||
-    left.status !== right.status ||
-    left.stageLabel !== right.stageLabel ||
-    (left.ownerActorId ?? null) !== (right.ownerActorId ?? null) ||
-    left.ownerLabel !== right.ownerLabel ||
-    (left.batonActorId ?? null) !== (right.batonActorId ?? null) ||
-    left.batonLabel !== right.batonLabel ||
-    (left.roomId ?? null) !== (right.roomId ?? null) ||
-    left.startedAt !== right.startedAt ||
-    (left.completedAt ?? null) !== (right.completedAt ?? null) ||
-    left.summary !== right.summary ||
-    left.nextAction !== right.nextAction ||
-    left.headline !== right.headline ||
-    left.displayStage !== right.displayStage ||
-    left.displaySummary !== right.displaySummary ||
-    left.displayOwnerLabel !== right.displayOwnerLabel ||
-    left.displayNextAction !== right.displayNextAction
-  ) {
-    return false;
-  }
-
-  if (!areStringArraysEqual(left.artifactIds, right.artifactIds)) {
-    return false;
-  }
-  if (!areStringArraysEqual(left.dispatchIds, right.dispatchIds)) {
-    return false;
-  }
-  if (left.steps.length !== right.steps.length) {
-    return false;
-  }
-  return left.steps.every((step, index) => areWorkStepRecordsEquivalent(step, right.steps[index]!));
-}
-
-export function areWorkItemRecordCollectionsEquivalent(
-  left: WorkItemRecord[],
-  right: WorkItemRecord[],
-): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((workItem, index) => {
-    const other = right[index];
-    return Boolean(other) && areWorkItemRecordsEquivalent(workItem, other);
-  });
 }
 
 export function syncArtifactLinks(
@@ -223,7 +148,15 @@ export function buildWorkItemActions(
 ): Pick<CompanyRuntimeState, "upsertWorkItemRecord" | "deleteWorkItemRecord"> {
   return {
     upsertWorkItemRecord: (workItem) => {
-      const { activeCompany, activeWorkItems, activeRoomRecords } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeWorkItems,
+        activeRoomRecords,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany) {
         return;
       }
@@ -275,20 +208,95 @@ export function buildWorkItemActions(
             }
           : room,
       );
-      set({ activeWorkItems: sorted, activeRoomRecords: nextRooms });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems: sorted,
+        activeRoomRecords: nextRooms,
+        activeRequirementEvidence,
+      });
+      const previousPrimaryAggregate =
+        primaryRequirementId
+          ? activeRequirementAggregates.find((aggregate) => aggregate.id === primaryRequirementId) ?? null
+          : null;
+      const nextPrimaryAggregate =
+        reconciledRequirements.primaryRequirementId
+          ? reconciledRequirements.activeRequirementAggregates.find(
+              (aggregate) => aggregate.id === reconciledRequirements.primaryRequirementId,
+            ) ?? null
+          : null;
+      const nextEvidence =
+        nextPrimaryAggregate &&
+        reconciledRequirements.primaryRequirementId !== primaryRequirementId
+          ? appendRequirementLocalEvidence({
+              companyId: activeCompany.id,
+              evidence: activeRequirementEvidence,
+              eventType: primaryRequirementId ? "requirement_promoted" : "requirement_seeded",
+              aggregate: nextPrimaryAggregate,
+              previousAggregate: previousPrimaryAggregate,
+              actorId: nextPrimaryAggregate.ownerActorId,
+              timestamp: normalizedWorkItem.updatedAt,
+            })
+          : activeRequirementEvidence;
+      set({
+        activeWorkItems: sorted,
+        activeRoomRecords: nextRooms,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        activeRequirementEvidence: nextEvidence,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveWorkItems(activeCompany.id, sorted);
       persistActiveRooms(activeCompany.id, nextRooms);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
+      if (nextEvidence !== activeRequirementEvidence) {
+        persistActiveRequirementEvidence(activeCompany.id, nextEvidence);
+      }
+      if (
+        nextPrimaryAggregate &&
+        reconciledRequirements.primaryRequirementId !== primaryRequirementId
+      ) {
+        emitRequirementCompanyEvent({
+          companyId: activeCompany.id,
+          kind: primaryRequirementId ? "requirement_promoted" : "requirement_seeded",
+          aggregate: nextPrimaryAggregate,
+          actorId: nextPrimaryAggregate.ownerActorId,
+        });
+      }
     },
 
     deleteWorkItemRecord: (workItemId) => {
-      const { activeCompany, activeWorkItems } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeWorkItems,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany) {
         return;
       }
 
       const next = activeWorkItems.filter((item) => item.id !== workItemId);
-      set({ activeWorkItems: next });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems: next,
+        activeRoomRecords,
+        activeRequirementEvidence,
+      });
+      set({
+        activeWorkItems: next,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveWorkItems(activeCompany.id, next);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
   };
 }

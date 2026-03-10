@@ -156,6 +156,22 @@ describe("work-item helpers", () => {
     });
   });
 
+  it("builds stable mission step timestamps for the same mission snapshot", () => {
+    const mission = createMission();
+
+    const first = buildWorkItemRecordFromMission({
+      companyId: "company-1",
+      mission,
+    });
+    const second = buildWorkItemRecordFromMission({
+      companyId: "company-1",
+      mission,
+    });
+
+    expect(second.steps).toEqual(first.steps);
+    expect(second.steps.map((step) => step.updatedAt)).toEqual([mission.updatedAt, mission.updatedAt]);
+  });
+
   it("prefers topic and start time when picking the active work item", () => {
     const older = buildWorkItemRecordFromMission({
       companyId: "company-1",

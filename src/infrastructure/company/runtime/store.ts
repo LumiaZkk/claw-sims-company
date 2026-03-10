@@ -8,6 +8,7 @@ import { buildDispatchActions } from "./dispatches";
 import { buildMissionActions } from "./missions";
 import { buildRoomActions } from "./rooms";
 import { buildRoundActions } from "./rounds";
+import { buildRequirementActions } from "./requirements";
 import { buildWorkItemActions } from "./work-items";
 
 const initialCompanyState = loadInitialCompanyState();
@@ -22,6 +23,9 @@ export const useCompanyRuntimeStore = create<CompanyRuntimeState>((set, get) => 
   activeMissionRecords: initialCompanyState.activeMissionRecords,
   activeConversationStates: initialCompanyState.activeConversationStates,
   activeWorkItems: initialCompanyState.activeWorkItems,
+  activeRequirementAggregates: initialCompanyState.activeRequirementAggregates,
+  activeRequirementEvidence: initialCompanyState.activeRequirementEvidence,
+  primaryRequirementId: initialCompanyState.primaryRequirementId,
   activeRoundRecords: initialCompanyState.activeRoundRecords,
   activeArtifacts: initialCompanyState.activeArtifacts,
   activeDispatches: initialCompanyState.activeDispatches,
@@ -35,6 +39,7 @@ export const useCompanyRuntimeStore = create<CompanyRuntimeState>((set, get) => 
   ...buildRoomActions(set, get),
   ...buildMissionActions(set, get),
   ...buildWorkItemActions(set, get),
+  ...buildRequirementActions(set, get),
   ...buildRoundActions(set, get),
   ...buildArtifactActions(set, get),
   ...buildDispatchActions(set, get),

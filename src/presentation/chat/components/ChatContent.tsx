@@ -1,5 +1,5 @@
 import { RefreshCcw } from "lucide-react";
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, memo } from "react";
 
 import { parseHrDepartmentPlan } from "../../../application/org/employee-ops";
 import { HrDepartmentPlanCard } from "../../../components/chat/HrDepartmentPlanCard";
@@ -31,7 +31,7 @@ type ChatContentProps = {
   streamText?: string | null;
 };
 
-export function ChatContent({
+export const ChatContent = memo(function ChatContent({
   content,
   isDarkBg = false,
   hideTaskTrackerPanel,
@@ -170,4 +170,4 @@ export function ChatContent({
   }
 
   return null;
-}
+});

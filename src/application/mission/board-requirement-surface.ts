@@ -13,7 +13,12 @@ import type {
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import type { RequirementScope } from "./requirement-scope";
 import type { Company } from "../../domain/org/types";
-import type { ConversationStateRecord, TrackedTask, WorkItemRecord } from "../../domain/mission/types";
+import type {
+  ConversationStateRecord,
+  RequirementAggregateRecord,
+  TrackedTask,
+  WorkItemRecord,
+} from "../../domain/mission/types";
 import type { RequirementRoomRecord } from "../../domain/delegation/types";
 import type { TaskExecutionState, TaskStep } from "../../domain/mission/types";
 import type { GatewaySessionRow } from "../gateway";
@@ -254,6 +259,8 @@ type BuildBoardRequirementSurfaceInput = {
   company: Company;
   activeConversationStates: ConversationStateRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
   companySessions: Array<GatewaySessionRow & { agentId: string }>;
   companySessionSnapshots: RequirementSessionSnapshot[];
   activeRoomRecords: RequirementRoomRecord[];
@@ -294,6 +301,9 @@ export function buildBoardRequirementSurface(
     company: input.company,
     activeConversationStates: input.activeConversationStates,
     activeWorkItems: input.activeWorkItems,
+    activeRequirementAggregates: input.activeRequirementAggregates,
+    primaryRequirementId: input.primaryRequirementId,
+    activeRoomRecords: input.activeRoomRecords,
     companySessions: input.companySessions,
     companySessionSnapshots: input.companySessionSnapshots,
     currentTime: input.currentTime,

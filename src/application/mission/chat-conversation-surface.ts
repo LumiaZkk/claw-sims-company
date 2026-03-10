@@ -9,6 +9,7 @@ import type { HandoffRecord, RequirementRoomRecord, RequestRecord } from "../../
 import type { Company } from "../../domain/org/types";
 import type {
   ConversationStateRecord,
+  RequirementAggregateRecord,
   TrackedTask,
   WorkItemRecord,
 } from "../../domain/mission/types";
@@ -75,6 +76,8 @@ type BuildChatConversationSurfaceInput = {
   activeRequirementRoom: RequirementRoomRecord | null;
   activeRoomRecords: RequirementRoomRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
   companySessionSnapshots: RequirementSessionSnapshot[];
   requirementRoomSnapshots: RequirementSessionSnapshot[];
   requirementRoomSnapshotAgentIds: string[];
@@ -232,6 +235,9 @@ export function buildChatConversationSurface(
     activeCompany: input.activeCompany,
     activeConversationState: input.activeConversationState,
     activeWorkItems: input.activeWorkItems,
+    activeRequirementAggregates: input.activeRequirementAggregates,
+    primaryRequirementId: input.primaryRequirementId,
+    activeRoomRecords: input.activeRoomRecords,
     companySessionSnapshots: input.companySessionSnapshots,
     requestPreview: input.requestPreview,
     handoffPreview: input.handoffPreview,

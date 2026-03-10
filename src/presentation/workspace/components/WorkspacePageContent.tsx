@@ -1,6 +1,7 @@
 import {
   ArrowUpRight,
   BookOpen,
+  BookOpenCheck,
   Compass,
   FileCode2,
   RefreshCcw,
@@ -71,6 +72,7 @@ type WorkspacePageContentProps = {
   onOpenCtoWorkbench: (tool: WorkspaceWorkbenchTool) => void;
   onOpenFileChat: (agentId: string) => void;
   onOpenCtoChat: () => void;
+  onOpenRequirementCenter?: () => void;
 };
 
 function WorkspaceReaderSection({
@@ -376,6 +378,7 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
     onSelectApp,
     onOpenCtoWorkbench,
     onOpenCtoChat,
+    onOpenRequirementCenter,
   } = props;
 
   return (
@@ -395,6 +398,12 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                 </p>
               </div>
               <div className="flex flex-wrap gap-3">
+                {onOpenRequirementCenter ? (
+                  <Button type="button" variant="outline" onClick={onOpenRequirementCenter}>
+                    <BookOpenCheck className="mr-2 h-4 w-4" />
+                    返回需求中心
+                  </Button>
+                ) : null}
                 <Button type="button" onClick={() => onOpenCtoWorkbench("consistency-checker")}>
                   让 CTO 开发一致性工具
                 </Button>

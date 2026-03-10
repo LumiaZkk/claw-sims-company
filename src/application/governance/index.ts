@@ -4,13 +4,14 @@ import {
   selectExceptionInboxState,
 } from "../../infrastructure/company/runtime/selectors";
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
+import { useShallow } from "zustand/react/shallow";
 
 export function useCeoCockpitQuery() {
-  return useCompanyRuntimeStore(selectCeoCockpitState);
+  return useCompanyRuntimeStore(useShallow(selectCeoCockpitState));
 }
 
 export function useExceptionInboxQuery() {
-  return useCompanyRuntimeStore(selectExceptionInboxState);
+  return useCompanyRuntimeStore(useShallow(selectExceptionInboxState));
 }
 
 export function useGovernanceApp() {

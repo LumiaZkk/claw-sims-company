@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   BarChart,
   BookOpen,
+  BookOpenCheck,
   Settings,
   Palette,
   CalendarClock,
@@ -13,6 +14,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
 import { ApprovalModalHost } from "./components/system/approval-modal-host";
 import { GatewayNotificationHost } from "./components/system/gateway-notification-host";
+import { RequirementAggregateHost } from "./components/system/requirement-aggregate-host";
 import { GatewayStatusBanner } from "./components/system/gateway-status-banner";
 import { ToastHost } from "./components/ui/toast-host";
 import { useCompanyShellCommands, useCompanyShellQuery } from "./application/company/shell";
@@ -33,6 +35,7 @@ import { CEOHomePage } from "./pages/CEOHomePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EmployeeList } from "./pages/EmployeeList";
 import { EmployeeProfile } from "./pages/EmployeeProfile";
+import { RequirementCenterPage } from "./pages/RequirementCenterPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 
@@ -270,6 +273,10 @@ export default function App() {
                 <LayoutDashboard className="mr-3 h-4 w-4" />
                 工作看板
               </Link>
+              <Link to="/requirement" className={navClass("/requirement")}>
+                <BookOpenCheck className="mr-3 h-4 w-4" />
+                需求中心
+              </Link>
               {workspaceApps.length > 0 && (
                 <Link to="/workspace" className={navClass("/workspace")}>
                   <BookOpen className="mr-3 h-4 w-4" />
@@ -369,6 +376,7 @@ export default function App() {
                 <Route path="/employees" element={<EmployeeList />} />
                 <Route path="/employees/:id" element={<EmployeeProfile />} />
                 <Route path="/board" element={<BoardPage />} />
+                <Route path="/requirement" element={<RequirementCenterPage />} />
                 <Route path="/workspace" element={<WorkspacePage />} />
                 <Route path="/automation" element={<AutomationPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
@@ -391,6 +399,7 @@ export default function App() {
       <ToastHost />
       <ApprovalModalHost />
       <GatewayNotificationHost />
+      <RequirementAggregateHost />
     </>
   );
 }

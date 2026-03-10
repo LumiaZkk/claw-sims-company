@@ -1,4 +1,11 @@
 import { persistConversationStateRecords } from "../persistence/conversation-state-persistence";
+import {
+  appendRequirementLocalEvidence,
+  emitRequirementCompanyEvent,
+  persistActiveRequirementAggregates,
+  persistActiveRequirementEvidence,
+  reconcileActiveRequirementState,
+} from "./requirements";
 import type { CompanyRuntimeState, ConversationStateRecord, RuntimeGet, RuntimeSet } from "./types";
 
 export function persistActiveConversationStates(
@@ -27,7 +34,15 @@ export function buildConversationStateActions(
 ): Pick<CompanyRuntimeState, "setConversationCurrentWorkKey" | "clearConversationState"> {
   return {
     setConversationCurrentWorkKey: (conversationId, workKey, workItemId, roundId) => {
-      const { activeCompany, activeConversationStates } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeWorkItems,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany || !conversationId) {
         return;
       }
@@ -57,12 +72,68 @@ export function buildConversationStateActions(
         next.push(nextRecord);
       }
       const sorted = next.sort((left, right) => right.updatedAt - left.updatedAt);
-      set({ activeConversationStates: sorted });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates: sorted,
+        activeWorkItems,
+        activeRoomRecords,
+        activeRequirementEvidence,
+      });
+      const previousPrimaryAggregate =
+        primaryRequirementId
+          ? activeRequirementAggregates.find((aggregate) => aggregate.id === primaryRequirementId) ?? null
+          : null;
+      const nextPrimaryAggregate =
+        reconciledRequirements.primaryRequirementId
+          ? reconciledRequirements.activeRequirementAggregates.find(
+              (aggregate) => aggregate.id === reconciledRequirements.primaryRequirementId,
+            ) ?? null
+          : null;
+      const nextEvidence =
+        nextPrimaryAggregate && reconciledRequirements.primaryRequirementId !== primaryRequirementId
+          ? appendRequirementLocalEvidence({
+              companyId: activeCompany.id,
+              evidence: activeRequirementEvidence,
+              eventType: "requirement_promoted",
+              aggregate: nextPrimaryAggregate,
+              previousAggregate: previousPrimaryAggregate,
+              actorId: nextPrimaryAggregate.ownerActorId,
+              timestamp: nextRecord.updatedAt,
+            })
+          : activeRequirementEvidence;
+      set({
+        activeConversationStates: sorted,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        activeRequirementEvidence: nextEvidence,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveConversationStates(activeCompany.id, sorted);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
+      if (nextEvidence !== activeRequirementEvidence) {
+        persistActiveRequirementEvidence(activeCompany.id, nextEvidence);
+      }
+      if (nextPrimaryAggregate && reconciledRequirements.primaryRequirementId !== primaryRequirementId) {
+        emitRequirementCompanyEvent({
+          companyId: activeCompany.id,
+          kind: "requirement_promoted",
+          aggregate: nextPrimaryAggregate,
+          actorId: nextPrimaryAggregate.ownerActorId,
+        });
+      }
     },
 
     clearConversationState: (conversationId) => {
-      const { activeCompany, activeConversationStates } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeWorkItems,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany || !conversationId) {
         return;
       }
@@ -70,8 +141,22 @@ export function buildConversationStateActions(
       if (next.length === activeConversationStates.length) {
         return;
       }
-      set({ activeConversationStates: next });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates: next,
+        activeWorkItems,
+        activeRoomRecords,
+        activeRequirementEvidence,
+      });
+      set({
+        activeConversationStates: next,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveConversationStates(activeCompany.id, next);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
   };
 }

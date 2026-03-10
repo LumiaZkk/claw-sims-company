@@ -22,6 +22,9 @@ export function selectMissionBoardState(state: CompanyRuntimeState) {
     activeDispatches: state.activeDispatches,
     activeRoomRecords: state.activeRoomRecords,
     activeWorkItems: state.activeWorkItems,
+    activeRequirementAggregates: state.activeRequirementAggregates,
+    activeRequirementEvidence: state.activeRequirementEvidence,
+    primaryRequirementId: state.primaryRequirementId,
     activeArtifacts: state.activeArtifacts,
   };
 }
@@ -34,6 +37,8 @@ export function selectConversationWorkspaceState(state: CompanyRuntimeState) {
     activeMissionRecords: state.activeMissionRecords,
     activeConversationStates: state.activeConversationStates,
     activeWorkItems: state.activeWorkItems,
+    activeRequirementAggregates: state.activeRequirementAggregates,
+    primaryRequirementId: state.primaryRequirementId,
     activeRoundRecords: state.activeRoundRecords,
     activeArtifacts: state.activeArtifacts,
     activeDispatches: state.activeDispatches,
@@ -47,6 +52,8 @@ export function selectWorkspaceArtifactsState(state: CompanyRuntimeState) {
     activeConversationStates: state.activeConversationStates,
     activeArtifacts: state.activeArtifacts,
     activeWorkItems: state.activeWorkItems,
+    activeRequirementAggregates: state.activeRequirementAggregates,
+    primaryRequirementId: state.primaryRequirementId,
   };
 }
 
@@ -56,6 +63,8 @@ export function selectCeoCockpitState(state: CompanyRuntimeState) {
     activeRoomRecords: state.activeRoomRecords,
     activeRoomBindings: state.activeRoomBindings,
     activeWorkItems: state.activeWorkItems,
+    activeRequirementAggregates: state.activeRequirementAggregates,
+    primaryRequirementId: state.primaryRequirementId,
   };
 }
 
@@ -67,6 +76,8 @@ export function selectExceptionInboxState(state: CompanyRuntimeState) {
     activeDispatches: state.activeDispatches,
     activeRoomRecords: state.activeRoomRecords,
     activeWorkItems: state.activeWorkItems,
+    activeRequirementAggregates: state.activeRequirementAggregates,
+    primaryRequirementId: state.primaryRequirementId,
   };
 }
 

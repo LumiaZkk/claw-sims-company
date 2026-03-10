@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  BookOpenCheck,
   Building2,
   CheckCircle2,
   Crown,
@@ -37,6 +38,8 @@ export function CEOHomePageScreen() {
   const navigate = useNavigate();
   const {
     activeCompany,
+    activeRequirementAggregates,
+    primaryRequirementId,
     activeRoomRecords,
     activeRoomBindings,
     activeWorkItems,
@@ -51,6 +54,9 @@ export function CEOHomePageScreen() {
   const [applyingRecommendationId, setApplyingRecommendationId] = useState<string | null>(null);
 
   const ceo = activeCompany?.employees.find((employee) => employee.metaRole === "ceo") ?? null;
+  const hasPrimaryRequirement = Boolean(
+    primaryRequirementId || activeRequirementAggregates.some((aggregate) => aggregate.primary),
+  );
   const orgAutopilotEnabled = activeCompany ? isOrgAutopilotEnabled(activeCompany) : false;
   const { sessions, ceoHistory, currentTime } = useCeoRuntimeState({
     activeCompany,
@@ -207,6 +213,12 @@ export function CEOHomePageScreen() {
                 </div>
               </div>
               <div className="flex gap-2">
+                {hasPrimaryRequirement ? (
+                  <Button variant="outline" onClick={() => navigate("/requirement")}>
+                    <BookOpenCheck className="mr-2 h-4 w-4" />
+                    打开需求中心
+                  </Button>
+                ) : null}
                 <Button variant="outline" onClick={() => navigate(`/chat/${ceo.agentId}`)}>
                   <MessageSquare className="mr-2 h-4 w-4" />
                   进入 CEO 深聊

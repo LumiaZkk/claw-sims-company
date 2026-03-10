@@ -11,7 +11,18 @@ export type DelegationEventKind =
   | "subtask_completed"
   | "subtask_blocked";
 
-export type CompanyEventKind = DelegationEventKind;
+export type WorkflowEventKind =
+  | "requirement_seeded"
+  | "requirement_promoted"
+  | "requirement_progressed"
+  | "requirement_owner_changed"
+  | "requirement_room_bound"
+  | "requirement_completed"
+  | "requirement_acceptance_requested"
+  | "requirement_accepted"
+  | "requirement_reopened";
+
+export type CompanyEventKind = DelegationEventKind | WorkflowEventKind;
 
 export type DelegationEvent = {
   eventId: string;
@@ -30,7 +41,9 @@ export type DelegationEvent = {
   payload: Record<string, unknown>;
 };
 
-export type CompanyEvent = DelegationEvent;
+export type CompanyEvent = Omit<DelegationEvent, "kind"> & {
+  kind: CompanyEventKind;
+};
 
 export type DelegationEventsListResult = {
   companyId: string;
@@ -53,7 +66,31 @@ export function createDelegationEvent(
   };
 }
 
-export const createCompanyEvent = createDelegationEvent;
+export function createCompanyEvent(
+  input: Omit<CompanyEvent, "eventId" | "createdAt"> & {
+    eventId?: string;
+    createdAt?: number;
+  },
+): CompanyEvent {
+  return {
+    ...input,
+    eventId: input.eventId ?? crypto.randomUUID(),
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+function isDelegationEventKind(kind: CompanyEventKind): kind is DelegationEventKind {
+  return (
+    kind === "dispatch_sent" ||
+    kind === "dispatch_blocked" ||
+    kind === "report_acknowledged" ||
+    kind === "report_answered" ||
+    kind === "report_blocked" ||
+    kind === "subtask_spawned" ||
+    kind === "subtask_completed" ||
+    kind === "subtask_blocked"
+  );
+}
 
 function readPayloadString(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
@@ -76,7 +113,7 @@ function readPayloadStringArray(payload: Record<string, unknown>, key: string): 
   return entries.length > 0 ? entries : undefined;
 }
 
-function resolveDispatchSessionKey(event: DelegationEvent): string | undefined {
+function resolveDispatchSessionKey(event: CompanyEvent): string | undefined {
   if (event.sessionKey?.trim()) {
     return event.sessionKey.trim();
   }
@@ -86,14 +123,14 @@ function resolveDispatchSessionKey(event: DelegationEvent): string | undefined {
   return undefined;
 }
 
-function resolveDispatchTitle(event: DelegationEvent, existing?: DispatchRecord): string {
+function resolveDispatchTitle(event: CompanyEvent, existing?: DispatchRecord): string {
   if (event.kind.startsWith("report_")) {
     return existing?.title ?? readPayloadString(event.payload, "title") ?? "Company dispatch";
   }
   return readPayloadString(event.payload, "title") ?? existing?.title ?? "Company dispatch";
 }
 
-function resolveDispatchSummary(event: DelegationEvent, existing?: DispatchRecord): string {
+function resolveDispatchSummary(event: CompanyEvent, existing?: DispatchRecord): string {
   if (event.kind.startsWith("report_")) {
     return (
       existing?.summary ??
@@ -111,7 +148,7 @@ function resolveDispatchSummary(event: DelegationEvent, existing?: DispatchRecor
 }
 
 function resolveDispatchOwnerActorId(
-  event: DelegationEvent,
+  event: CompanyEvent,
   existing?: DispatchRecord,
 ): DispatchRecord["fromActorId"] {
   if (existing?.fromActorId) {
@@ -124,7 +161,7 @@ function resolveDispatchOwnerActorId(
 }
 
 function resolveDispatchTargetActorIds(
-  event: DelegationEvent,
+  event: CompanyEvent,
   existing?: DispatchRecord,
 ): string[] {
   if (existing?.targetActorIds?.length) {
@@ -137,8 +174,11 @@ function resolveDispatchTargetActorIds(
 }
 
 function resolveDispatchStatusFromEvent(
-  kind: DelegationEventKind,
+  kind: CompanyEventKind,
 ): DispatchRecord["status"] | null {
+  if (!isDelegationEventKind(kind)) {
+    return null;
+  }
   if (kind === "dispatch_sent") {
     return "sent";
   }
@@ -157,7 +197,10 @@ function resolveDispatchStatusFromEvent(
   return null;
 }
 
-function resolveRequestStatusFromEvent(kind: DelegationEventKind): RequestRecord["status"] | null {
+function resolveRequestStatusFromEvent(kind: CompanyEventKind): RequestRecord["status"] | null {
+  if (!isDelegationEventKind(kind)) {
+    return null;
+  }
   if (kind === "report_acknowledged") {
     return "acknowledged";
   }
@@ -170,7 +213,7 @@ function resolveRequestStatusFromEvent(kind: DelegationEventKind): RequestRecord
   return null;
 }
 
-function resolveRequestResolution(event: DelegationEvent): RequestRecord["resolution"] {
+function resolveRequestResolution(event: CompanyEvent): RequestRecord["resolution"] {
   const resolution = readPayloadString(event.payload, "resolution");
   if (
     resolution === "pending" ||
@@ -219,7 +262,7 @@ export function mergeDispatchRecords(
 
 export function projectDelegationFromEvents(input: {
   company: Company;
-  events: DelegationEvent[];
+  events: CompanyEvent[];
   existingDispatches?: DispatchRecord[];
 }): {
   dispatches: DispatchRecord[];
@@ -237,6 +280,9 @@ export function projectDelegationFromEvents(input: {
   const orderedEvents = [...input.events].sort((left, right) => left.createdAt - right.createdAt);
 
   orderedEvents.forEach((event) => {
+    if (!isDelegationEventKind(event.kind)) {
+      return;
+    }
     if (event.sessionKey?.trim()) {
       coveredSessionKeys.add(event.sessionKey.trim());
     }

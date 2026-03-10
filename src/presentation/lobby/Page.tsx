@@ -206,6 +206,8 @@ function CompanyLobbyPageContent({
             : "这里只看异常、成员状态和最近活动。完整任务顺序和子任务进度请去工作看板。"
         }
         canContactCeo={Boolean(ceoEmployee)}
+        canOpenRequirementCenter={Boolean(requirementOverview || primaryWorkItem)}
+        onOpenRequirementCenter={() => navigate("/requirement")}
         onOpenBoard={() => navigate("/board")}
         onContactCeo={() => ceoEmployee && navigate(`/chat/${ceoEmployee.agentId}`)}
       />
@@ -229,6 +231,7 @@ function CompanyLobbyPageContent({
             : null
         }
         onOpenBoard={() => navigate("/board")}
+        onOpenRequirementCenter={() => navigate("/requirement")}
       />
 
       <LobbyMetricCards

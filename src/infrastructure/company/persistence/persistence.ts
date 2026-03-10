@@ -12,6 +12,8 @@ import { clearArtifactRecords } from "./artifact-persistence";
 import { clearDispatchRecords } from "./dispatch-persistence";
 import { clearRequirementRoomRecords } from "./room-persistence";
 import { clearRoomConversationBindings } from "./room-binding-persistence";
+import { clearRequirementAggregateRecords } from "./requirement-aggregate-persistence";
+import { clearRequirementEvidenceEvents } from "./requirement-evidence-persistence";
 import { clearWorkItemRecords } from "./work-item-persistence";
 import { clearCompanyRuntimeSnapshot } from "../runtime/company-runtime-snapshot";
 import { generateCeoSoul } from "../../../domain/org/meta-agent-souls";
@@ -297,6 +299,8 @@ function clearLocalCompanyState(companyId: string) {
   clearRequirementRoomRecords(companyId);
   clearRoomConversationBindings(companyId);
   clearWorkItemRecords(companyId);
+  clearRequirementAggregateRecords(companyId);
+  clearRequirementEvidenceEvents(companyId);
   clearCompanyRuntimeSnapshot(companyId);
 }
 

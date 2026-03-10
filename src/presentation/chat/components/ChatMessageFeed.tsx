@@ -1,5 +1,7 @@
 import { Sparkles } from "lucide-react";
+import { memo, useMemo } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "../../../components/ui/avatar";
+import type { DispatchRecord } from "../../../domain/delegation/types";
 import type { ChatDisplayItem } from "../view-models/messages";
 import {
   extractTextFromMessage,
@@ -12,12 +14,50 @@ import { cn, formatTime, getAvatarUrl } from "../../../lib/utils";
 import { ChatContent } from "./ChatContent";
 import { ChatAssignmentActions } from "./ChatAssignmentActions";
 
-export function ChatMessageFeed(input: {
+function getDispatchStatusMeta(status: DispatchRecord["status"]) {
+  if (status === "answered") {
+    return {
+      label: "已回复",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+  if (status === "acknowledged") {
+    return {
+      label: "已接单",
+      className: "border-sky-200 bg-sky-50 text-sky-700",
+    };
+  }
+  if (status === "blocked") {
+    return {
+      label: "已阻塞",
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+    };
+  }
+  if (status === "superseded") {
+    return {
+      label: "已覆盖",
+      className: "border-slate-200 bg-slate-50 text-slate-500",
+    };
+  }
+  if (status === "sent") {
+    return {
+      label: "已派发",
+      className: "border-indigo-200 bg-indigo-50 text-indigo-700",
+    };
+  }
+  return {
+    label: "待发送",
+    className: "border-slate-200 bg-slate-50 text-slate-500",
+  };
+}
+
+type ChatMessageFeedProps = {
   hiddenDisplayItemCount: number;
   renderWindowStep: number;
   displayItemsLength: number;
   visibleDisplayItems: ChatDisplayItem[];
   activeCompany: Company | null;
+  activeDispatches: DispatchRecord[];
   activeRoomRecords: RequirementRoomRecord[];
   isCeoSession: boolean;
   isGroup: boolean;
@@ -37,7 +77,34 @@ export function ChatMessageFeed(input: {
   emptyStateText: string;
   onExpandDisplayWindow: (nextSize: number) => void;
   onNavigateToRoute: (route: string) => void;
-}) {
+};
+
+type ChatMessageListProps = Omit<ChatMessageFeedProps, "hasActiveRun" | "streamText" | "isGenerating">;
+
+const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProps) {
+  const employeeNameByAgentId = useMemo(() => {
+    const records = new Map<string, string>();
+    input.activeCompany?.employees.forEach((employee) => {
+      if (employee.agentId?.trim()) {
+        records.set(employee.agentId, employee.nickname ?? employee.agentId);
+      }
+    });
+    return records;
+  }, [input.activeCompany]);
+
+  const dispatchByRoomMessageId = useMemo(() => {
+    const records = new Map<string, DispatchRecord>();
+    input.activeDispatches.forEach((dispatch) => {
+      if (dispatch.sourceMessageId?.trim()) {
+        records.set(dispatch.sourceMessageId, dispatch);
+      }
+      if (dispatch.responseMessageId?.trim()) {
+        records.set(dispatch.responseMessageId, dispatch);
+      }
+    });
+    return records;
+  }, [input.activeDispatches]);
+
   return (
     <>
       {input.hiddenDisplayItemCount > 0 ? (
@@ -102,6 +169,34 @@ export function ChatMessageFeed(input: {
         const renderableContent = getRenderableMessageContent(msg.content);
         const bubbleContent = renderableContent ?? msg.content;
         const assignmentText = msg.role === "assistant" ? extractTextFromMessage(msg) : null;
+        const roomMessageId =
+          typeof msg.roomMessageId === "string" && msg.roomMessageId.trim().length > 0
+            ? msg.roomMessageId.trim()
+            : null;
+        const linkedDispatch = roomMessageId ? dispatchByRoomMessageId.get(roomMessageId) ?? null : null;
+        const audienceLabels =
+          input.isGroup && Array.isArray(msg.roomAudienceAgentIds) && msg.roomAudienceAgentIds.length > 0
+            ? msg.roomAudienceAgentIds
+                .map((agentId) => employeeNameByAgentId.get(agentId) ?? agentId)
+                .filter((label): label is string => Boolean(label))
+            : [];
+        const roomAgentId =
+          typeof msg.roomAgentId === "string" && msg.roomAgentId.trim().length > 0
+            ? msg.roomAgentId.trim()
+            : null;
+        const sourceLabel =
+          roomAgentId
+            ? employeeNameByAgentId.get(roomAgentId) ?? roomAgentId
+            : typeof msg.roomSenderLabel === "string" && msg.roomSenderLabel.trim().length > 0
+              ? msg.roomSenderLabel.trim()
+              : null;
+        const dispatchMeta = linkedDispatch ? getDispatchStatusMeta(linkedDispatch.status) : null;
+        const showRoomMeta =
+          input.isGroup &&
+          (audienceLabels.length > 0 ||
+            Boolean(sourceLabel) ||
+            Boolean(linkedDispatch) ||
+            typeof msg.roomMessageSource === "string");
 
         return (
           <div
@@ -168,8 +263,6 @@ export function ChatMessageFeed(input: {
                     }
                     hideTaskTrackerPanel={input.isCeoSession && msg.role === "assistant"}
                     hideToolActivityBlocks
-                    hasActiveRun={input.hasActiveRun}
-                    streamText={input.streamText}
                   />
                   {assignmentText ? (
                     <ChatAssignmentActions
@@ -188,6 +281,59 @@ export function ChatMessageFeed(input: {
                       onNavigateToRoute={input.onNavigateToRoute}
                     />
                   ) : null}
+                  {showRoomMeta ? (
+                    <div
+                      className={cn(
+                        "mt-3 flex flex-wrap gap-1.5 text-[11px]",
+                        sender.isOutgoing
+                          ? "text-indigo-50/95"
+                          : "text-slate-500",
+                      )}
+                    >
+                      {audienceLabels.length > 0 ? (
+                        <span
+                          className={cn(
+                            "rounded-full border px-2 py-0.5",
+                            sender.isOutgoing
+                              ? "border-white/20 bg-white/10 text-white/90"
+                              : "border-slate-200 bg-slate-50 text-slate-600",
+                          )}
+                        >
+                          派给 {audienceLabels.slice(0, 3).join("、")}
+                          {audienceLabels.length > 3 ? ` +${audienceLabels.length - 3}` : ""}
+                        </span>
+                      ) : null}
+                      {sourceLabel && !sender.isOutgoing ? (
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600">
+                          来自 {sourceLabel}
+                        </span>
+                      ) : null}
+                      {linkedDispatch ? (
+                        <>
+                          <span
+                            className={cn(
+                              "rounded-full border px-2 py-0.5",
+                              sender.isOutgoing
+                                ? "border-white/20 bg-white/10 text-white/90"
+                                : "border-slate-200 bg-slate-50 text-slate-600",
+                            )}
+                          >
+                            对应派单 {linkedDispatch.title}
+                          </span>
+                          <span
+                            className={cn(
+                              "rounded-full border px-2 py-0.5",
+                              sender.isOutgoing
+                                ? "border-white/20 bg-white/10 text-white/90"
+                                : dispatchMeta?.className ?? "border-slate-200 bg-slate-50 text-slate-500",
+                            )}
+                          >
+                            {dispatchMeta?.label ?? "已关联"}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -200,7 +346,20 @@ export function ChatMessageFeed(input: {
           <p className="text-sm">{input.emptyStateText}</p>
         </div>
       ) : null}
-      {input.streamText ? (
+    </>
+  );
+});
+
+const ChatStreamingState = memo(function ChatStreamingState(input: {
+  streamText: string | null;
+  isGenerating: boolean;
+  groupTopic: string | null;
+  emp: EmployeeRef | null;
+  isGroup: boolean;
+  hasActiveRun: boolean;
+}) {
+  if (input.streamText) {
+    return (
         <div className="group flex max-w-full justify-start">
           <div className="flex max-w-full gap-3 lg:max-w-[95%] xl:max-w-[90%] flex-row">
             <Avatar className="mt-1 h-8 w-8 shrink-0 border bg-white">
@@ -222,8 +381,11 @@ export function ChatMessageFeed(input: {
             </div>
           </div>
         </div>
-      ) : null}
-      {input.isGenerating && !input.streamText ? (
+    );
+  }
+
+  if (input.isGenerating) {
+    return (
         <div className="group flex max-w-full justify-start">
           <div className="flex max-w-full gap-3 lg:max-w-[95%] xl:max-w-[90%] flex-row">
             <Avatar className="mt-1 h-8 w-8 shrink-0 border bg-white">
@@ -245,7 +407,47 @@ export function ChatMessageFeed(input: {
             </div>
           </div>
         </div>
-      ) : null}
+    );
+  }
+
+  return null;
+});
+
+export const ChatMessageFeed = memo(function ChatMessageFeed(input: ChatMessageFeedProps) {
+  return (
+    <>
+      <ChatMessageList
+        hiddenDisplayItemCount={input.hiddenDisplayItemCount}
+        renderWindowStep={input.renderWindowStep}
+        displayItemsLength={input.displayItemsLength}
+        visibleDisplayItems={input.visibleDisplayItems}
+        activeCompany={input.activeCompany}
+        activeDispatches={input.activeDispatches}
+        activeRoomRecords={input.activeRoomRecords}
+        isCeoSession={input.isCeoSession}
+        isGroup={input.isGroup}
+        groupTopic={input.groupTopic}
+        emp={input.emp}
+        effectiveOwnerAgentId={input.effectiveOwnerAgentId}
+        requirementRoomSessionsLength={input.requirementRoomSessionsLength}
+        targetAgentId={input.targetAgentId}
+        currentConversationRequirementTopicKey={input.currentConversationRequirementTopicKey}
+        requirementOverviewTopicKey={input.requirementOverviewTopicKey}
+        conversationMissionRecordId={input.conversationMissionRecordId}
+        persistedWorkItemId={input.persistedWorkItemId}
+        groupWorkItemId={input.groupWorkItemId}
+        emptyStateText={input.emptyStateText}
+        onExpandDisplayWindow={input.onExpandDisplayWindow}
+        onNavigateToRoute={input.onNavigateToRoute}
+      />
+      <ChatStreamingState
+        streamText={input.streamText}
+        isGenerating={input.isGenerating}
+        groupTopic={input.groupTopic}
+        emp={input.emp}
+        isGroup={input.isGroup}
+        hasActiveRun={input.hasActiveRun}
+      />
     </>
   );
-}
+});

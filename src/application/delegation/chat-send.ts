@@ -169,6 +169,13 @@ export async function executeChatSend(input: ExecuteChatSendInput): Promise<Chat
     input.roomBroadcastMode,
   );
   const dispatchId = workItemId ? `dispatch:${workItemId}:${dispatchStartedAt}` : null;
+  const outgoingRoomMessage = createOutgoingRequirementRoomMessage({
+    roomId: roomId ?? input.productRoomId ?? input.effectiveRequirementRoom?.id ?? "room:unknown",
+    sessionKey: roomId ?? input.productRoomId ?? input.effectiveRequirementRoom?.id ?? "room:unknown",
+    text: input.text,
+    audienceAgentIds,
+    timestamp: dispatchStartedAt,
+  });
   if (dispatchId && workItemId) {
     input.upsertDispatchRecord({
       id: dispatchId,
@@ -179,6 +186,7 @@ export async function executeChatSend(input: ExecuteChatSendInput): Promise<Chat
       fromActorId: input.targetAgentId ?? input.effectiveRequirementRoom?.ownerActorId ?? null,
       targetActorIds: audienceAgentIds,
       status: "sent",
+      sourceMessageId: outgoingRoomMessage.id,
       providerRunId: fulfilledDispatches[0]?.runId,
       topicKey: input.currentConversationTopicKey ?? undefined,
       createdAt: dispatchStartedAt,
@@ -210,14 +218,7 @@ export async function executeChatSend(input: ExecuteChatSendInput): Promise<Chat
 
   input.appendRoomMessages(
     roomId ?? "room:unknown",
-    [
-      createOutgoingRequirementRoomMessage({
-        roomId: roomId ?? input.productRoomId ?? input.effectiveRequirementRoom?.id ?? "room:unknown",
-        sessionKey: roomId ?? input.productRoomId ?? input.effectiveRequirementRoom?.id ?? "room:unknown",
-        text: input.text,
-        audienceAgentIds,
-      }),
-    ],
+    [outgoingRoomMessage],
     {
       sessionKey: input.effectiveRequirementRoom?.sessionKey ?? input.sessionKey ?? `room:${roomId ?? "unknown"}`,
       companyId: input.company.id,

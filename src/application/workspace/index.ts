@@ -10,8 +10,8 @@ import {
 import { readCompanyRuntimeSnapshot, writeCompanyRuntimeSnapshot } from "../company/runtime-snapshot";
 import { gateway, type AgentListEntry, useGatewayStore } from "../gateway";
 import { isStrategicRequirementTopic } from "../mission/requirement-kind";
+import { selectPrimaryRequirementProjection } from "../mission/requirement-aggregate";
 import { isReliableWorkItemRecord } from "../mission/work-item-signal";
-import { pickConversationScopedWorkItem } from "../mission/work-item";
 import type { ArtifactRecord } from "../../domain/artifact/types";
 import type { Company } from "../../domain/org/types";
 import type { WorkItemRecord } from "../../domain/mission/types";
@@ -225,7 +225,13 @@ export function buildWorkspaceWorkbenchRequest(
 }
 
 export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
-  const { activeCompany, activeConversationStates, activeWorkItems, activeArtifacts } =
+  const {
+    activeCompany,
+    activeWorkItems,
+    activeRequirementAggregates,
+    primaryRequirementId,
+    activeArtifacts,
+  } =
     useWorkspaceArtifactsQuery();
   const { syncArtifactMirrorRecords } = useArtifactApp();
   const connected = useGatewayStore((state) => state.connected);
@@ -245,17 +251,21 @@ export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
     supportsAgentFiles && providerManifest.storageStrategy === "provider-files";
   const ctoEmployee =
     activeCompany?.employees.find((employee) => employee.metaRole === "cto") ?? null;
-  const ceoEmployee =
-    activeCompany?.employees.find((employee) => employee.metaRole === "ceo") ?? null;
 
-  const ceoConversationWorkItem = useMemo<WorkItemRecord | null>(
+  const primaryRequirementProjection = useMemo(
     () =>
-      pickConversationScopedWorkItem({
-        items: activeWorkItems.filter((item) => item.status !== "archived" && isReliableWorkItemRecord(item)),
-        conversationStates: activeConversationStates,
-        actorId: ceoEmployee?.agentId ?? null,
+      selectPrimaryRequirementProjection({
+        company: activeCompany,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeWorkItems,
+        activeRoomRecords: [],
       }),
-    [activeConversationStates, activeWorkItems, ceoEmployee?.agentId],
+    [activeCompany, activeRequirementAggregates, activeWorkItems, primaryRequirementId],
+  );
+  const ceoConversationWorkItem = useMemo<WorkItemRecord | null>(
+    () => primaryRequirementProjection.workItem,
+    [primaryRequirementProjection.workItem],
   );
 
   const activeWorkspaceWorkItem = useMemo<WorkItemRecord | null>(() => {

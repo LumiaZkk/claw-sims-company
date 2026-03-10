@@ -12,16 +12,20 @@ import {
   buildRoomRecordIdFromWorkItem,
   normalizeProductWorkItemIdentity,
 } from "../../../application/mission/work-item";
+import { areWorkItemRecordCollectionsEquivalent } from "../../../application/mission/work-item-equivalence";
 import {
   areRequirementRoomRecordsEquivalent,
   sortRequirementRoomMemberIds,
 } from "../../../application/delegation/room-routing";
 import { isArtifactRequirementTopic } from "../../../application/mission/requirement-kind";
 import {
-  areWorkItemRecordCollectionsEquivalent,
   persistActiveWorkItems,
   reconcileStoredWorkItems,
 } from "./work-items";
+import {
+  persistActiveRequirementAggregates,
+  reconcileActiveRequirementState,
+} from "./requirements";
 
 const ROOM_MESSAGE_LIMIT = 120;
 
@@ -110,7 +114,17 @@ export function buildRoomActions(
 > {
   return {
     upsertRoomRecord: (room) => {
-      const { activeCompany, activeRoomRecords, activeWorkItems, activeArtifacts, activeDispatches } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeWorkItems,
+        activeArtifacts,
+        activeDispatches,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany) {
         return;
       }
@@ -196,13 +210,38 @@ export function buildRoomActions(
       ) {
         return;
       }
-      set({ activeRoomRecords: sorted, activeWorkItems: reconciledWorkItems });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems: reconciledWorkItems,
+        activeRoomRecords: sorted,
+        activeRequirementEvidence,
+      });
+      set({
+        activeRoomRecords: sorted,
+        activeWorkItems: reconciledWorkItems,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveRooms(activeCompany.id, sorted);
       persistActiveWorkItems(activeCompany.id, reconciledWorkItems);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
 
     appendRoomMessages: (roomId, messages, meta) => {
-      const { activeCompany, activeRoomRecords, activeWorkItems, activeArtifacts, activeDispatches } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeWorkItems,
+        activeArtifacts,
+        activeDispatches,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany || messages.length === 0) {
         return;
       }
@@ -310,9 +349,24 @@ export function buildRoomActions(
       ) {
         return;
       }
-      set({ activeRoomRecords: sorted, activeWorkItems: reconciledWorkItems });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems: reconciledWorkItems,
+        activeRoomRecords: sorted,
+        activeRequirementEvidence,
+      });
+      set({
+        activeRoomRecords: sorted,
+        activeWorkItems: reconciledWorkItems,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveRooms(activeCompany.id, sorted);
       persistActiveWorkItems(activeCompany.id, reconciledWorkItems);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
 
     upsertRoomConversationBindings: (bindings) => {
@@ -343,16 +397,40 @@ export function buildRoomActions(
     },
 
     deleteRoomRecord: (roomId) => {
-      const { activeCompany, activeRoomRecords, activeRoomBindings } = get();
+      const {
+        activeCompany,
+        activeConversationStates,
+        activeRequirementAggregates,
+        activeRequirementEvidence,
+        activeRoomRecords,
+        activeRoomBindings,
+        activeWorkItems,
+        primaryRequirementId,
+      } = get();
       if (!activeCompany) {
         return;
       }
 
       const next = activeRoomRecords.filter((room) => room.id !== roomId);
       const nextBindings = activeRoomBindings.filter((binding) => binding.roomId !== roomId);
-      set({ activeRoomRecords: next, activeRoomBindings: nextBindings });
+      const reconciledRequirements = reconcileActiveRequirementState({
+        companyId: activeCompany.id,
+        activeRequirementAggregates,
+        primaryRequirementId,
+        activeConversationStates,
+        activeWorkItems,
+        activeRoomRecords: next,
+        activeRequirementEvidence,
+      });
+      set({
+        activeRoomRecords: next,
+        activeRoomBindings: nextBindings,
+        activeRequirementAggregates: reconciledRequirements.activeRequirementAggregates,
+        primaryRequirementId: reconciledRequirements.primaryRequirementId,
+      });
       persistActiveRooms(activeCompany.id, next);
       persistActiveRoomBindings(activeCompany.id, nextBindings);
+      persistActiveRequirementAggregates(activeCompany.id, reconciledRequirements.activeRequirementAggregates);
     },
   };
 }

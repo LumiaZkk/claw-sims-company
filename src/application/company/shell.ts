@@ -3,6 +3,7 @@ import { readCompanyRuntimeState, selectCompanyShellState } from "../../infrastr
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
 import type { CompanyBootstrapPhase } from "../../infrastructure/company/runtime/types";
 import type { Company, CyberCompanyConfig } from "../../domain/org/types";
+import { useShallow } from "zustand/react/shallow";
 
 export type CompanyShellState = {
   config: CyberCompanyConfig | null;
@@ -13,7 +14,7 @@ export type CompanyShellState = {
 };
 
 export function useCompanyShellQuery() {
-  return useCompanyRuntimeStore(selectCompanyShellState);
+  return useCompanyRuntimeStore(useShallow(selectCompanyShellState));
 }
 
 export function useCompanyShellCommands() {

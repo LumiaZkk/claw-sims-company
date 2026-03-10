@@ -6,10 +6,13 @@ import { peekCachedCompanyConfig } from "../persistence/persistence";
 import { loadRoomConversationBindings } from "../persistence/room-binding-persistence";
 import { loadRequirementRoomRecords } from "../persistence/room-persistence";
 import { loadRoundRecords } from "../persistence/round-persistence";
+import { loadPersistedRequirementRuntimeState, reconcileActiveRequirementState } from "./requirements";
 import type {
   ArtifactRecord,
   Company,
   ConversationMissionRecord,
+  RequirementAggregateRecord,
+  RequirementEvidenceEvent,
   ConversationStateRecord,
   DispatchRecord,
   RoomConversationBindingRecord,
@@ -27,6 +30,9 @@ export type LoadedCompanyProductState = {
   loadedArtifacts: ArtifactRecord[];
   loadedDispatches: DispatchRecord[];
   loadedRoomBindings: RoomConversationBindingRecord[];
+  loadedRequirementAggregates: RequirementAggregateRecord[];
+  loadedRequirementEvidence: RequirementEvidenceEvent[];
+  primaryRequirementId: string | null;
 };
 
 export function loadProductState(companyId: string): LoadedCompanyProductState {
@@ -43,6 +49,17 @@ export function loadProductState(companyId: string): LoadedCompanyProductState {
     artifacts: loadedArtifacts,
     dispatches: loadedDispatches,
   });
+  const persistedRequirementState = loadPersistedRequirementRuntimeState(companyId);
+  const reconciledRequirementState = reconcileActiveRequirementState({
+    companyId,
+    activeRequirementAggregates: persistedRequirementState.loadedRequirementAggregates,
+    primaryRequirementId:
+      persistedRequirementState.loadedRequirementAggregates.find((aggregate) => aggregate.primary)?.id ?? null,
+    activeConversationStates: loadedConversationStates,
+    activeWorkItems: loadedWorkItems,
+    activeRoomRecords: loadedRooms,
+    activeRequirementEvidence: persistedRequirementState.loadedRequirementEvidence,
+  });
 
   return {
     loadedRooms,
@@ -53,6 +70,9 @@ export function loadProductState(companyId: string): LoadedCompanyProductState {
     loadedArtifacts,
     loadedDispatches,
     loadedRoomBindings,
+    loadedRequirementAggregates: reconciledRequirementState.activeRequirementAggregates,
+    loadedRequirementEvidence: persistedRequirementState.loadedRequirementEvidence,
+    primaryRequirementId: reconciledRequirementState.primaryRequirementId,
   };
 }
 
@@ -66,6 +86,9 @@ export function createEmptyProductState(): LoadedCompanyProductState {
     loadedArtifacts: [],
     loadedDispatches: [],
     loadedRoomBindings: [],
+    loadedRequirementAggregates: [],
+    loadedRequirementEvidence: [],
+    primaryRequirementId: null,
   };
 }
 
@@ -82,6 +105,9 @@ export function loadInitialCompanyState() {
       activeMissionRecords: state.loadedMissions,
       activeConversationStates: state.loadedConversationStates,
       activeWorkItems: state.loadedWorkItems,
+      activeRequirementAggregates: state.loadedRequirementAggregates,
+      activeRequirementEvidence: state.loadedRequirementEvidence,
+      primaryRequirementId: state.primaryRequirementId,
       activeRoundRecords: state.loadedRounds,
       activeArtifacts: state.loadedArtifacts,
       activeDispatches: state.loadedDispatches,
@@ -96,6 +122,9 @@ export function loadInitialCompanyState() {
       activeMissionRecords: [],
       activeConversationStates: [],
       activeWorkItems: [],
+      activeRequirementAggregates: [],
+      activeRequirementEvidence: [],
+      primaryRequirementId: null,
       activeRoundRecords: [],
       activeArtifacts: [],
       activeDispatches: [],

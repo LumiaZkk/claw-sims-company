@@ -14,6 +14,7 @@ import type { DispatchRecord, RequirementRoomRecord } from "../../domain/delegat
 import type {
   Company,
   ConversationStateRecord,
+  RequirementAggregateRecord,
   WorkItemRecord,
 } from "../../domain";
 
@@ -23,6 +24,8 @@ type BuildLobbyPageSurfaceInput = {
   activeCompany: Company;
   activeConversationStates: ConversationStateRecord[];
   activeWorkItems: WorkItemRecord[];
+  activeRequirementAggregates: RequirementAggregateRecord[];
+  primaryRequirementId: string | null;
   companySessions: CompanyGatewaySession[];
   companySessionSnapshots: RequirementSessionSnapshot[];
   currentTime: number;
@@ -43,6 +46,9 @@ export function buildLobbyPageSurface(input: BuildLobbyPageSurfaceInput) {
     company: input.activeCompany,
     activeConversationStates: input.activeConversationStates,
     activeWorkItems: input.activeWorkItems,
+    activeRequirementAggregates: input.activeRequirementAggregates,
+    primaryRequirementId: input.primaryRequirementId,
+    activeRoomRecords: input.activeRoomRecords,
     companySessions: input.companySessions,
     companySessionSnapshots: input.companySessionSnapshots,
     currentTime: input.currentTime,
@@ -115,6 +121,8 @@ export function useLobbyPageViewModel(input: { isPageVisible: boolean }) {
       activeDispatches: lobbyViewModel.activeDispatches,
       activeRoomRecords: lobbyViewModel.activeRoomRecords,
       activeWorkItems: lobbyViewModel.activeWorkItems,
+      activeRequirementAggregates: lobbyViewModel.activeRequirementAggregates,
+      primaryRequirementId: lobbyViewModel.primaryRequirementId,
       agentsCache: runtimeState.agentsCache,
       companySessions: runtimeState.companySessions,
       companySessionSnapshots: runtimeState.companySessionSnapshots,
@@ -130,6 +138,8 @@ export function useLobbyPageViewModel(input: { isPageVisible: boolean }) {
     lobbyViewModel.activeDispatches,
     lobbyViewModel.activeRoomRecords,
     lobbyViewModel.activeWorkItems,
+    lobbyViewModel.activeRequirementAggregates,
+    lobbyViewModel.primaryRequirementId,
     runtimeState.agentsCache,
     runtimeState.companySessionSnapshots,
     runtimeState.companySessions,

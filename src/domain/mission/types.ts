@@ -7,6 +7,22 @@ export type WorkItemStatus =
   | "blocked"
   | "archived";
 
+export type RequirementLifecycleState =
+  | "draft"
+  | "active"
+  | "waiting_peer"
+  | "waiting_owner"
+  | "waiting_review"
+  | "blocked"
+  | "completed"
+  | "archived";
+
+export type RequirementAcceptanceStatus =
+  | "not_requested"
+  | "pending"
+  | "accepted"
+  | "rejected";
+
 export type WorkItemKind = "strategic" | "execution" | "artifact";
 
 export type WorkStepStatus = "pending" | "active" | "done" | "blocked" | "skipped";
@@ -91,6 +107,43 @@ export interface WorkItemRecord {
   nextAction: string;
   steps: WorkStepRecord[];
   sourceMissionId?: string;
+}
+
+export interface RequirementAggregateRecord {
+  id: string;
+  companyId: string;
+  topicKey: string | null;
+  kind: "strategic" | "execution";
+  primary: boolean;
+  workItemId: string | null;
+  roomId: string | null;
+  ownerActorId: string | null;
+  ownerLabel: string;
+  stage: string;
+  summary: string;
+  nextAction: string;
+  memberIds: string[];
+  sourceConversationId: string | null;
+  startedAt: number;
+  updatedAt: number;
+  revision: number;
+  lastEvidenceAt: number | null;
+  status: RequirementLifecycleState;
+  acceptanceStatus: RequirementAcceptanceStatus;
+  acceptanceNote?: string | null;
+}
+
+export interface RequirementEvidenceEvent {
+  id: string;
+  companyId: string;
+  aggregateId: string | null;
+  source: "gateway-chat" | "company-event" | "local-command" | "backfill";
+  sessionKey: string | null;
+  actorId: string | null;
+  eventType: string;
+  timestamp: number;
+  payload: Record<string, unknown>;
+  applied: boolean;
 }
 
 export interface ConversationStateRecord {

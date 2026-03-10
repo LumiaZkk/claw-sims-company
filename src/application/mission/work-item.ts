@@ -117,7 +117,10 @@ function normalizeWorkItemStatus(
   return "active";
 }
 
-function toWorkStepRecord(step: ConversationMissionStepRecord): WorkStepRecord {
+function toWorkStepRecord(
+  step: ConversationMissionStepRecord,
+  updatedAt: number,
+): WorkStepRecord {
   return {
     id: step.id,
     title: step.title,
@@ -127,7 +130,7 @@ function toWorkStepRecord(step: ConversationMissionStepRecord): WorkStepRecord {
       step.status === "done" ? "done" : step.status === "wip" ? "active" : "pending",
     completionCriteria: step.detail ?? null,
     detail: step.detail ?? null,
-    updatedAt: Date.now(),
+    updatedAt,
   };
 }
 
@@ -137,7 +140,7 @@ export function buildWorkItemRecordFromMission(input: {
   room?: RequirementRoomRecord | null;
 }): WorkItemRecord {
   const { companyId, mission, room } = input;
-  const steps = mission.planSteps.map(toWorkStepRecord);
+  const steps = mission.planSteps.map((step) => toWorkStepRecord(step, mission.updatedAt));
   const batonActorId = mission.nextAgentId ?? mission.ownerAgentId ?? null;
   const batonLabel = mission.nextLabel || mission.ownerLabel;
   const completedAt = mission.completed ? mission.updatedAt : null;

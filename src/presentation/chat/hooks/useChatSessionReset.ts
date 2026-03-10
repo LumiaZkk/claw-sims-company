@@ -36,8 +36,11 @@ export function useChatSessionReset(input: {
   setActionWatches: Dispatch<SetStateAction<FocusActionWatch[]>>;
   setIsSummaryOpen: (value: boolean) => void;
   setIsTechnicalSummaryOpen: (value: boolean) => void;
-  setIsGenerating: (value: boolean) => void;
-  updateStreamText: (value: string | null) => void;
+  beginGeneratingState: (
+    startedAt: number,
+    options?: { runId?: string | null; streamText?: string | null; persist?: boolean },
+  ) => void;
+  clearGeneratingState: () => void;
   incrementHistoryRefreshNonce: () => void;
   navigate: (to: string, options?: { replace?: boolean }) => void;
   pathname: string;
@@ -67,8 +70,11 @@ export function useChatSessionReset(input: {
       input.setActionWatches([]);
       input.setIsSummaryOpen(false);
       input.setIsTechnicalSummaryOpen(false);
-      input.setIsGenerating(options?.isGenerating === true);
-      input.updateStreamText(null);
+      if (options?.isGenerating === true) {
+        input.beginGeneratingState(Date.now(), { runId: null, streamText: null });
+      } else {
+        input.clearGeneratingState();
+      }
     },
     [input],
   );

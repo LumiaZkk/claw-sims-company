@@ -68,6 +68,11 @@ import { useChatActionSurface } from "./hooks/useChatActionSurface";
 import { useChatPreviewPersistence } from "./hooks/useChatPreviewPersistence";
 import { useChatRuntimeEffects } from "./hooks/useChatRuntimeEffects";
 import { useChatRouteCompanyState } from "./hooks/useChatRouteCompanyState";
+import {
+  clearLiveChatSession,
+  type LiveChatSessionState,
+  upsertLiveChatSession,
+} from "../../application/chat/live-session-cache";
 import type { EmployeeRef } from "../../domain/org/types";
 
 const CHAT_RENDER_WINDOW_STEP = 80;
@@ -120,6 +125,7 @@ export function ChatPageScreen() {
   const [streamText, setStreamText] = useState<string | null>(null);
   const streamTextRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
+  const pendingGenerationStartedAtRef = useRef<number | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const companySessionSnapshotsRef = useRef<RequirementSessionSnapshot[]>([]);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -179,6 +185,60 @@ export function ChatPageScreen() {
     navigate,
     location,
   });
+
+  const restoreGeneratingState = useCallback(
+    (liveSession: Pick<LiveChatSessionState, "runId" | "streamText" | "isGenerating" | "startedAt"> | null) => {
+      activeRunIdRef.current = liveSession?.runId ?? null;
+      setActiveRunId(liveSession?.runId ?? null);
+      pendingGenerationStartedAtRef.current = liveSession?.startedAt ?? null;
+      updateStreamText(liveSession?.streamText ?? null);
+      setIsGenerating(Boolean(liveSession?.isGenerating));
+    },
+    [updateStreamText],
+  );
+
+  const clearGeneratingState = useCallback(
+    (options?: { preserveRuntime?: boolean }) => {
+      activeRunIdRef.current = null;
+      setActiveRunId(null);
+      pendingGenerationStartedAtRef.current = null;
+      updateStreamText(null);
+      setIsGenerating(false);
+      if (!options?.preserveRuntime) {
+        clearLiveChatSession(activeCompany?.id, sessionKey);
+      }
+    },
+    [activeCompany?.id, sessionKey, updateStreamText],
+  );
+
+  const beginGeneratingState = useCallback(
+    (
+      startedAt: number,
+      options?: { runId?: string | null; streamText?: string | null; persist?: boolean },
+    ) => {
+      const nextRunId = options && "runId" in options ? options.runId ?? null : activeRunIdRef.current;
+      const nextStreamText =
+        options && "streamText" in options ? options.streamText ?? null : streamTextRef.current;
+      activeRunIdRef.current = nextRunId;
+      setActiveRunId(nextRunId);
+      pendingGenerationStartedAtRef.current = startedAt;
+      updateStreamText(nextStreamText ?? null);
+      setIsGenerating(true);
+      if (options?.persist === false) {
+        return;
+      }
+      upsertLiveChatSession(activeCompany?.id, sessionKey, {
+        sessionKey: sessionKey ?? "",
+        agentId: targetAgentId,
+        runId: nextRunId,
+        streamText: nextStreamText ?? null,
+        isGenerating: true,
+        startedAt,
+        updatedAt: Date.now(),
+      });
+    },
+    [activeCompany?.id, sessionKey, targetAgentId, updateStreamText],
+  );
   const conversationStateKey = isGroup
     ? groupConversationStateKey
     : sessionKey ?? historyAgentId ?? targetAgentId ?? null;
@@ -840,12 +900,15 @@ export function ChatPageScreen() {
       lastSyncedRoomSignatureRef,
       streamTextRef,
       activeRunIdRef,
+      pendingGenerationStartedAtRef,
       setActiveRunId,
       setLoading,
       setSessionKey,
       setMessages,
       setIsGenerating,
       updateStreamText,
+      restoreGeneratingState,
+      clearGeneratingState,
       upsertRoomRecord,
       upsertRoomConversationBindings,
       appendRoomMessages,
@@ -863,6 +926,7 @@ export function ChatPageScreen() {
       connected,
       currentConversationTopicKey,
       currentConversationWorkItemId,
+      clearGeneratingState,
       effectiveGroupSessionKey,
       effectiveOwnerAgentId,
       effectiveRequirementRoom,
@@ -880,6 +944,7 @@ export function ChatPageScreen() {
       requirementRoomSessions,
       requirementRoomTargetAgentIds,
       routeCompanyConflictMessage,
+      restoreGeneratingState,
       sessionKey,
       setActiveRunId,
       targetAgentId,
@@ -890,6 +955,34 @@ export function ChatPageScreen() {
       upsertTask,
     ],
   );
+
+  useEffect(() => {
+    if (!isGenerating) {
+      return;
+    }
+
+    const pendingSince = pendingGenerationStartedAtRef.current;
+    if (!pendingSince) {
+      return;
+    }
+
+    const hasCompletedReply = messages.some((message) => {
+      const timestamp = typeof message.timestamp === "number" ? message.timestamp : 0;
+      return timestamp >= pendingSince && (message.role === "assistant" || message.role === "system");
+    });
+
+    if (!hasCompletedReply) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      clearGeneratingState();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [clearGeneratingState, isGenerating, messages]);
 
   useChatRuntimeEffects({
     agentId,
@@ -959,8 +1052,8 @@ export function ChatPageScreen() {
     setActionWatches,
     setIsSummaryOpen,
     setIsTechnicalSummaryOpen,
-    setIsGenerating,
-    updateStreamText,
+    beginGeneratingState,
+    clearGeneratingState,
     incrementHistoryRefreshNonce,
     navigate,
     pathname: location.pathname,
@@ -1012,12 +1105,10 @@ export function ChatPageScreen() {
     groupTitle,
     handleClearSession,
     markScrollIntent,
-    updateStreamText,
-    activeRunIdRef,
-    setActiveRunId,
+    beginGeneratingState,
+    clearGeneratingState,
     setAttachments,
     setSending,
-    setIsGenerating,
     setRoomBroadcastMode,
     setMessages,
     upsertRoomConversationBindings,

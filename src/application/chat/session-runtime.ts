@@ -6,6 +6,7 @@ import {
   mergeRequirementRoomRecordFromSnapshots,
 } from "../delegation/room-routing";
 import { gateway, type ChatMessage } from "../gateway";
+import { readLiveChatSession } from "./live-session-cache";
 import { roundSnapshotToChatMessage } from "../mission/history/round-restore";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import type {
@@ -32,6 +33,8 @@ export type ChatSessionInitializationResult = {
   roomBindings?: RoomConversationBindingRecord[];
   isGenerating?: boolean;
   streamText?: string | null;
+  activeRunId?: string | null;
+  generationStartedAt?: number | null;
 };
 
 export async function initializeChatSession(input: {
@@ -103,9 +106,14 @@ export async function initializeChatSession(input: {
 
   if (!input.isGroup) {
     const history = await gateway.getChatHistory(actualKey, CHAT_HISTORY_FETCH_LIMIT);
+    const liveSession = readLiveChatSession(input.activeCompany?.id, actualKey);
     return {
       sessionKey: actualKey,
       messages: history.messages || [],
+      isGenerating: liveSession?.isGenerating ?? false,
+      streamText: liveSession?.streamText ?? null,
+      activeRunId: liveSession?.runId ?? null,
+      generationStartedAt: liveSession?.startedAt ?? null,
     };
   }
 

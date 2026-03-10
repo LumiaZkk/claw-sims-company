@@ -18,11 +18,19 @@ import { GatewayNotificationHost } from "./components/system/gateway-notificatio
 import { RequirementAggregateHost } from "./components/system/requirement-aggregate-host";
 import { GatewayStatusBanner } from "./components/system/gateway-status-banner";
 import { ToastHost } from "./components/ui/toast-host";
+import {
+  clearLiveChatSession,
+  readLiveChatSession,
+  upsertLiveChatSession,
+} from "./application/chat/live-session-cache";
+import { parseChatEventPayload } from "./application/delegation/chat-dispatch";
+import { gateway } from "./application/gateway";
 import { useCompanyShellCommands, useCompanyShellQuery } from "./application/company/shell";
 import { useGatewayStore } from "./application/gateway";
 import { peekCachedCompanyConfig } from "./infrastructure/company/persistence/persistence";
 import { getCompanyWorkspaceApps } from "./application/company/workspace-apps";
 import { OrgAutopilotHost } from "./presentation/org/OrgAutopilotHost";
+import { extractTextFromMessage } from "./presentation/chat/view-models/messages";
 import { toast } from "./components/system/toast-store";
 import { AutomationPage } from "./pages/AutomationPage";
 import { BoardPage } from "./pages/BoardPage";
@@ -39,6 +47,7 @@ import { EmployeeProfile } from "./pages/EmployeeProfile";
 import { RequirementCenterPage } from "./pages/RequirementCenterPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
+import { resolveSessionActorId } from "./lib/sessions";
 
 function CompanyBootstrapScreen() {
   return (
@@ -120,6 +129,55 @@ export default function App() {
       void loadConfig();
     }
   }, [connected, loadConfig]);
+
+  useEffect(() => {
+    if (!activeCompany || !connected) {
+      return;
+    }
+
+    const companyAgentIds = new Set(activeCompany.employees.map((employee) => employee.agentId));
+    const unsubscribe = gateway.subscribe("chat", (rawPayload) => {
+      const payload = parseChatEventPayload(rawPayload);
+      const sessionKey = payload?.sessionKey?.trim();
+      if (!payload || !sessionKey) {
+        return;
+      }
+
+      const actorId = resolveSessionActorId(sessionKey);
+      if (!actorId || !companyAgentIds.has(actorId)) {
+        return;
+      }
+
+      if (payload.state === "delta") {
+        const deltaText = extractTextFromMessage(payload.message);
+        if (!deltaText) {
+          return;
+        }
+
+        const existing = readLiveChatSession(activeCompany.id, sessionKey);
+        if (existing?.streamText && existing.streamText.length > deltaText.length) {
+          return;
+        }
+
+        upsertLiveChatSession(activeCompany.id, sessionKey, {
+          sessionKey,
+          agentId: actorId,
+          runId: payload.runId || existing?.runId || null,
+          streamText: deltaText,
+          isGenerating: true,
+          startedAt: existing?.startedAt ?? Date.now(),
+          updatedAt: Date.now(),
+        });
+        return;
+      }
+
+      if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+        clearLiveChatSession(activeCompany.id, sessionKey);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [activeCompany, connected]);
 
   useEffect(() => {
     // Avoid racing cached-config fallback against the initial auto-reconnect boot.

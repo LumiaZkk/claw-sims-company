@@ -1,4 +1,4 @@
-import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useCallback, type Dispatch, type SetStateAction } from "react";
 import { executeChatSend, type ChatSendAttachment } from "../../../application/delegation/chat-send";
 import type { ProviderManifest, ChatMessage } from "../../../application/gateway";
 import type {
@@ -33,12 +33,13 @@ export function useChatSend(input: {
   groupTitle: string;
   handleClearSession: (reason?: "new" | "reset") => Promise<boolean>;
   markScrollIntent: (mode?: "preserve" | "follow") => void;
-  updateStreamText: (value: string | null) => void;
-  activeRunIdRef: MutableRefObject<string | null>;
-  setActiveRunId: (value: string | null) => void;
+  beginGeneratingState: (
+    startedAt: number,
+    options?: { runId?: string | null; streamText?: string | null; persist?: boolean },
+  ) => void;
+  clearGeneratingState: () => void;
   setAttachments: Dispatch<SetStateAction<ChatSendAttachment[]>>;
   setSending: (value: boolean) => void;
-  setIsGenerating: (value: boolean) => void;
   setRoomBroadcastMode: (value: boolean) => void;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   upsertRoomConversationBindings: (bindings: RoomConversationBindingRecord[]) => void;
@@ -73,13 +74,38 @@ export function useChatSend(input: {
       }
 
       const currentAttachments = [...input.attachments];
+      const generationStartedAt = Date.now();
       input.setAttachments([]);
       input.setSending(true);
-      input.setIsGenerating(true);
       input.markScrollIntent("follow");
-      input.activeRunIdRef.current = null;
-      input.setActiveRunId(null);
-      input.updateStreamText(null);
+      input.beginGeneratingState(generationStartedAt, { runId: null, streamText: null });
+
+      const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+      if (text) {
+        contentBlocks.push({ type: "text", text });
+      }
+      if (hasAttachments) {
+        currentAttachments.forEach((attachment) => {
+          contentBlocks.push({
+            type: "image",
+            source: { type: "base64", media_type: attachment.mimeType, data: attachment.dataUrl },
+          });
+        });
+      }
+
+      if (!input.isGroup) {
+        input.setMessages((previous) => {
+          const nextMessages: ChatMessage[] = [
+            ...previous,
+            {
+              role: "user",
+              content: contentBlocks,
+              timestamp: generationStartedAt,
+            },
+          ];
+          return limitChatMessages(nextMessages) as ChatMessage[];
+        });
+      }
 
       try {
         const result = await executeChatSend({
@@ -109,40 +135,12 @@ export function useChatSend(input: {
           if (result.reason === "no_targets") {
             toast.warning("没有匹配到团队成员", result.message);
           }
-          input.setIsGenerating(false);
+          input.clearGeneratingState();
           return false;
         }
 
         if (result.runId) {
-          input.activeRunIdRef.current = result.runId;
-          input.setActiveRunId(result.runId);
-        }
-
-        if (!input.isGroup) {
-          const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
-          if (text) {
-            contentBlocks.push({ type: "text", text });
-          }
-          if (hasAttachments) {
-            currentAttachments.forEach((attachment) => {
-              contentBlocks.push({
-                type: "image",
-                source: { type: "base64", media_type: attachment.mimeType, data: attachment.dataUrl },
-              });
-            });
-          }
-          input.setMessages((previous) => {
-            const nextMessages: ChatMessage[] = [
-              ...previous,
-              {
-                role: "user",
-                content: contentBlocks,
-                timestamp: Date.now(),
-                ...(result.roomAudienceAgentIds ? { roomAudienceAgentIds: result.roomAudienceAgentIds } : {}),
-              },
-            ];
-            return limitChatMessages(nextMessages) as ChatMessage[];
-          });
+          input.beginGeneratingState(generationStartedAt, { runId: result.runId });
         }
 
         if (result.resetRoomBroadcastMode) {
@@ -152,7 +150,7 @@ export function useChatSend(input: {
         console.error("Failed to send message", error);
         const message = error instanceof Error ? error.message : "无法即时联络目标成员";
         toast.error("指令发送失败", message);
-        input.setIsGenerating(false);
+        input.clearGeneratingState();
         return false;
       } finally {
         input.setSending(false);

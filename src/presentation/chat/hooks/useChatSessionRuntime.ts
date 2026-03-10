@@ -61,12 +61,20 @@ export type ChatSessionRuntimeInput = {
   lastSyncedRoomSignatureRef: MutableRefObject<string | null>;
   streamTextRef: MutableRefObject<string | null>;
   activeRunIdRef: MutableRefObject<string | null>;
+  pendingGenerationStartedAtRef: MutableRefObject<number | null>;
   setActiveRunId: (value: string | null) => void;
   setLoading: (value: boolean) => void;
   setSessionKey: (value: string | null) => void;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setIsGenerating: (value: boolean) => void;
   updateStreamText: (value: string | null) => void;
+  restoreGeneratingState: (state: {
+    runId?: string | null;
+    startedAt: number;
+    streamText?: string | null;
+    isGenerating: boolean;
+  } | null) => void;
+  clearGeneratingState: (options?: { preserveRuntime?: boolean }) => void;
   upsertRoomRecord: (room: RequirementRoomRecord) => void;
   upsertRoomConversationBindings: (bindings: RoomConversationBindingRecord[]) => void;
   appendRoomMessages: (
@@ -148,10 +156,18 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
           );
         }
         if (typeof initialization.isGenerating === "boolean") {
-          input.setIsGenerating(initialization.isGenerating);
-        }
-        if (initialization.streamText !== undefined) {
-          input.updateStreamText(initialization.streamText);
+          input.restoreGeneratingState(
+            initialization.isGenerating
+              ? {
+                  runId: initialization.activeRunId ?? null,
+                  startedAt: initialization.generationStartedAt ?? Date.now(),
+                  streamText: initialization.streamText ?? null,
+                  isGenerating: true,
+                }
+              : null,
+          );
+        } else {
+          input.restoreGeneratingState(null);
         }
       } catch (error) {
         console.error("Failed to init chat:", error);
@@ -167,13 +183,6 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
     if (!input.sessionKey || input.isArchiveView) {
       return;
     }
-
-    const clearStreamingState = () => {
-      input.activeRunIdRef.current = null;
-      input.setActiveRunId(null);
-      input.updateStreamText(null);
-      input.setIsGenerating(false);
-    };
 
     const unsubscribe = gateway.subscribe("chat", (rawPayload) => {
       const payload = parseChatEventPayload(rawPayload);
@@ -193,6 +202,10 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
           input.activeRunIdRef.current = payload.runId || null;
           input.setActiveRunId(payload.runId || null);
           input.updateStreamText(deltaText);
+          if (!input.pendingGenerationStartedAtRef.current) {
+            input.pendingGenerationStartedAtRef.current = Date.now();
+          }
+          input.setIsGenerating(true);
         }
         return;
       }
@@ -280,7 +293,7 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
               },
             );
           }
-          clearStreamingState();
+          input.clearGeneratingState();
           return;
         }
 
@@ -304,7 +317,7 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
           }
           return previous;
         });
-        clearStreamingState();
+        input.clearGeneratingState();
 
         const finalText = incoming ? extractTextFromMessage(incoming) : input.streamTextRef.current;
         if (finalText && input.sessionKey) {
@@ -323,7 +336,7 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
 
       if (payload.state === "aborted") {
         if (input.isGroup) {
-          clearStreamingState();
+          input.clearGeneratingState();
           return;
         }
         if (payload.runId && input.activeRunIdRef.current && payload.runId !== input.activeRunIdRef.current) {
@@ -343,13 +356,13 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
           }
           return previous;
         });
-        clearStreamingState();
+        input.clearGeneratingState();
         return;
       }
 
       if (payload.state === "error") {
         if (input.isGroup) {
-          clearStreamingState();
+          input.clearGeneratingState();
           toast.error("团队房间消息失败", payload.errorMessage ?? "请重试或改为直接联系成员。");
           return;
         }
@@ -363,7 +376,7 @@ export function useChatSessionRuntime(input: ChatSessionRuntimeInput) {
             },
           ].slice(-CHAT_UI_MESSAGE_LIMIT),
         );
-        clearStreamingState();
+        input.clearGeneratingState();
       }
     });
 

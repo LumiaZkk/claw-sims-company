@@ -11,6 +11,8 @@ import type {
   AuthorityCreateCompanyResponse,
   AuthorityDispatchUpsertRequest,
   AuthorityEvent,
+  AuthorityExecutorConfig,
+  AuthorityExecutorConfigPatch,
   AuthorityHealthSnapshot,
   AuthorityRequirementTransitionRequest,
   AuthorityRuntimeSyncRequest,
@@ -63,14 +65,33 @@ function buildWsUrl(baseUrl: string) {
   return `ws://${normalized}/events`;
 }
 
+function createAuthorityUnavailableError(baseUrl: string, path: string, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  return new Error(
+    [
+      `Authority 服务不可达（${normalizedBaseUrl}）。`,
+      "公司配置、公司创建和本机权威源同步都依赖 authority。",
+      "请先运行 `npm run dev`，或检查当前地址/端口是否正确。",
+      `请求路径：${path}。`,
+      `原始错误：${message}`,
+    ].join(" "),
+  );
+}
+
 async function requestJson<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${normalizeBaseUrl(baseUrl)}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+    });
+  } catch (error) {
+    throw createAuthorityUnavailableError(baseUrl, path, error);
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -104,6 +125,24 @@ export class AuthorityClient {
     return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, "/bootstrap");
   }
 
+  async getExecutorConfig() {
+    return requestJson<AuthorityExecutorConfig>(this.baseUrl, "/executor");
+  }
+
+  async patchExecutorConfig(body: AuthorityExecutorConfigPatch) {
+    return requestJson<AuthorityExecutorConfig>(this.baseUrl, "/executor", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async requestGateway<T = unknown>(method: string, params?: unknown) {
+    return requestJson<T>(this.baseUrl, "/gateway/request", {
+      method: "POST",
+      body: JSON.stringify({ method, params }),
+    });
+  }
+
   async createCompany(body: AuthorityCreateCompanyRequest) {
     return requestJson<AuthorityCreateCompanyResponse>(this.baseUrl, "/companies", {
       method: "POST",
@@ -112,7 +151,7 @@ export class AuthorityClient {
   }
 
   async deleteCompany(companyId: string) {
-    return requestJson<{ ok: true }>(this.baseUrl, `/companies/${encodeURIComponent(companyId)}`, {
+    return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, `/companies/${encodeURIComponent(companyId)}`, {
       method: "DELETE",
     });
   }

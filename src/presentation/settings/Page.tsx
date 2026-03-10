@@ -30,6 +30,8 @@ export function SettingsPresentationPage() {
     orgAutopilotEnabled,
     providerConfigs,
     telegramConfig,
+    executorStatus,
+    executorConfig,
     refreshRuntime,
   } = query;
   const {
@@ -44,6 +46,8 @@ export function SettingsPresentationPage() {
     onProviderKeySubmit,
     handleAddProviderSubmit,
     handleSyncModels,
+    handleExecutorConfigSubmit,
+    handleExecutorReconnect,
     handleToggleOrgAutopilot,
     telegramSaving,
     providerKeySaving,
@@ -52,10 +56,12 @@ export function SettingsPresentationPage() {
     codexAuthorizing,
     codexImporting,
     codexRefreshing,
+    executorSaving,
     orgAutopilotSaving,
   } = useGatewaySettingsCommands(query);
 
   const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
+  const [executorDialogOpen, setExecutorDialogOpen] = useState(false);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -121,19 +127,24 @@ export function SettingsPresentationPage() {
       />
 
       <SettingsProvidersChannelsSection
+        executorStatus={executorStatus}
+        executorConfig={executorConfig}
         configSnapshot={configSnapshot}
         codexModels={codexModels}
         providerConfigs={providerConfigs}
         telegramConfig={telegramConfig}
         loading={loading}
+        executorSaving={executorSaving}
         codexAuthorizing={codexAuthorizing}
         codexImporting={codexImporting}
         codexRefreshing={codexRefreshing}
         addProviderSaving={addProviderSaving}
         syncingProvider={syncingProvider}
+        setExecutorDialogOpen={setExecutorDialogOpen}
         setAddProviderDialogOpen={setAddProviderDialogOpen}
         setTelegramDialogOpen={setTelegramDialogOpen}
         updateProviderKey={updateProviderKey}
+        handleExecutorReconnect={handleExecutorReconnect}
         handleStartCodexOAuth={handleStartCodexOAuth}
         handleImportCodexAuth={handleImportCodexAuth}
         handleRefreshCodexModels={handleRefreshCodexModels}
@@ -150,6 +161,9 @@ export function SettingsPresentationPage() {
       />
 
       <SettingsDialogs
+        executorDialogOpen={executorDialogOpen}
+        setExecutorDialogOpen={setExecutorDialogOpen}
+        executorConfig={executorConfig}
         telegramDialogOpen={telegramDialogOpen}
         setTelegramDialogOpen={setTelegramDialogOpen}
         providerKeyDialogOpen={providerKeyDialogOpen}
@@ -158,9 +172,11 @@ export function SettingsPresentationPage() {
         setProviderKeyTarget={setProviderKeyTarget}
         addProviderDialogOpen={addProviderDialogOpen}
         setAddProviderDialogOpen={setAddProviderDialogOpen}
+        executorSaving={executorSaving}
         telegramSaving={telegramSaving}
         providerKeySaving={providerKeySaving}
         addProviderSaving={addProviderSaving}
+        handleExecutorConfigSubmit={handleExecutorConfigSubmit}
         handleTelegramSubmit={handleTelegramSubmit}
         onProviderKeySubmit={onProviderKeySubmit}
         handleAddProviderSubmit={handleAddProviderSubmit}

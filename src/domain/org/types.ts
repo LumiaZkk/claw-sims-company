@@ -16,6 +16,7 @@ export interface Company {
   description: string;
   icon: string;
   template: string;
+  system?: CompanySystemMetadata;
   orgSettings?: CompanyOrgSettings;
   departments?: Department[];
   employees: EmployeeRef[];
@@ -27,6 +28,12 @@ export interface Company {
   knowledgeItems?: SharedKnowledgeItem[];
   retrospectives?: RetrospectiveRecord[];
   createdAt: number;
+}
+
+export interface CompanySystemMetadata {
+  reserved?: boolean;
+  kind?: "openclaw-main";
+  mappedAgentId?: string;
 }
 
 export interface CompanyOrgSettings {

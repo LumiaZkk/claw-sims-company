@@ -16,6 +16,8 @@ npm install
 npm run dev
 ```
 
+`npm run dev` 会同时启动 Vite 前端和本机 Authority 控制面。若需要只启动前端，可使用 `npm run dev:web`。
+
 ## 常用命令
 
 ```bash

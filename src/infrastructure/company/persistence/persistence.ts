@@ -1,4 +1,3 @@
-import { authorityClient } from "../../authority/client";
 import {
   clearCachedAuthorityBootstrap,
   clearCachedAuthorityRuntimeSnapshot,
@@ -6,6 +5,11 @@ import {
   readCachedAuthorityConfig,
   writeCachedAuthorityConfig,
 } from "../../authority/runtime-cache";
+import {
+  deleteAuthorityCompany,
+  getAuthorityBootstrap,
+  saveAuthorityConfig,
+} from "../../../application/gateway/authority-control";
 import type { CyberCompanyConfig } from "./types";
 
 export function peekCachedCompanyConfig(): CyberCompanyConfig | null {
@@ -47,13 +51,13 @@ export function clearConfigOwnerAgentId() {
 }
 
 export async function loadCompanyConfig(): Promise<CyberCompanyConfig | null> {
-  const bootstrap = await authorityClient.bootstrap();
+  const bootstrap = await getAuthorityBootstrap();
   hydrateAuthorityBootstrapCache(bootstrap);
   return bootstrap.config;
 }
 
 export async function saveCompanyConfig(config: CyberCompanyConfig): Promise<boolean> {
-  const bootstrap = await authorityClient.updateConfig(config);
+  const bootstrap = await saveAuthorityConfig(config);
   hydrateAuthorityBootstrapCache(bootstrap);
   return true;
 }
@@ -65,9 +69,8 @@ export async function deleteCompanyCascade(
   if (!currentConfig.companies.some((company) => company.id === companyId)) {
     return currentConfig;
   }
-  await authorityClient.deleteCompany(companyId);
+  const bootstrap = await deleteAuthorityCompany(companyId);
   clearCachedAuthorityRuntimeSnapshot(companyId);
-  const bootstrap = await authorityClient.bootstrap();
   hydrateAuthorityBootstrapCache(bootstrap);
   return bootstrap.config;
 }

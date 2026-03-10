@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
+import { createOpenClawExecutorBridge } from "./openclaw-bridge";
+import { resolveLocalOpenClawGatewayToken } from "./openclaw-local-auth";
 import { parseCompanyBlueprint } from "../../../src/application/company/blueprint";
 import { COMPANY_CONTEXT_FILE_NAME, CEO_OPERATIONS_FILE_NAME, buildCeoOperationsGuide, buildCompanyContextSnapshot } from "../../../src/application/company/agent-context";
 import { COMPANY_TEMPLATES } from "../../../src/application/company/templates";
@@ -19,6 +21,7 @@ import type {
   WorkItemRecord,
 } from "../../../src/domain/mission/types";
 import { generateCeoSoul, generateCooSoul, generateCtoSoul, generateHrSoul } from "../../../src/domain/org/meta-agent-souls";
+import { buildDefaultMainCompany, DEFAULT_MAIN_AGENT_ID, isReservedSystemCompany } from "../../../src/domain/org/system-company";
 import type { Company, CyberCompanyConfig, Department, EmployeeRef, QuickPrompt } from "../../../src/domain/org/types";
 import type {
   AuthorityAppendCompanyEventRequest,
@@ -32,6 +35,8 @@ import type {
   AuthorityCreateCompanyResponse,
   AuthorityDispatchUpsertRequest,
   AuthorityEvent,
+  AuthorityExecutorConfig,
+  AuthorityExecutorConfigPatch,
   AuthorityExecutorStatus,
   AuthorityHealthSnapshot,
   AuthorityRequirementTransitionRequest,
@@ -64,6 +69,7 @@ type RuntimeSliceTables =
 const AUTHORITY_PORT = Number.parseInt(process.env.CYBER_COMPANY_AUTHORITY_PORT ?? "18790", 10);
 const DATA_DIR = path.join(os.homedir(), ".cyber-company", "authority");
 const DB_PATH = path.join(DATA_DIR, "authority.sqlite");
+const DEFAULT_OPENCLAW_URL = "ws://localhost:18789";
 
 const EMPTY_RUNTIME = (companyId: string): AuthorityCompanyRuntimeSnapshot => ({
   companyId,
@@ -81,12 +87,60 @@ const EMPTY_RUNTIME = (companyId: string): AuthorityCompanyRuntimeSnapshot => ({
   updatedAt: Date.now(),
 });
 
-const EXECUTOR_STATUS: AuthorityExecutorStatus = {
-  adapter: "single-executor-local",
-  state: "ready",
-  provider: "none",
-  note: "本机单执行器已启用，远程 provider 可选。",
+type StoredExecutorConfig = {
+  type: "openclaw";
+  openclaw: {
+    url: string;
+    token?: string;
+  };
+  connectionState?: AuthorityExecutorConfig["connectionState"];
+  lastError?: string | null;
+  lastConnectedAt?: number | null;
 };
+
+function createDefaultStoredExecutorConfig(): StoredExecutorConfig {
+  return {
+    type: "openclaw",
+    openclaw: {
+      url: DEFAULT_OPENCLAW_URL,
+      token: "",
+    },
+    connectionState: "idle",
+    lastError: null,
+    lastConnectedAt: null,
+  };
+}
+
+function sanitizeStoredExecutorConfig(value: unknown): StoredExecutorConfig {
+  if (!value || typeof value !== "object") {
+    return createDefaultStoredExecutorConfig();
+  }
+  const candidate = value as Partial<StoredExecutorConfig>;
+  return {
+    type: "openclaw",
+    openclaw: {
+      url:
+        typeof candidate.openclaw?.url === "string" && candidate.openclaw.url.trim().length > 0
+          ? candidate.openclaw.url.trim()
+          : DEFAULT_OPENCLAW_URL,
+      token: typeof candidate.openclaw?.token === "string" ? candidate.openclaw.token : "",
+    },
+    connectionState:
+      candidate.connectionState === "idle" ||
+      candidate.connectionState === "connecting" ||
+      candidate.connectionState === "ready" ||
+      candidate.connectionState === "degraded" ||
+      candidate.connectionState === "blocked"
+        ? candidate.connectionState
+        : "idle",
+    lastError:
+      typeof candidate.lastError === "string" || candidate.lastError === null
+        ? candidate.lastError ?? null
+        : null,
+    lastConnectedAt:
+      typeof candidate.lastConnectedAt === "number" ? candidate.lastConnectedAt : null,
+  };
+}
 
 function isPresent<T>(value: T | null | undefined | false): value is T {
   return Boolean(value);
@@ -143,6 +197,36 @@ async function readJsonBody<T>(request: import("node:http").IncomingMessage): Pr
   return JSON.parse(raw) as T;
 }
 
+type GatewayProxyRequest = {
+  method: string;
+  params?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function toPublicExecutorConfig(config: StoredExecutorConfig): AuthorityExecutorConfig {
+  return {
+    type: "openclaw",
+    openclaw: {
+      url: config.openclaw.url,
+      tokenConfigured: Boolean(config.openclaw.token?.trim() || resolveLocalOpenClawGatewayToken()),
+    },
+    connectionState: config.connectionState ?? "idle",
+    lastError: config.lastError ?? null,
+    lastConnectedAt: config.lastConnectedAt ?? null,
+  };
+}
+
 class AuthorityRepository {
   private readonly db: DatabaseSync;
   private readonly startedAt = Date.now();
@@ -155,10 +239,31 @@ class AuthorityRepository {
     this.initSchema();
   }
 
-  getHealth(): AuthorityHealthSnapshot {
+  getHealth(input?: {
+    executor: AuthorityExecutorStatus;
+    executorConfig: AuthorityExecutorConfig;
+  }): AuthorityHealthSnapshot {
+    const executorConfig = input?.executorConfig ?? toPublicExecutorConfig(this.loadExecutorConfig());
+    const executor =
+      input?.executor ??
+      {
+        adapter: "openclaw-bridge",
+        state:
+          executorConfig.connectionState === "ready"
+            ? "ready"
+            : executorConfig.connectionState === "blocked"
+              ? "blocked"
+              : "degraded",
+        provider: executorConfig.connectionState === "ready" ? "openclaw" : "none",
+        note:
+          executorConfig.connectionState === "ready"
+            ? "Authority 已接入 OpenClaw。"
+            : executorConfig.lastError ?? "Authority 尚未接入 OpenClaw。",
+      };
     return {
       ok: true,
-      executor: EXECUTOR_STATUS,
+      executor,
+      executorConfig,
       authority: {
         dbPath: this.dbPath,
         connected: true,
@@ -323,8 +428,8 @@ class AuthorityRepository {
         "INSERT INTO executor_configs (id, adapter, config_json, updated_at) VALUES (?, ?, ?, ?)",
       ).run(
         "default",
-        EXECUTOR_STATUS.adapter,
-        JSON.stringify({ provider: EXECUTOR_STATUS.provider }),
+        "openclaw-bridge",
+        JSON.stringify(createDefaultStoredExecutorConfig()),
         Date.now(),
       );
     }
@@ -352,12 +457,38 @@ class AuthorityRepository {
     this.writeMetadata("activeCompanyId", companyId ?? "");
   }
 
+  loadExecutorConfig(): StoredExecutorConfig {
+    const row = this.db.prepare("SELECT config_json FROM executor_configs WHERE id = ?").get("default") as
+      | { config_json?: string }
+      | undefined;
+    return sanitizeStoredExecutorConfig(parseJson(row?.config_json, createDefaultStoredExecutorConfig()));
+  }
+
+  saveExecutorConfig(config: StoredExecutorConfig): StoredExecutorConfig {
+    const normalized = sanitizeStoredExecutorConfig(config);
+    this.db.prepare(`
+      INSERT INTO executor_configs (id, adapter, config_json, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        adapter = excluded.adapter,
+        config_json = excluded.config_json,
+        updated_at = excluded.updated_at
+    `).run("default", "openclaw-bridge", JSON.stringify(normalized), Date.now());
+    return normalized;
+  }
+
   loadConfig(): CyberCompanyConfig | null {
     const rows = this.db.prepare("SELECT company_json FROM companies ORDER BY created_at ASC").all() as Array<{
       company_json: string;
     }>;
     if (rows.length === 0) {
-      return null;
+      const defaultCompany = this.ensureDefaultMainCompany();
+      return {
+        version: 1,
+        companies: [defaultCompany],
+        activeCompanyId: defaultCompany.id,
+        preferences: { theme: "classic", locale: "zh-CN" },
+      };
     }
     const companies = rows
       .map((row) => parseJson<Company | null>(row.company_json, null))
@@ -372,6 +503,33 @@ class AuthorityRepository {
       activeCompanyId,
       preferences: { theme: "classic", locale: "zh-CN" },
     };
+  }
+
+  private loadCompanyById(companyId: string): Company | null {
+    const row = this.db.prepare("SELECT company_json FROM companies WHERE id = ?").get(companyId) as
+      | { company_json?: string }
+      | undefined;
+    return parseJson<Company | null>(row?.company_json, null);
+  }
+
+  private ensureDefaultMainCompany(): Company {
+    const defaultTemplate = buildDefaultMainCompany();
+    const existing = this.loadCompanyById(defaultTemplate.id);
+    if (existing) {
+      return existing;
+    }
+
+    const { company, agentFiles } = buildDefaultMainCompanyDefinition();
+    this.saveConfig({
+      version: 1,
+      companies: [company],
+      activeCompanyId: company.id,
+      preferences: { theme: "classic", locale: "zh-CN" },
+    });
+    for (const file of agentFiles) {
+      this.setAgentFile(file.agentId, file.name, file.content);
+    }
+    return company;
   }
 
   private replaceCompanyTables(company: Company) {
@@ -443,10 +601,12 @@ class AuthorityRepository {
     }
 
     this.setActiveCompanyId(config.companies.length > 0 ? config.activeCompanyId : null);
-    return this.getBootstrap();
   }
 
   private deleteCompanyData(companyId: string) {
+    const employeeIds = this.db.prepare("SELECT agent_id FROM employees WHERE company_id = ?").all(companyId) as Array<{
+      agent_id: string;
+    }>;
     const tables = [
       "companies",
       "departments",
@@ -465,6 +625,7 @@ class AuthorityRepository {
       "artifacts",
       "missions",
       "event_log",
+      "executor_runs",
     ] as const;
     for (const table of tables) {
       const column =
@@ -477,22 +638,32 @@ class AuthorityRepository {
               : "company_id";
       this.db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).run(companyId);
     }
+    for (const employeeId of employeeIds) {
+      this.db.prepare("DELETE FROM agent_files WHERE agent_id = ?").run(employeeId.agent_id);
+    }
   }
 
   deleteCompany(companyId: string) {
+    const company = this.loadCompanyById(companyId);
+    if (isReservedSystemCompany(company)) {
+      throw new Error("系统默认公司不可删除。");
+    }
     this.deleteCompanyData(companyId);
     const config = this.loadConfig();
     if (!config) {
       this.setActiveCompanyId(null);
-      return null;
+      return;
     }
     if (!config.companies.some((company) => company.id === config.activeCompanyId)) {
       this.setActiveCompanyId(config.companies[0]?.id ?? null);
     }
-    return this.getBootstrap();
   }
 
-  getBootstrap(): AuthorityBootstrapSnapshot {
+  getBootstrap(input?: {
+    executor: AuthorityExecutorStatus;
+    executorConfig: AuthorityExecutorConfig;
+  }): AuthorityBootstrapSnapshot {
+    const health = this.getHealth(input);
     const config = this.loadConfig();
     const activeCompany =
       config?.companies.find((company) => company.id === config.activeCompanyId) ?? null;
@@ -501,7 +672,8 @@ class AuthorityRepository {
       config,
       activeCompany,
       runtime,
-      executor: EXECUTOR_STATUS,
+      executor: health.executor,
+      executorConfig: health.executorConfig,
       authority: {
         url: `http://127.0.0.1:${AUTHORITY_PORT}`,
         dbPath: this.dbPath,
@@ -516,7 +688,6 @@ class AuthorityRepository {
       throw new Error(`Unknown company: ${companyId}`);
     }
     this.setActiveCompanyId(companyId);
-    return this.getBootstrap();
   }
 
   loadRuntime(companyId: string): AuthorityCompanyRuntimeSnapshot {
@@ -815,6 +986,102 @@ class AuthorityRepository {
     };
   }
 
+  hasCompany(companyId: string): boolean {
+    return Boolean(this.loadCompanyById(companyId));
+  }
+
+  getCompanyAgentIds(companyId?: string | null): string[] {
+    const targetCompanyId = companyId ?? this.getActiveCompanyId();
+    if (!targetCompanyId) {
+      return [];
+    }
+    const rows = this.db.prepare("SELECT agent_id FROM employees WHERE company_id = ?").all(targetCompanyId) as Array<{
+      agent_id: string;
+    }>;
+    return rows.map((row) => row.agent_id);
+  }
+
+  getConversationContext(sessionKey: string): { companyId: string; actorId: string | null } | null {
+    const row = this.db.prepare(`
+      SELECT company_id, actor_id
+      FROM conversations
+      WHERE session_key = ?
+    `).get(sessionKey) as
+      | { company_id?: string; actor_id?: string | null }
+      | undefined;
+    if (!row?.company_id) {
+      return null;
+    }
+    return {
+      companyId: row.company_id,
+      actorId: row.actor_id ?? null,
+    };
+  }
+
+  beginChatDispatch(input: AuthorityChatSendRequest) {
+    const sessionKey = input.sessionKey?.trim() || `agent:${input.actorId}:main`;
+    const now = Date.now();
+    this.ensureConversationRow(input.companyId, input.actorId, sessionKey);
+    this.appendConversationMessage(input.companyId, sessionKey, {
+      role: "user",
+      text: input.message,
+      content: [{ type: "text", text: input.message }],
+      timestamp: now,
+    });
+    return { sessionKey, now };
+  }
+
+  createExecutorRun(input: {
+    runId: string;
+    companyId: string;
+    actorId: string;
+    sessionKey: string;
+    startedAt?: number;
+    payload?: Record<string, unknown>;
+  }) {
+    this.db.prepare(`
+      INSERT INTO executor_runs (id, company_id, actor_id, session_key, status, started_at, finished_at, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.runId,
+      input.companyId,
+      input.actorId,
+      input.sessionKey,
+      "started",
+      input.startedAt ?? Date.now(),
+      null,
+      JSON.stringify(input.payload ?? {}),
+    );
+  }
+
+  updateExecutorRun(
+    runId: string,
+    status: "completed" | "error" | "aborted",
+    payload?: Record<string, unknown>,
+  ) {
+    const existing = this.db.prepare("SELECT payload_json FROM executor_runs WHERE id = ?").get(runId) as
+      | { payload_json?: string }
+      | undefined;
+    const nextPayload = {
+      ...parseJson<Record<string, unknown>>(existing?.payload_json, {}),
+      ...(payload ?? {}),
+    };
+    this.db.prepare(`
+      UPDATE executor_runs
+      SET status = ?, finished_at = ?, payload_json = ?
+      WHERE id = ?
+    `).run(status, Date.now(), JSON.stringify(nextPayload), runId);
+  }
+
+  appendAssistantMessage(sessionKey: string, message: StoredChatMessage) {
+    const context = this.getConversationContext(sessionKey);
+    if (!context) {
+      return null;
+    }
+    this.appendConversationMessage(context.companyId, sessionKey, message);
+    return context;
+  }
+
   appendCompanyEvent(event: CompanyEvent) {
     this.db.prepare(`
       INSERT INTO event_log (event_id, company_id, kind, timestamp, payload_json)
@@ -890,80 +1157,6 @@ class AuthorityRepository {
     return this.saveRuntime({ ...runtime, activeDispatches: nextDispatches });
   }
 
-  private buildLocalReply(company: Company, actorId: string, message: string) {
-    const actor = company.employees.find((employee) => employee.agentId === actorId);
-    const clean = message.trim();
-    if (actor?.metaRole === "ceo") {
-      const strategyLine = /小说|番茄/i.test(clean)
-        ? "我会先按番茄小说的内容生产链拆成：题材定位、角色分工、产能节奏、发布与复盘。"
-        : "我会先把目标拆成团队结构、执行流程和首个可交付里程碑。";
-      return [
-        `我理解你的目标是：${truncate(clean, 120)}`,
-        strategyLine,
-        "第一步我会先收敛主线需求，明确这件事的负责人、阶段和下一步动作。",
-        "如果你认可，我接下来会把它整理成一条正式需求，并给出团队搭建与启动方案。",
-      ].join("\n\n");
-    }
-    const speaker = actor?.nickname ?? actorId;
-    return [
-      `${speaker} 已接到这条任务。`,
-      `我的理解是：${truncate(clean, 120)}`,
-      "我会先给出一版可执行的处理建议，并把关键阻塞点标出来。",
-    ].join("\n\n");
-  }
-
-  sendChat(input: AuthorityChatSendRequest): AuthorityChatSendResponse {
-    const config = this.loadConfig();
-    const company = config?.companies.find((entry) => entry.id === input.companyId);
-    if (!company) {
-      throw new Error(`Unknown company: ${input.companyId}`);
-    }
-    const sessionKey = input.sessionKey?.trim() || `agent:${input.actorId}:main`;
-    this.ensureConversationRow(input.companyId, input.actorId, sessionKey);
-    const now = Date.now();
-    this.appendConversationMessage(input.companyId, sessionKey, {
-      role: "user",
-      text: input.message,
-      content: [{ type: "text", text: input.message }],
-      timestamp: now,
-    });
-
-    const replyText = this.buildLocalReply(company, input.actorId, input.message);
-    const replyMessage: StoredChatMessage = {
-      role: "assistant",
-      text: replyText,
-      content: [{ type: "text", text: replyText }],
-      timestamp: now + 1,
-      provenance: {
-        sourceActorId: input.actorId,
-      },
-    };
-    this.appendConversationMessage(input.companyId, sessionKey, replyMessage);
-
-    const runId = crypto.randomUUID();
-    this.db.prepare(`
-      INSERT INTO executor_runs (id, company_id, actor_id, session_key, status, started_at, finished_at, payload_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      runId,
-      input.companyId,
-      input.actorId,
-      sessionKey,
-      "completed",
-      now,
-      now + 1,
-      JSON.stringify({
-        request: input.message,
-        response: replyText,
-      }),
-    );
-
-    return {
-      runId,
-      status: "started",
-      sessionKey,
-    };
-  }
 }
 
 function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
@@ -1127,7 +1320,38 @@ function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
   return { company, agentFiles };
 }
 
+function buildDefaultMainCompanyDefinition(): {
+  company: Company;
+  agentFiles: Array<{ agentId: string; name: string; content: string }>;
+} {
+  const company = buildDefaultMainCompany();
+
+  return {
+    company,
+    agentFiles: [
+      {
+        agentId: DEFAULT_MAIN_AGENT_ID,
+        name: "SOUL.md",
+        content: generateCeoSoul(company.name),
+      },
+      {
+        agentId: DEFAULT_MAIN_AGENT_ID,
+        name: COMPANY_CONTEXT_FILE_NAME,
+        content: JSON.stringify(buildCompanyContextSnapshot(company), null, 2),
+      },
+      {
+        agentId: DEFAULT_MAIN_AGENT_ID,
+        name: CEO_OPERATIONS_FILE_NAME,
+        content: buildCeoOperationsGuide(company),
+      },
+    ],
+  };
+}
+
 const repository = new AuthorityRepository(DB_PATH);
+const executorBridge = createOpenClawExecutorBridge(repository.loadExecutorConfig(), {
+  resolveFallbackToken: () => resolveLocalOpenClawGatewayToken(),
+});
 const sockets = new Set<WebSocket>();
 
 function broadcast(event: AuthorityEvent) {
@@ -1138,6 +1362,178 @@ function broadcast(event: AuthorityEvent) {
     }
   }
 }
+
+function getExecutorSnapshot() {
+  const current = repository.loadExecutorConfig();
+  const bridgeSnapshot = executorBridge.snapshot();
+  const stored = repository.saveExecutorConfig({
+    ...current,
+    openclaw: {
+      url: bridgeSnapshot.openclaw.url,
+      token: current.openclaw.token ?? "",
+    },
+    connectionState: bridgeSnapshot.connectionState,
+    lastError: bridgeSnapshot.lastError,
+    lastConnectedAt: bridgeSnapshot.lastConnectedAt,
+  });
+  return {
+    executor: executorBridge.status(),
+    executorConfig: toPublicExecutorConfig(stored),
+  };
+}
+
+function buildHealthSnapshot() {
+  return repository.getHealth(getExecutorSnapshot());
+}
+
+function buildBootstrapSnapshot() {
+  return repository.getBootstrap(getExecutorSnapshot());
+}
+
+function broadcastExecutorStatus() {
+  const snapshot = getExecutorSnapshot();
+  broadcast({
+    type: "executor.status",
+    timestamp: Date.now(),
+    payload: {
+      executor: snapshot.executor,
+      executorConfig: snapshot.executorConfig,
+    },
+  });
+}
+
+function normalizeChatPayload(payload: unknown): Extract<AuthorityEvent, { type: "chat" }>["payload"] | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const runId = readString(payload.runId);
+  const sessionKey = readString(payload.sessionKey);
+  const state = readString(payload.state);
+  if (!runId || !sessionKey || !state) {
+    return null;
+  }
+  if (state !== "delta" && state !== "final" && state !== "aborted" && state !== "error") {
+    return null;
+  }
+  return {
+    runId,
+    sessionKey,
+    seq: readNumber(payload.seq) ?? 0,
+    state,
+    message: payload.message as Extract<AuthorityEvent, { type: "chat" }>["payload"]["message"],
+    errorMessage: readString(payload.errorMessage) ?? undefined,
+  };
+}
+
+async function syncAgentFileToExecutor(input: { agentId: string; name: string; content: string }) {
+  return executorBridge.request("agents.files.set", input);
+}
+
+async function seedCompanyFilesToExecutor(files: Array<{ agentId: string; name: string; content: string }>) {
+  const results = await Promise.allSettled(files.map((file) => syncAgentFileToExecutor(file)));
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length > 0) {
+    console.warn(`Failed to seed ${failures.length} company file(s) to OpenClaw executor.`);
+  }
+}
+
+async function proxyGatewayRequest<T>(method: string, params?: unknown): Promise<T> {
+  if (method === "sessions.list") {
+    const result = await executorBridge.request<AuthoritySessionListResponse>(method, params ?? {});
+    const requestedAgentId = isRecord(params) ? readString(params.agentId) : null;
+    if (requestedAgentId) {
+      return result as T;
+    }
+    const allowedAgentIds = new Set(repository.getCompanyAgentIds());
+    if (allowedAgentIds.size === 0) {
+      return result as T;
+    }
+    const sessions = (result.sessions ?? []).filter((session) => {
+      const actorId =
+        readString(session.actorId)
+        ?? (typeof session.key === "string" && session.key.startsWith("agent:")
+          ? session.key.split(":")[1] ?? null
+          : null);
+      return actorId ? allowedAgentIds.has(actorId) : false;
+    });
+    return {
+      ...result,
+      count: sessions.length,
+      sessions,
+    } as T;
+  }
+
+  if (method === "sessions.reset") {
+    const sessionKey = isRecord(params) ? readString(params.key) : null;
+    const result = await executorBridge.request<T>(method, params ?? {});
+    if (sessionKey) {
+      repository.resetSession(sessionKey);
+    }
+    return result;
+  }
+
+  if (method === "sessions.delete") {
+    const sessionKey = isRecord(params) ? readString(params.key) : null;
+    const result = await executorBridge.request<T>(method, params ?? {});
+    if (sessionKey) {
+      repository.deleteSession(sessionKey);
+    }
+    return result;
+  }
+
+  if (method === "agents.files.set" && isRecord(params)) {
+    const agentId = readString(params.agentId);
+    const name = readString(params.name);
+    const content = typeof params.content === "string" ? params.content : null;
+    if (agentId && name && content !== null) {
+      repository.setAgentFile(agentId, name, content);
+    }
+  }
+
+  return executorBridge.request<T>(method, params ?? {});
+}
+
+executorBridge.onStateChange(() => {
+  broadcastExecutorStatus();
+});
+
+executorBridge.onEvent((event) => {
+  if (event.event !== "chat") {
+    return;
+  }
+  const payload = normalizeChatPayload(event.payload);
+  if (!payload) {
+    return;
+  }
+  const context = repository.getConversationContext(payload.sessionKey);
+  if (payload.state === "final" && payload.message) {
+    repository.appendAssistantMessage(payload.sessionKey, payload.message as StoredChatMessage);
+    repository.updateExecutorRun(payload.runId, "completed", { response: payload.message });
+  } else if (payload.state === "error") {
+    repository.updateExecutorRun(payload.runId, "error", {
+      errorMessage: payload.errorMessage ?? "OpenClaw run failed",
+    });
+  } else if (payload.state === "aborted") {
+    repository.updateExecutorRun(payload.runId, "aborted");
+  }
+  broadcast({
+    type: "chat",
+    companyId: context?.companyId ?? null,
+    timestamp: Date.now(),
+    payload,
+  });
+  if (payload.state !== "delta") {
+    broadcast({
+      type: "conversation.updated",
+      companyId: context?.companyId ?? null,
+      timestamp: Date.now(),
+    });
+  }
+});
+
+void executorBridge.reconnect().catch((error) => {
+  console.warn("Authority executor bridge failed to connect on startup:", error);
+});
 
 const server = createServer(async (request, response) => {
   setCorsHeaders(response);
@@ -1150,18 +1546,65 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
   try {
     if (request.method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, repository.getHealth());
+      sendJson(response, 200, buildHealthSnapshot());
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/bootstrap") {
-      sendJson(response, 200, repository.getBootstrap());
+      sendJson(response, 200, buildBootstrapSnapshot());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/executor") {
+      sendJson(response, 200, getExecutorSnapshot().executorConfig);
+      return;
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/executor") {
+      const body = await readJsonBody<AuthorityExecutorConfigPatch>(request);
+      const current = repository.loadExecutorConfig();
+      const desired = repository.saveExecutorConfig({
+        ...current,
+        openclaw: {
+          url:
+            typeof body.openclaw?.url === "string" && body.openclaw.url.trim().length > 0
+              ? body.openclaw.url.trim()
+              : current.openclaw.url,
+          token:
+            body.openclaw?.token !== undefined
+              ? body.openclaw.token ?? ""
+              : (current.openclaw.token ?? ""),
+        },
+      });
+      try {
+        await executorBridge.patchConfig({
+          openclaw: {
+            url: desired.openclaw.url,
+            token: desired.openclaw.token ?? "",
+          },
+          reconnect: body.reconnect ?? Boolean(body.openclaw),
+        });
+      } finally {
+        broadcastExecutorStatus();
+      }
+      sendJson(response, 200, getExecutorSnapshot().executorConfig);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/gateway/request") {
+      const body = await readJsonBody<GatewayProxyRequest>(request);
+      if (!body.method || !body.method.trim()) {
+        sendError(response, 400, "Gateway proxy method is required.");
+        return;
+      }
+      sendJson(response, 200, await proxyGatewayRequest(body.method.trim(), body.params));
       return;
     }
 
     if (request.method === "PUT" && url.pathname === "/config") {
       const body = await readJsonBody<{ config: CyberCompanyConfig }>(request);
-      sendJson(response, 200, repository.saveConfig(body.config));
+      repository.saveConfig(body.config);
+      sendJson(response, 200, buildBootstrapSnapshot());
       broadcast({ type: "bootstrap.updated", timestamp: Date.now() });
       return;
     }
@@ -1187,6 +1630,7 @@ const server = createServer(async (request, response) => {
       agentFiles.forEach((file) => {
         repository.setAgentFile(file.agentId, file.name, file.content);
       });
+      await seedCompanyFilesToExecutor(agentFiles);
       const payload: AuthorityCreateCompanyResponse = {
         company,
         config: repository.loadConfig()!,
@@ -1199,15 +1643,21 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "DELETE" && url.pathname.startsWith("/companies/")) {
       const companyId = decodeURIComponent(url.pathname.slice("/companies/".length));
-      repository.deleteCompany(companyId);
-      sendJson(response, 200, { ok: true });
+      try {
+        repository.deleteCompany(companyId);
+      } catch (error) {
+        sendError(response, 400, error instanceof Error ? error.message : String(error));
+        return;
+      }
+      sendJson(response, 200, buildBootstrapSnapshot());
       broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/company/switch") {
       const body = await readJsonBody<AuthoritySwitchCompanyRequest>(request);
-      sendJson(response, 200, repository.switchCompany(body.companyId));
+      repository.switchCompany(body.companyId);
+      sendJson(response, 200, buildBootstrapSnapshot());
       broadcast({ type: "bootstrap.updated", companyId: body.companyId, timestamp: Date.now() });
       return;
     }
@@ -1242,9 +1692,20 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/sessions") {
-      const companyId = url.searchParams.get("companyId");
       const agentId = url.searchParams.get("agentId");
-      sendJson(response, 200, repository.listSessions(companyId, agentId));
+      const limit = url.searchParams.has("limit")
+        ? Number.parseInt(url.searchParams.get("limit") ?? "", 10)
+        : undefined;
+      const search = readString(url.searchParams.get("search"));
+      sendJson(
+        response,
+        200,
+        await proxyGatewayRequest<AuthoritySessionListResponse>("sessions.list", {
+          ...(agentId ? { agentId } : {}),
+          ...(typeof limit === "number" && Number.isFinite(limit) ? { limit } : {}),
+          ...(search ? { search } : {}),
+        }),
+      );
       return;
     }
 
@@ -1253,33 +1714,47 @@ const server = createServer(async (request, response) => {
       const limit = url.searchParams.has("limit")
         ? Number.parseInt(url.searchParams.get("limit") ?? "", 10)
         : undefined;
-      sendJson(response, 200, repository.getChatHistory(sessionKey, limit));
+      sendJson(
+        response,
+        200,
+        await proxyGatewayRequest<AuthoritySessionHistoryResponse>("chat.history", {
+          sessionKey,
+          ...(typeof limit === "number" && Number.isFinite(limit) ? { limit } : {}),
+        }),
+      );
       return;
     }
 
     if (request.method === "POST" && url.pathname.startsWith("/sessions/") && url.pathname.endsWith("/reset")) {
       const sessionKey = decodeURIComponent(url.pathname.replace(/^\/sessions\//, "").replace(/\/reset$/, ""));
-      sendJson(response, 200, repository.resetSession(sessionKey));
+      sendJson(response, 200, await proxyGatewayRequest("sessions.reset", { key: sessionKey }));
       broadcast({ type: "conversation.updated", timestamp: Date.now() });
       return;
     }
 
     if (request.method === "DELETE" && url.pathname.startsWith("/sessions/")) {
       const sessionKey = decodeURIComponent(url.pathname.replace(/^\/sessions\//, ""));
-      sendJson(response, 200, repository.deleteSession(sessionKey));
+      sendJson(response, 200, await proxyGatewayRequest("sessions.delete", { key: sessionKey }));
       broadcast({ type: "conversation.updated", timestamp: Date.now() });
       return;
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/agents/") && url.pathname.endsWith("/files")) {
       const agentId = decodeURIComponent(url.pathname.replace(/^\/agents\//, "").replace(/\/files$/, ""));
-      sendJson(response, 200, repository.listAgentFiles(agentId));
+      sendJson(response, 200, await proxyGatewayRequest("agents.files.list", { agentId }));
       return;
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/agents/") && url.pathname.includes("/files/")) {
       const [, , agentId, , ...nameParts] = url.pathname.split("/");
-      sendJson(response, 200, repository.getAgentFile(decodeURIComponent(agentId), decodeURIComponent(nameParts.join("/"))));
+      sendJson(
+        response,
+        200,
+        await proxyGatewayRequest("agents.files.get", {
+          agentId: decodeURIComponent(agentId),
+          name: decodeURIComponent(nameParts.join("/")),
+        }),
+      );
       return;
     }
 
@@ -1289,7 +1764,11 @@ const server = createServer(async (request, response) => {
       sendJson(
         response,
         200,
-        repository.setAgentFile(decodeURIComponent(agentId), decodeURIComponent(nameParts.join("/")), body.content),
+        await proxyGatewayRequest("agents.files.set", {
+          agentId: decodeURIComponent(agentId),
+          name: decodeURIComponent(nameParts.join("/")),
+          content: body.content,
+        }),
       );
       broadcast({ type: "artifact.updated", timestamp: Date.now() });
       return;
@@ -1297,22 +1776,33 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/commands/chat.send") {
       const body = await readJsonBody<AuthorityChatSendRequest>(request);
-      const result = repository.sendChat(body);
-      sendJson(response, 200, result);
-      const history = repository.getChatHistory(result.sessionKey, 1);
-      const message = history.messages[history.messages.length - 1];
-      broadcast({
-        type: "chat",
+      if (!repository.hasCompany(body.companyId)) {
+        throw new Error(`Unknown company: ${body.companyId}`);
+      }
+      const dispatch = repository.beginChatDispatch(body);
+      const gatewayAck = await proxyGatewayRequest<Omit<AuthorityChatSendResponse, "sessionKey">>("chat.send", {
+        sessionKey: dispatch.sessionKey,
+        message: body.message,
+        deliver: false,
+        ...(body.attachments ? { attachments: body.attachments } : {}),
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const result: AuthorityChatSendResponse = {
+        ...gatewayAck,
+        sessionKey: dispatch.sessionKey,
+      };
+      repository.createExecutorRun({
+        runId: result.runId,
         companyId: body.companyId,
-        timestamp: Date.now(),
+        actorId: body.actorId,
+        sessionKey: dispatch.sessionKey,
+        startedAt: dispatch.now,
         payload: {
-          runId: result.runId,
-          sessionKey: result.sessionKey,
-          seq: 1,
-          state: "final",
-          message,
+          request: body.message,
+          attachments: body.attachments ?? [],
         },
       });
+      sendJson(response, 200, result);
       broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
       return;
     }

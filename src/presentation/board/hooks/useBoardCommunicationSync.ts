@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { syncDelegationClosedLoopState } from "../../../application/delegation/closed-loop";
 import { gateway } from "../../../application/gateway";
 import type { RequirementSessionSnapshot } from "../../../domain/mission/requirement-snapshot";
@@ -49,22 +49,47 @@ export function useBoardCommunicationSync(input: {
     isPageVisible,
   } = input;
   const [recoveringCommunication, setRecoveringCommunication] = useState(false);
+  const companyId = activeCompany.id;
+  const latestInputRef = useRef({
+    activeCompany,
+    companySessionSnapshots,
+    activeArtifacts,
+    activeDispatches,
+    replaceDispatchRecords,
+    setCompanySessionSnapshots,
+    updateCompany,
+  });
+  const recoveryInFlightRef = useRef(false);
+  latestInputRef.current = {
+    activeCompany,
+    companySessionSnapshots,
+    activeArtifacts,
+    activeDispatches,
+    replaceDispatchRecords,
+    setCompanySessionSnapshots,
+    updateCompany,
+  };
 
   const handleRecoverCommunication = useCallback(
     async (options?: { silent?: boolean; force?: boolean }) => {
+      if (recoveryInFlightRef.current) {
+        return;
+      }
+      recoveryInFlightRef.current = true;
       setRecoveringCommunication(true);
       try {
+        const current = latestInputRef.current;
         const { companyPatch, dispatches, sessionSnapshots, summary } =
           await syncDelegationClosedLoopState({
-            company: activeCompany,
-            previousSnapshots: companySessionSnapshots,
-            activeArtifacts,
-            activeDispatches,
+            company: current.activeCompany,
+            previousSnapshots: current.companySessionSnapshots,
+            activeArtifacts: current.activeArtifacts,
+            activeDispatches: current.activeDispatches,
             force: options?.force,
           });
-        setCompanySessionSnapshots(sessionSnapshots);
-        replaceDispatchRecords(dispatches);
-        await updateCompany(companyPatch);
+        current.setCompanySessionSnapshots(sessionSnapshots);
+        current.replaceDispatchRecords(dispatches);
+        await current.updateCompany(companyPatch);
         if (!options?.silent) {
           toast.success(
             "请求闭环已同步",
@@ -76,18 +101,11 @@ export function useBoardCommunicationSync(input: {
           toast.error("恢复失败", error instanceof Error ? error.message : String(error));
         }
       } finally {
+        recoveryInFlightRef.current = false;
         setRecoveringCommunication(false);
       }
     },
-    [
-      activeArtifacts,
-      activeCompany,
-      activeDispatches,
-      companySessionSnapshots,
-      replaceDispatchRecords,
-      setCompanySessionSnapshots,
-      updateCompany,
-    ],
+    [],
   );
 
   useEffect(() => {
@@ -96,9 +114,9 @@ export function useBoardCommunicationSync(input: {
     }
     void handleRecoverCommunication({
       silent: true,
-      force: companySessionSnapshots.length === 0,
+      force: latestInputRef.current.companySessionSnapshots.length === 0,
     });
-  }, [companySessionSnapshots.length, connected, handleRecoverCommunication, isPageVisible]);
+  }, [companyId, connected, handleRecoverCommunication, isPageVisible]);
 
   useEffect(() => {
     if (!connected || !isPageVisible) {

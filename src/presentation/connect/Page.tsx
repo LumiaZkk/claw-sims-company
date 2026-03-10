@@ -8,9 +8,7 @@ type GatewayStoreSnapshot = ReturnType<typeof useGatewayStore.getState>;
 
 type ConnectFormProps = Pick<
   GatewayStoreSnapshot,
-  | "providerId"
   | "providers"
-  | "setProvider"
   | "connect"
   | "connecting"
   | "error"
@@ -26,9 +24,7 @@ type ConnectFormProps = Pick<
 };
 
 function ConnectForm({
-  providerId,
   providers,
-  setProvider,
   connect,
   connecting,
   error,
@@ -43,6 +39,7 @@ function ConnectForm({
 }: ConnectFormProps) {
   const [url, setUrl] = useState(savedUrl || currentProvider?.defaultUrl || "");
   const [token, setToken] = useState(savedToken || "");
+  const authorityOnly = providers.length <= 1;
 
   const handleConnect = (event: React.FormEvent) => {
     event.preventDefault();
@@ -60,38 +57,22 @@ function ConnectForm({
         <div className="mb-4 space-y-1 text-sm">
           <div className="font-semibold text-slate-900">连接工作引擎</div>
           <p className="text-slate-500">
-            通过统一协议接入 Agent 后端。当前使用 {currentProvider?.label || "工作引擎"}。
-          </p>
-          <p className="text-xs text-slate-400">
-            如果你要切换到别的 provider，只需要在这里更换“后端提供方”。系统会按 provider 分别记住 URL 和
-            Token，不会把 OpenClaw 和 Authority 的连接配置混在一起。
+            浏览器现在只连接 Authority 控制面，由 Authority 统一持有权威源并代理下游 OpenClaw。
           </p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 p-6 md:p-7">
           <form onSubmit={handleConnect} className="space-y-5">
             <div>
-              <label htmlFor="backend-provider" className="block text-sm font-medium text-slate-700 mb-1">
-                后端提供方
-              </label>
-              <select
-                id="backend-provider"
-                value={providerId}
-                onChange={(event) => setProvider(event.target.value)}
-                className="block w-full rounded-lg border border-slate-200 px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow sm:text-sm outline-none bg-white"
-              >
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.label}
-                  </option>
-                ))}
-              </select>
-              {currentProvider?.description ? (
-                <p className="mt-1 text-xs text-slate-500">{currentProvider.description}</p>
+              {authorityOnly ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                  <div className="font-medium text-slate-900">控制面入口</div>
+                  <div className="mt-1">{currentProvider?.label || "Authority"}</div>
+                  {currentProvider?.description ? (
+                    <p className="mt-1 text-xs text-slate-500">{currentProvider.description}</p>
+                  ) : null}
+                </div>
               ) : null}
-              <p className="mt-1 text-[11px] text-slate-400">
-                每个 provider 会单独保存最近一次连接地址和令牌，后续切回来会自动回填。
-              </p>
               <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                 <div className="font-medium text-slate-800">执行器能力快照</div>
                 <div className="mt-1">
@@ -190,9 +171,10 @@ function ConnectForm({
                 {!connectError?.steps?.length ? (
                   <ul className="space-y-1 text-xs">
                     {[
-                      "确认当前 provider 进程正在运行",
-                      `检查服务地址是否正确（当前默认 ${currentProvider?.defaultUrl || "ws://localhost:18789"}）`,
-                      "如果启用了鉴权，确认 Token 输入无误",
+                      "确认 authority daemon 正在运行",
+                      `检查控制面地址是否正确（当前默认 ${currentProvider?.defaultUrl || "http://127.0.0.1:18790"}）`,
+                      "如果 authority 开启了鉴权，确认 Token 输入无误",
+                      "如果 authority 已连接但聊天仍失败，再检查设置页里的 OpenClaw 执行后端状态",
                       "检查本机与目标地址网络可达（防火墙/端口）",
                     ].map((step) => (
                       <li key={step}>- {step}</li>
@@ -236,13 +218,13 @@ function ConnectForm({
         <p className="mt-3 text-xs text-slate-400">
           {currentProvider?.connectHint ? (
             <>
-              如果还没启动当前后端，请先运行{" "}
+              如果还没启动 Authority，请先运行{" "}
               <code className="bg-slate-200 px-1 py-0.5 rounded text-slate-600">
                 {currentProvider.connectHint}
               </code>
             </>
           ) : (
-            "请先启动后端工作引擎，再回来连接。"
+            "请先启动 Authority 控制面，再回来连接。"
           )}
         </p>
       </div>
@@ -254,7 +236,6 @@ export function ConnectPresentationPage() {
   const {
     providerId,
     providers,
-    setProvider,
     connect,
     connected,
     connecting,
@@ -273,7 +254,7 @@ export function ConnectPresentationPage() {
 
   useEffect(() => {
     if (connected) {
-      toast.success("连接成功", `${currentProvider?.label || "当前 provider"} 已连接，正在进入公司选择。`);
+      toast.success("连接成功", `${currentProvider?.label || "Authority"} 已连接，正在进入公司选择。`);
       navigate("/select");
     }
   }, [connected, currentProvider?.label, navigate]);
@@ -283,7 +264,7 @@ export function ConnectPresentationPage() {
     if (phase === "failed" && previousPhase !== "failed") {
       toast.error(
         connectError?.title || "自动重连失败",
-        connectError?.message || "请检查地址、Token 或当前 provider 服务状态。",
+        connectError?.message || "请检查 Authority 地址、Token 或 daemon 服务状态。",
       );
     }
     previousPhaseRef.current = phase;
@@ -292,9 +273,7 @@ export function ConnectPresentationPage() {
   return (
     <ConnectForm
       key={`${providerId}:${savedUrl}:${savedToken}`}
-      providerId={providerId}
       providers={providers}
-      setProvider={setProvider}
       connect={connect}
       connecting={connecting}
       error={error}

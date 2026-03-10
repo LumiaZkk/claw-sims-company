@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
-import { authorityClient } from "../../infrastructure/authority/client";
 import { writeCachedAuthorityRuntimeSnapshot } from "../../infrastructure/authority/runtime-cache";
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
 import type { AuthorityCompanyRuntimeSnapshot } from "../../infrastructure/authority/contract";
+import { syncAuthorityCompanyRuntime } from "../../application/gateway/authority-control";
 
 function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
   const state = useCompanyRuntimeStore.getState();
@@ -47,8 +47,7 @@ export function CompanyAuthoritySyncHost() {
         return;
       }
       inFlightRef.current = true;
-      void authorityClient
-        .syncRuntime(snapshot.companyId, { snapshot })
+      void syncAuthorityCompanyRuntime(snapshot)
         .then((saved) => {
           writeCachedAuthorityRuntimeSnapshot(saved);
           lastSignatureRef.current = JSON.stringify(saved);

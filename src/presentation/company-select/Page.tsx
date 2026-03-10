@@ -6,6 +6,7 @@ import { ActionFormDialog } from "../../components/ui/action-form-dialog";
 import { toast } from "../../components/system/toast-store";
 import { Plus, ArrowRight, Loader, Trash2 } from "lucide-react";
 import type { Company } from "../../domain/org/types";
+import { isReservedSystemCompany } from "../../domain/org/system-company";
 
 export function CompanySelectPresentationPage() {
   const navigate = useNavigate();
@@ -37,6 +38,10 @@ export function CompanySelectPresentationPage() {
   };
 
   const handleDeleteRequest = (company: Company) => {
+    if (isReservedSystemCompany(company)) {
+      toast.info("默认公司已锁定", "这个系统公司用于承接 OpenClaw 的 main agent，当前不可删除。");
+      return;
+    }
     setDeleteTarget(company);
     setDeleteDialogOpen(true);
   };
@@ -92,25 +97,41 @@ export function CompanySelectPresentationPage() {
                 className="w-full text-left flex flex-1 flex-col items-start"
               >
                 <div className="text-4xl mb-4">{c.icon || "🏢"}</div>
-                <h3 className="text-xl font-bold text-slate-900 mb-2 truncate w-full">{c.name}</h3>
+                <div className="mb-2 flex w-full items-center gap-2">
+                  <h3 className="truncate text-xl font-bold text-slate-900">{c.name}</h3>
+                  {isReservedSystemCompany(c) ? (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                      默认
+                    </span>
+                  ) : null}
+                </div>
                 <p className="text-sm text-slate-500 mb-4 flex-1 line-clamp-2">
                   {c.description || "暂无组织描述"}
                 </p>
               </button>
 
               <div className="w-full flex items-center justify-between mt-auto pt-4 border-t border-slate-100">
-                <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded font-medium">
-                  {c.employees?.length || 0} 名成员
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded font-medium">
+                    {c.employees?.length || 0} 名成员
+                  </span>
+                  {isReservedSystemCompany(c) ? (
+                    <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded font-medium">
+                      映射 main
+                    </span>
+                  ) : null}
+                </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteRequest(c)}
-                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-600 transition hover:bg-rose-50"
-                  >
-                    <Trash2 size={14} />
-                    删除
-                  </button>
+                  {isReservedSystemCompany(c) ? null : (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteRequest(c)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-medium text-rose-600 transition hover:bg-rose-50"
+                    >
+                      <Trash2 size={14} />
+                      删除
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleSelect(c.id)}

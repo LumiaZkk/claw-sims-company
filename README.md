@@ -28,9 +28,11 @@ npm install
 npm run dev
 ```
 
-打开 `http://localhost:5173`，连接 Gateway 后创建或选择公司。
+`npm run dev` 会同时启动 Vite 前端和本机 Authority 控制面。
 
-如果你本地跑的是 OpenClaw，默认地址通常是 `ws://localhost:18789`。
+打开 `http://localhost:5173`，连接 Authority 后创建或选择公司。
+
+如果你本地也跑了 OpenClaw，Authority 默认会尝试连接 `ws://localhost:18789` 作为下游执行器；没启动时，Authority 仍可进入界面，但聊天和模型能力会显示为降级。
 
 ## 新同事先看哪
 

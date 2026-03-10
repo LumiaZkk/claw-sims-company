@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { syncDelegationClosedLoopState } from "../delegation/closed-loop";
 import { gateway } from "../gateway";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
@@ -48,36 +48,54 @@ export function useLobbyCommunicationSyncState(params: {
     isPageVisible,
   } = params;
   const [recoveringCommunication, setRecoveringCommunication] = useState(false);
+  const companyId = activeCompany.id;
+  const latestParamsRef = useRef({
+    activeCompany,
+    companySessionSnapshots,
+    activeArtifacts,
+    activeDispatches,
+    replaceDispatchRecords,
+    setCompanySessionSnapshots,
+    updateCompany,
+  });
+  const recoveryInFlightRef = useRef(false);
+  latestParamsRef.current = {
+    activeCompany,
+    companySessionSnapshots,
+    activeArtifacts,
+    activeDispatches,
+    replaceDispatchRecords,
+    setCompanySessionSnapshots,
+    updateCompany,
+  };
 
   const recoverCommunication = useCallback(
     async (options?: { silent?: boolean; force?: boolean }) => {
+      if (recoveryInFlightRef.current) {
+        return null;
+      }
+      recoveryInFlightRef.current = true;
       setRecoveringCommunication(true);
       try {
+        const current = latestParamsRef.current;
         const { companyPatch, dispatches, sessionSnapshots, summary } =
           await syncDelegationClosedLoopState({
-            company: activeCompany,
-            previousSnapshots: companySessionSnapshots,
-            activeArtifacts,
-            activeDispatches,
+            company: current.activeCompany,
+            previousSnapshots: current.companySessionSnapshots,
+            activeArtifacts: current.activeArtifacts,
+            activeDispatches: current.activeDispatches,
             force: options?.force,
           });
-        setCompanySessionSnapshots(sessionSnapshots);
-        replaceDispatchRecords(dispatches);
-        await updateCompany(companyPatch);
+        current.setCompanySessionSnapshots(sessionSnapshots);
+        current.replaceDispatchRecords(dispatches);
+        await current.updateCompany(companyPatch);
         return summary;
       } finally {
+        recoveryInFlightRef.current = false;
         setRecoveringCommunication(false);
       }
     },
-    [
-      activeArtifacts,
-      activeCompany,
-      activeDispatches,
-      companySessionSnapshots,
-      replaceDispatchRecords,
-      setCompanySessionSnapshots,
-      updateCompany,
-    ],
+    [],
   );
 
   useEffect(() => {
@@ -86,14 +104,9 @@ export function useLobbyCommunicationSyncState(params: {
     }
     void recoverCommunication({
       silent: true,
-      force: companySessionSnapshots.length === 0,
+      force: latestParamsRef.current.companySessionSnapshots.length === 0,
     }).catch(() => undefined);
-  }, [
-    companySessionSnapshots.length,
-    connected,
-    recoverCommunication,
-    isPageVisible,
-  ]);
+  }, [companyId, connected, isPageVisible, recoverCommunication]);
 
   useEffect(() => {
     if (!connected || !isPageVisible) {

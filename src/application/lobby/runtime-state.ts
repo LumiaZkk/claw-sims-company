@@ -52,7 +52,8 @@ export function useLobbyRuntimeState(params: {
   isPageVisible: boolean;
 }) {
   const { activeCompany, connected, isPageVisible } = params;
-  const runtimeSnapshot = readCompanyRuntimeSnapshot(activeCompany?.id);
+  const companyId = activeCompany?.id ?? null;
+  const runtimeSnapshot = readCompanyRuntimeSnapshot(companyId);
   const [agentsCache, setAgentsCache] = useState<AgentListEntry[]>(() => runtimeSnapshot?.agents ?? []);
   const [sessionsCache, setSessionsCache] = useState<GatewaySessionRow[]>(() => runtimeSnapshot?.sessions ?? []);
   const [cronCache, setCronCache] = useState<CronJob[]>(() => runtimeSnapshot?.cronJobs ?? []);
@@ -64,10 +65,10 @@ export function useLobbyRuntimeState(params: {
   const [usageCost, setUsageCost] = useState<number | null>(() => runtimeSnapshot?.usageCost ?? null);
 
   useEffect(() => {
-    if (!activeCompany) {
+    if (!companyId) {
       return;
     }
-    const snapshot = readCompanyRuntimeSnapshot(activeCompany.id);
+    const snapshot = readCompanyRuntimeSnapshot(companyId);
     if (!snapshot) {
       return;
     }
@@ -78,20 +79,20 @@ export function useLobbyRuntimeState(params: {
       setCompanySessionSnapshots(snapshot.companySessionSnapshots ?? []);
       setUsageCost(snapshot.usageCost ?? null);
     });
-  }, [activeCompany]);
+  }, [companyId]);
 
   useEffect(() => {
-    if (!activeCompany) {
+    if (!companyId) {
       return;
     }
-    writeCompanyRuntimeSnapshot(activeCompany.id, {
+    writeCompanyRuntimeSnapshot(companyId, {
       agents: agentsCache,
       sessions: sessionsCache,
       cronJobs: cronCache,
       companySessionSnapshots,
       usageCost,
     });
-  }, [activeCompany, agentsCache, companySessionSnapshots, cronCache, sessionsCache, usageCost]);
+  }, [agentsCache, companyId, companySessionSnapshots, cronCache, sessionsCache, usageCost]);
 
   useEffect(() => {
     async function fetchData() {

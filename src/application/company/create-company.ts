@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useCompanyShellCommands, useCompanyShellQuery } from "./shell";
 import { parseCompanyBlueprint } from "./blueprint";
 import { COMPANY_TEMPLATES } from "./templates";
-import { authorityClient } from "../../infrastructure/authority/client";
+import { createAuthorityCompany } from "../gateway/authority-control";
 
 export const BLUEPRINT_TEMPLATE_ID = "__blueprint__";
 
@@ -58,7 +58,7 @@ export function useCompanyCreateApp(input: {
     try {
       const templateId = blueprint?.template || input.selectedTemplate || config?.companies[0]?.template || "blank";
       updateProgress(2, blueprint ? "正在解析蓝图并在 authority 中建库..." : "正在在 authority 中初始化组织...");
-      const created = await authorityClient.createCompany({
+      const created = await createAuthorityCompany({
         companyName: finalCompanyName,
         templateId,
         blueprintText: blueprint ? input.blueprintText : undefined,

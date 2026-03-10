@@ -2,7 +2,6 @@ import {
   deleteCompanyCascade,
   saveCompanyConfig,
 } from "../persistence/persistence";
-import { authorityClient } from "../../authority/client";
 import type {
   Company,
   CompanyRuntimeState,
@@ -14,6 +13,11 @@ import type {
 import { createEmptyProductState } from "./bootstrap";
 import { hydrateAuthorityBootstrapCache, writeCachedAuthorityConfig, writeCachedAuthorityRuntimeSnapshot } from "../../authority/runtime-cache";
 import { runtimeStateFromAuthorityBootstrap, runtimeStateFromAuthorityRuntimeSnapshot } from "../../authority/runtime-snapshot";
+import {
+  getAuthorityBootstrap,
+  getAuthorityCompanyRuntime,
+  switchAuthorityCompany,
+} from "../../../application/gateway/authority-control";
 
 type RuntimeSet = (partial: Partial<CompanyRuntimeState>) => void;
 type RuntimeGet = () => CompanyRuntimeState;
@@ -54,7 +58,7 @@ export function buildCompanyConfigActions(
     loadConfig: async () => {
       set({ loading: true, error: null, bootstrapPhase: "restoring" });
       try {
-        const bootstrap = await authorityClient.bootstrap();
+        const bootstrap = await getAuthorityBootstrap();
         hydrateAuthorityBootstrapCache(bootstrap);
         if (bootstrap.config) {
           const state = runtimeStateFromAuthorityBootstrap(bootstrap);
@@ -135,8 +139,7 @@ export function buildCompanyConfigActions(
 
       const newConfig = { ...config, activeCompanyId: id };
       writeCachedAuthorityConfig(newConfig);
-      void authorityClient
-        .switchCompany({ companyId: id })
+      void switchAuthorityCompany(id)
         .then((bootstrap) => {
           hydrateAuthorityBootstrapCache(bootstrap);
           const nextState = runtimeStateFromAuthorityBootstrap(bootstrap);
@@ -171,7 +174,7 @@ export function buildCompanyConfigActions(
           nextConfig?.companies.find((company) => company.id === nextConfig.activeCompanyId) ?? null;
         const nextRuntime = nextActiveCompany
           ? runtimeStateFromAuthorityRuntimeSnapshot(
-              await authorityClient.getRuntime(nextActiveCompany.id),
+              await getAuthorityCompanyRuntime(nextActiveCompany.id),
             )
           : createEmptyProductState();
         if (nextActiveCompany) {

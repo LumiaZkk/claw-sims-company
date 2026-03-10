@@ -3,11 +3,13 @@ import { useCompanyShellCommands, useCompanyShellQuery } from "../company/shell"
 import { useOrgApp } from "../org";
 import { isOrgAutopilotEnabled } from "../assignment/org-fit";
 import { gateway, type GatewayModelChoice, useGatewayStore } from "./index";
+import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/contract";
 import {
   formatCodexRuntimeSyncDescription,
   reapplyCodexModelsToActiveSessions,
   syncCodexModelsToAllowlist,
 } from "./codex-runtime";
+import { patchAuthorityExecutorConfig } from "./authority-control";
 
 type JsonMap = Record<string, unknown>;
 export type GatewayConfigSnapshot = Awaited<ReturnType<typeof gateway.getConfigSnapshot>>;
@@ -17,6 +19,17 @@ export type GatewayProviderConfig = {
   models?: string[];
 } & Record<string, unknown>;
 export type GatewayTelegramConfig = { enabled?: boolean; botToken?: string } | null;
+
+function extractAuthorityHealth(value: JsonMap | null): AuthorityHealthSnapshot | null {
+  if (!value) {
+    return null;
+  }
+  const candidate = value as Partial<AuthorityHealthSnapshot>;
+  if (!candidate.executor || !candidate.executorConfig || !candidate.authority) {
+    return null;
+  }
+  return candidate as AuthorityHealthSnapshot;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -106,6 +119,9 @@ export function useGatewaySettingsQuery() {
   const telegramConfig = ((configSnapshot?.config as {
     channels?: { telegram?: { enabled?: boolean; botToken?: string } };
   })?.channels?.telegram ?? null) as GatewayTelegramConfig;
+  const authorityHealth = useMemo(() => extractAuthorityHealth(status), [status]);
+  const executorStatus = authorityHealth?.executor ?? null;
+  const executorConfig = authorityHealth?.executorConfig ?? null;
 
   return {
     url,
@@ -124,6 +140,9 @@ export function useGatewaySettingsQuery() {
     orgAutopilotEnabled,
     providerConfigs,
     telegramConfig,
+    authorityHealth,
+    executorStatus,
+    executorConfig,
     refreshRuntime,
   };
 }
@@ -147,6 +166,7 @@ export function useGatewaySettingsCommands(input: {
   const [codexAuthorizing, setCodexAuthorizing] = useState(false);
   const [codexImporting, setCodexImporting] = useState(false);
   const [codexRefreshing, setCodexRefreshing] = useState(false);
+  const [executorSaving, setExecutorSaving] = useState(false);
   const [orgAutopilotSaving, setOrgAutopilotSaving] = useState(false);
 
   const reconnectGateway = useCallback(() => {
@@ -426,6 +446,45 @@ export function useGatewaySettingsCommands(input: {
     }
   }, [input.activeCompany, input.orgAutopilotEnabled, orgAutopilotSaving, updateCompany]);
 
+  const handleExecutorConfigSubmit = useCallback(async (values: Record<string, string>) => {
+    const openclawUrl = values.openclawUrl?.trim();
+    if (!openclawUrl) {
+      return null;
+    }
+
+    setExecutorSaving(true);
+    try {
+      await patchAuthorityExecutorConfig({
+        openclaw: {
+          url: openclawUrl,
+          ...(values.openclawToken?.trim() ? { token: values.openclawToken.trim() } : {}),
+        },
+        reconnect: true,
+      });
+      await input.refreshRuntime();
+      return {
+        title: "执行后端已更新",
+        description: "Authority 已保存并重连下游 OpenClaw。",
+      };
+    } finally {
+      setExecutorSaving(false);
+    }
+  }, [input]);
+
+  const handleExecutorReconnect = useCallback(async () => {
+    setExecutorSaving(true);
+    try {
+      await patchAuthorityExecutorConfig({ reconnect: true });
+      await input.refreshRuntime();
+      return {
+        title: "执行后端已重连",
+        description: "Authority 已向下游 OpenClaw 发起重连。",
+      };
+    } finally {
+      setExecutorSaving(false);
+    }
+  }, [input]);
+
   return {
     switchCompany,
     loadConfig,
@@ -438,6 +497,8 @@ export function useGatewaySettingsCommands(input: {
     onProviderKeySubmit,
     handleAddProviderSubmit,
     handleSyncModels,
+    handleExecutorConfigSubmit,
+    handleExecutorReconnect,
     handleToggleOrgAutopilot,
     telegramSaving,
     providerKeySaving,
@@ -446,6 +507,7 @@ export function useGatewaySettingsCommands(input: {
     codexAuthorizing,
     codexImporting,
     codexRefreshing,
+    executorSaving,
     orgAutopilotSaving,
   };
 }

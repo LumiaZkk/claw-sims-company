@@ -247,19 +247,24 @@ export function SettingsGatewayCompanySection(props: {
 }
 
 export function SettingsProvidersChannelsSection(props: {
+  executorStatus: GatewaySettingsQueryResult["executorStatus"];
+  executorConfig: GatewaySettingsQueryResult["executorConfig"];
   configSnapshot: GatewayConfigSnapshot | null;
   codexModels: GatewaySettingsQueryResult["codexModels"];
   providerConfigs: Record<string, GatewayProviderConfig>;
   telegramConfig: GatewayTelegramConfig;
   loading: boolean;
+  executorSaving: boolean;
   codexAuthorizing: boolean;
   codexImporting: boolean;
   codexRefreshing: boolean;
   addProviderSaving: boolean;
   syncingProvider: string | null;
+  setExecutorDialogOpen: (open: boolean) => void;
   setAddProviderDialogOpen: (open: boolean) => void;
   setTelegramDialogOpen: (open: boolean) => void;
   updateProviderKey: (provider: string) => void;
+  handleExecutorReconnect: GatewaySettingsCommandsResult["handleExecutorReconnect"];
   handleStartCodexOAuth: GatewaySettingsCommandsResult["handleStartCodexOAuth"];
   handleImportCodexAuth: GatewaySettingsCommandsResult["handleImportCodexAuth"];
   handleRefreshCodexModels: GatewaySettingsCommandsResult["handleRefreshCodexModels"];
@@ -270,28 +275,29 @@ export function SettingsProvidersChannelsSection(props: {
   runCommand: RunCommand;
 }) {
   const {
+    executorStatus,
+    executorConfig,
     configSnapshot,
     codexModels,
     providerConfigs,
     telegramConfig,
     loading,
+    executorSaving,
     codexAuthorizing,
     codexImporting,
     codexRefreshing,
     syncingProvider,
+    setExecutorDialogOpen,
     setAddProviderDialogOpen,
     setTelegramDialogOpen,
     updateProviderKey,
+    handleExecutorReconnect,
     handleStartCodexOAuth,
     handleImportCodexAuth,
     handleRefreshCodexModels,
     handleSyncModels,
     runCommand,
   } = props;
-
-  if (!configSnapshot?.config) {
-    return null;
-  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -314,6 +320,72 @@ export function SettingsProvidersChannelsSection(props: {
           <CardDescription>按需调集各类大语言模型，并配发 API 执行令牌</CardDescription>
         </CardHeader>
         <CardContent className="pt-4 space-y-3 flex-1 overflow-y-auto max-h-80">
+          <div className="p-3 rounded-xl border border-indigo-100 bg-white shadow-sm space-y-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-[200px] flex-1">
+                <div className="font-semibold text-sm flex items-center gap-2">
+                  Authority 执行后端
+                  <Badge
+                    variant="outline"
+                    className={
+                      executorStatus?.state === "ready"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : executorStatus?.state === "blocked"
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : "border-amber-200 bg-amber-50 text-amber-700"
+                    }
+                  >
+                    {executorStatus?.state ?? "unknown"}
+                  </Badge>
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  下游类型：{executorConfig?.type ?? "openclaw"} · 地址：{executorConfig?.openclaw.url ?? "--"}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  Token: {executorConfig?.openclaw.tokenConfigured ? "******(已配置)" : "未配置"}
+                  {executorConfig?.lastConnectedAt
+                    ? ` · 最近接通 ${formatTime(executorConfig.lastConnectedAt)}`
+                    : ""}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  {executorStatus?.note || executorConfig?.lastError || "Authority 将浏览器请求统一代理到下游 OpenClaw。"}
+                </div>
+                {executorConfig?.lastError ? (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+                    最近错误：{executorConfig.lastError}
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-8 text-xs bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50"
+                  onClick={() => setExecutorDialogOpen(true)}
+                >
+                  修改后端
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-8 text-xs bg-indigo-600 text-white hover:bg-indigo-700"
+                  onClick={() =>
+                    void runCommand(handleExecutorReconnect, "执行后端重连失败")
+                  }
+                  disabled={executorSaving || loading}
+                >
+                  {executorSaving ? "重连中..." : "立即重连"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {!configSnapshot?.config ? (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              当前还没有可用的下游配置快照。请先确保 Authority 已成功连接 OpenClaw，然后刷新运行时。
+            </div>
+          ) : null}
+
           <div className="p-3 rounded-xl border border-sky-100 bg-sky-50/60 shadow-sm space-y-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="min-w-[200px] flex-1">
@@ -392,7 +464,7 @@ export function SettingsProvidersChannelsSection(props: {
               </div>
             )}
           </div>
-          {Object.entries(providerConfigs).map(([providerName, pConfig]) => (
+          {configSnapshot?.config ? Object.entries(providerConfigs).map(([providerName, pConfig]) => (
             <div
               key={providerName}
               className="flex items-center justify-between p-3 rounded-xl border bg-white shadow-sm flex-wrap gap-2"
@@ -446,8 +518,8 @@ export function SettingsProvidersChannelsSection(props: {
                 </Button>
               </div>
             </div>
-          ))}
-          {Object.keys(providerConfigs).length === 0 && (
+          )) : null}
+          {configSnapshot?.config && Object.keys(providerConfigs).length === 0 && (
             <div className="text-sm text-slate-400 text-center py-4">无提货商数据</div>
           )}
         </CardContent>
@@ -489,20 +561,22 @@ export function SettingsProvidersChannelsSection(props: {
             </Button>
           </div>
 
-          {Object.entries(configSnapshot.config.channels || {})
-            .filter(([k]) => k !== "telegram" && k !== "defaults" && k !== "modelByChannel")
-            .map(([channelName]) => (
-              <div
-                key={channelName}
-                className="flex items-center justify-between p-3 rounded-xl border bg-white shadow-sm opacity-60"
-              >
-                <div>
-                  <div className="font-semibold text-sm capitalize">{channelName}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">暂不支持在此视图直接修改</div>
-                </div>
-                <Badge variant="outline">只读</Badge>
-              </div>
-            ))}
+          {(configSnapshot?.config
+            ? Object.entries(configSnapshot.config.channels || {})
+                .filter(([k]) => k !== "telegram" && k !== "defaults" && k !== "modelByChannel")
+                .map(([channelName]) => (
+                  <div
+                    key={channelName}
+                    className="flex items-center justify-between p-3 rounded-xl border bg-white shadow-sm opacity-60"
+                  >
+                    <div>
+                      <div className="font-semibold text-sm capitalize">{channelName}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">暂不支持在此视图直接修改</div>
+                    </div>
+                    <Badge variant="outline">只读</Badge>
+                  </div>
+                ))
+            : [])}
         </CardContent>
       </Card>
     </div>
@@ -575,6 +649,9 @@ export function SettingsAdvancedSection(props: {
 }
 
 export function SettingsDialogs(props: {
+  executorDialogOpen: boolean;
+  setExecutorDialogOpen: (open: boolean) => void;
+  executorConfig: GatewaySettingsQueryResult["executorConfig"];
   telegramDialogOpen: boolean;
   setTelegramDialogOpen: (open: boolean) => void;
   providerKeyDialogOpen: boolean;
@@ -583,15 +660,20 @@ export function SettingsDialogs(props: {
   setProviderKeyTarget: (provider: string | null) => void;
   addProviderDialogOpen: boolean;
   setAddProviderDialogOpen: (open: boolean) => void;
+  executorSaving: boolean;
   telegramSaving: boolean;
   providerKeySaving: boolean;
   addProviderSaving: boolean;
+  handleExecutorConfigSubmit: (values: Record<string, string>) => Promise<{ title: string; description: string } | null>;
   handleTelegramSubmit: (values: Record<string, string>) => Promise<{ title: string; description: string } | null>;
   onProviderKeySubmit: (provider: string | null, values: Record<string, string>) => Promise<{ title: string; description: string } | null>;
   handleAddProviderSubmit: (values: Record<string, string>) => Promise<{ title: string; description: string } | null>;
   runCommand: RunCommand;
 }) {
   const {
+    executorDialogOpen,
+    setExecutorDialogOpen,
+    executorConfig,
     telegramDialogOpen,
     setTelegramDialogOpen,
     providerKeyDialogOpen,
@@ -600,9 +682,11 @@ export function SettingsDialogs(props: {
     setProviderKeyTarget,
     addProviderDialogOpen,
     setAddProviderDialogOpen,
+    executorSaving,
     telegramSaving,
     providerKeySaving,
     addProviderSaving,
+    handleExecutorConfigSubmit,
     handleTelegramSubmit,
     onProviderKeySubmit,
     handleAddProviderSubmit,
@@ -611,6 +695,41 @@ export function SettingsDialogs(props: {
 
   return (
     <>
+      <ActionFormDialog
+        open={executorDialogOpen}
+        onOpenChange={setExecutorDialogOpen}
+        title="更新下游 OpenClaw 执行器"
+        description="浏览器只连接 Authority。这里配置的是 Authority 内部挂接的 OpenClaw 地址和令牌。"
+        confirmLabel="保存并重连执行器"
+        busy={executorSaving}
+        fields={[
+          {
+            name: "openclawUrl",
+            label: "OpenClaw URL",
+            type: "text",
+            required: true,
+            defaultValue: executorConfig?.openclaw.url ?? "",
+            placeholder: "例如: ws://127.0.0.1:18789",
+          },
+          {
+            name: "openclawToken",
+            label: "OpenClaw Token",
+            type: "password",
+            required: false,
+            placeholder: executorConfig?.openclaw.tokenConfigured ? "留空表示保持原 token 不变" : "可选",
+          },
+        ]}
+        onSubmit={async (values) => {
+          const result = await runCommand(
+            () => handleExecutorConfigSubmit(values),
+            "执行后端配置失败",
+          );
+          if (result) {
+            setExecutorDialogOpen(false);
+          }
+        }}
+      />
+
       <ActionFormDialog
         open={telegramDialogOpen}
         onOpenChange={setTelegramDialogOpen}

@@ -6,7 +6,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite",
     "authority:dev": "tsx packages/authority-daemon/src/server.ts",
     "authority:start": "tsx packages/authority-daemon/src/server.ts",
     "authority:typecheck": "tsc -p packages/authority-daemon/tsconfig.json --noEmit",

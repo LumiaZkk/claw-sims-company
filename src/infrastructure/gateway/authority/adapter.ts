@@ -2,11 +2,16 @@ import { authorityClient } from "../../authority/client";
 import {
   AUTHORITY_PROVIDER_ID,
   DEFAULT_AUTHORITY_URL,
+  type AuthorityBootstrapSnapshot,
   type AuthorityEvent,
+  type AuthorityGatewayConfigSnapshot,
+  type AuthorityModelsResponse,
 } from "../../authority/contract";
 import {
   createBackendCapabilities,
   type AgentControlSnapshot,
+  type AgentsDeleteResult,
+  type AgentsListResult,
   type ActorRef,
   type AgentBackend,
   type BackendCloseInfo,
@@ -14,14 +19,19 @@ import {
   type BackendHello,
   type CompanyEventsListResult,
   type ConversationKind,
+  type CostUsageSummary,
+  type CronListResult,
   type ConversationRef,
   type GatewayAuthCodexOauthCallbackResult,
   type GatewayAuthCodexOauthStartResult,
   type GatewayAuthCodexOauthStatusResult,
   type GatewayAuthImportCodexCliResult,
+  type GatewayModelsListParams,
   type ProviderMessage,
   type SessionsArchivesGetResult,
+  type SessionsArchivesListResult,
   type SessionsArchivesRestoreResult,
+  type SessionsListResult,
   type SessionsUsageResult,
 } from "../runtime/types";
 
@@ -29,14 +39,14 @@ const authorityCapabilities = createBackendCapabilities({
   sessionHistory: true,
   sessionArchives: false,
   sessionArchiveRestore: false,
-  cron: false,
-  config: false,
+  cron: true,
+  config: true,
   channelStatus: true,
   skillsStatus: true,
   agentFiles: true,
   agentModelOverride: false,
   agentSkillsOverride: false,
-  usageInsights: false,
+  usageInsights: true,
 });
 
 function toBackendEventFrame(event: AuthorityEvent): BackendEventFrame {
@@ -243,14 +253,66 @@ class AuthorityBackendAdapter implements AgentBackend {
     this.onCloseHandler = handler;
   }
 
-  async request<T = unknown>(method: string): Promise<T> {
+  async request<T = unknown>(method: string, params?: unknown): Promise<T> {
     if (method === "authority.health") {
       return (await authorityClient.health()) as T;
     }
-    throw new Error(`Authority backend does not support request("${method}").`);
+    if (method === "authority.bootstrap") {
+      return (await authorityClient.bootstrap()) as T;
+    }
+    if (method === "authority.config.save") {
+      const config =
+        typeof params === "object" && params && "config" in params
+          ? (params as { config: AuthorityBootstrapSnapshot["config"] }).config
+          : null;
+      if (!config) {
+        throw new Error("authority.config.save requires a config payload.");
+      }
+      return (await authorityClient.updateConfig(config)) as T;
+    }
+    if (method === "authority.company.create") {
+      return (await authorityClient.createCompany(params as Parameters<typeof authorityClient.createCompany>[0])) as T;
+    }
+    if (method === "authority.company.delete") {
+      const companyId =
+        typeof params === "object" && params && "companyId" in params
+          ? String((params as { companyId: string }).companyId ?? "")
+          : "";
+      if (!companyId) {
+        throw new Error("authority.company.delete requires companyId.");
+      }
+      return (await authorityClient.deleteCompany(companyId)) as T;
+    }
+    if (method === "authority.company.switch") {
+      return (await authorityClient.switchCompany(params as Parameters<typeof authorityClient.switchCompany>[0])) as T;
+    }
+    if (method === "authority.company.runtime.get") {
+      const companyId =
+        typeof params === "object" && params && "companyId" in params
+          ? String((params as { companyId: string }).companyId ?? "")
+          : "";
+      if (!companyId) {
+        throw new Error("authority.company.runtime.get requires companyId.");
+      }
+      return (await authorityClient.getRuntime(companyId)) as T;
+    }
+    if (method === "authority.company.runtime.sync") {
+      const payload = params as { companyId: string; snapshot: AuthorityBootstrapSnapshot["runtime"] };
+      if (!payload?.companyId || !payload.snapshot) {
+        throw new Error("authority.company.runtime.sync requires companyId and snapshot.");
+      }
+      return (await authorityClient.syncRuntime(payload.companyId, { snapshot: payload.snapshot })) as T;
+    }
+    if (method === "authority.executor.get") {
+      return (await authorityClient.getExecutorConfig()) as T;
+    }
+    if (method === "authority.executor.patch") {
+      return (await authorityClient.patchExecutorConfig(params as Parameters<typeof authorityClient.patchExecutorConfig>[0])) as T;
+    }
+    return authorityClient.requestGateway<T>(method, params);
   }
 
-  async listAgents() {
+  async listAgents(): Promise<AgentsListResult> {
     const result = await authorityClient.listActors();
     return {
       defaultId: result.agents[0]?.id ?? "ceo",
@@ -260,49 +322,52 @@ class AuthorityBackendAdapter implements AgentBackend {
     };
   }
 
-  async listModels() {
-    return { models: [] };
+  async listModels(params?: GatewayModelsListParams): Promise<AuthorityModelsResponse> {
+    return authorityClient.requestGateway<AuthorityModelsResponse>("models.list", params ?? {});
   }
 
-  async refreshModels() {
-    return { models: [] };
+  async refreshModels(): Promise<AuthorityModelsResponse> {
+    return authorityClient.requestGateway<AuthorityModelsResponse>("models.refresh", {});
   }
 
   async startCodexOAuth(): Promise<GatewayAuthCodexOauthStartResult> {
-    throw new Error("Codex OAuth is managed by the authority executor, not the browser client.");
+    return authorityClient.requestGateway("auth.codexOauthStart", {});
   }
 
-  async getCodexOAuthStatus(_state: string): Promise<GatewayAuthCodexOauthStatusResult> {
-    void _state;
-    return {
-      status: "error",
-      expiresAtMs: Date.now(),
-      errorMessage: "Codex OAuth is managed by the authority executor, not the browser client.",
-    };
+  async getCodexOAuthStatus(state: string): Promise<GatewayAuthCodexOauthStatusResult> {
+    return authorityClient.requestGateway("auth.codexOauthStatus", { state });
   }
 
-  async completeCodexOAuth(_params: {
+  async completeCodexOAuth(params: {
     code: string;
     state: string;
   }): Promise<GatewayAuthCodexOauthCallbackResult> {
-    void _params;
-    throw new Error("Codex OAuth is managed by the authority executor.");
+    return authorityClient.requestGateway("auth.codexOauthCallback", params);
   }
 
   async importCodexCliAuth(): Promise<GatewayAuthImportCodexCliResult> {
-    throw new Error("Codex CLI import is managed by the authority executor.");
+    return authorityClient.requestGateway("auth.importCodexCli", {});
   }
 
-  async updateAgent(params: { agentId: string }) {
-    return { ok: true as const, agentId: params.agentId };
+  async updateAgent(
+    params: { agentId: string; name?: string; workspace?: string; model?: string; avatar?: string },
+  ): Promise<{ ok: true; agentId: string }> {
+    return authorityClient.requestGateway<{ ok: true; agentId: string }>("agents.update", params);
   }
 
-  async createAgent(name: string) {
-    return { ok: true as const, agentId: name, name, workspace: `authority://${name}` };
+  async createAgent(name: string): Promise<{ ok: true; agentId: string; name: string; workspace: string }> {
+    return authorityClient.requestGateway<{ ok: true; agentId: string; name: string; workspace: string }>("agents.create", {
+      name,
+      workspace: `~/.openclaw/workspaces/${name}`,
+    });
   }
 
-  async deleteAgent(agentId: string) {
-    return { ok: true as const, agentId };
+  async deleteAgent(agentId: string, opts?: { deleteFiles?: boolean; purgeState?: boolean }): Promise<AgentsDeleteResult> {
+    return authorityClient.requestGateway<AgentsDeleteResult>("agents.delete", {
+      agentId,
+      deleteFiles: opts?.deleteFiles ?? true,
+      purgeState: opts?.purgeState ?? true,
+    });
   }
 
   listAgentFiles(agentId: string) {
@@ -317,8 +382,8 @@ class AuthorityBackendAdapter implements AgentBackend {
     return authorityClient.setAgentFile(agentId, name, content);
   }
 
-  listSessions(opts?: { agentId?: string | null }) {
-    return authorityClient.listSessions(undefined, opts?.agentId);
+  listSessions(opts?: Parameters<AgentBackend["listSessions"]>[0]): Promise<SessionsListResult> {
+    return authorityClient.requestGateway<SessionsListResult>("sessions.list", opts ?? {});
   }
 
   async resetSession(sessionKey: string) {
@@ -329,8 +394,11 @@ class AuthorityBackendAdapter implements AgentBackend {
     return authorityClient.deleteSession(sessionKey);
   }
 
-  async listSessionArchives(agentId: string) {
-    return { ts: Date.now(), agentId, archives: [] };
+  async listSessionArchives(agentId: string, limit?: number): Promise<SessionsArchivesListResult> {
+    return authorityClient.requestGateway<SessionsArchivesListResult>("sessions.archives.list", {
+      agentId,
+      ...(typeof limit === "number" ? { limit } : {}),
+    });
   }
 
   async getSessionArchive(
@@ -338,14 +406,15 @@ class AuthorityBackendAdapter implements AgentBackend {
     _archiveId: string,
     _limit?: number,
   ): Promise<SessionsArchivesGetResult> {
-    void _agentId;
-    void _archiveId;
-    void _limit;
-    throw new Error("Authority v1 does not support session archives.");
+    return authorityClient.requestGateway<SessionsArchivesGetResult>("sessions.archives.get", {
+      agentId: _agentId,
+      archiveId: _archiveId,
+      ...(typeof _limit === "number" ? { limit: _limit } : {}),
+    });
   }
 
-  async deleteSessionArchive() {
-    return { ok: false, removed: false };
+  async deleteSessionArchive(agentId: string, archiveId: string): Promise<{ ok: boolean; removed: boolean }> {
+    return authorityClient.requestGateway<{ ok: boolean; removed: boolean }>("sessions.archives.delete", { agentId, archiveId });
   }
 
   async restoreSessionArchive(
@@ -353,18 +422,32 @@ class AuthorityBackendAdapter implements AgentBackend {
     _archiveId: string,
     _key: string,
   ): Promise<SessionsArchivesRestoreResult> {
-    void _agentId;
-    void _archiveId;
-    void _key;
-    throw new Error("Authority v1 does not support archive restore.");
+    return authorityClient.requestGateway<SessionsArchivesRestoreResult>("sessions.archives.restore", {
+      agentId: _agentId,
+      archiveId: _archiveId,
+      key: _key,
+    });
   }
 
-  async compactSession() {
-    return { ok: false, compacted: false };
+  async compactSession(sessionKey: string, maxLines?: number): Promise<{ ok: boolean; compacted: boolean }> {
+    return authorityClient.requestGateway<{ ok: boolean; compacted: boolean }>("sessions.compact", {
+      key: sessionKey,
+      ...(typeof maxLines === "number" ? { maxLines } : {}),
+    });
   }
 
-  async resolveSession(agentId: string) {
-    return { ok: true as const, key: `agent:${agentId}:main` };
+  async resolveSession(agentId: string): Promise<{ ok: boolean; key: string; error?: string }> {
+    try {
+      return await authorityClient.requestGateway<{ ok: boolean; key: string; error?: string }>("sessions.resolve", {
+        key: `agent:${agentId}:main`,
+      });
+    } catch (error) {
+      return {
+        ok: true as const,
+        key: `agent:${agentId}:main`,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   getChatHistory(sessionKey: string, limit?: number) {
@@ -412,35 +495,25 @@ class AuthorityBackendAdapter implements AgentBackend {
     }));
   }
 
-  async listCron() {
-    return { jobs: [] };
+  async listCron(): Promise<CronListResult> {
+    return authorityClient.requestGateway<CronListResult>("cron.list", {});
   }
 
-  async addCron() {
-    throw new Error("Authority v1 does not expose browser-side cron management.");
+  async addCron(job: Record<string, unknown>) {
+    return authorityClient.requestGateway("cron.add", job);
   }
 
-  async updateCron() {
-    throw new Error("Authority v1 does not expose browser-side cron management.");
+  async updateCron(jobId: string, patch: Record<string, unknown>) {
+    return authorityClient.requestGateway("cron.update", { jobId, patch });
   }
 
-  async removeCron() {
-    return false;
+  async removeCron(id: string) {
+    const response = await authorityClient.requestGateway<{ ok: boolean }>("cron.remove", { id });
+    return response.ok;
   }
 
-  async getUsageCost({ days = 30 } = {}) {
-    return {
-      updatedAt: Date.now(),
-      days,
-      totals: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-      },
-    };
+  async getUsageCost({ days = 30 } = {}): Promise<CostUsageSummary> {
+    return authorityClient.requestGateway<CostUsageSummary>("usage.cost", { days });
   }
 
   async getSessionsUsage({
@@ -455,36 +528,18 @@ class AuthorityBackendAdapter implements AgentBackend {
     limit?: number;
     includeContextWeight?: boolean;
   } = {}): Promise<SessionsUsageResult> {
-    const today = new Date().toISOString().slice(0, 10);
-    return {
-      updatedAt: Date.now(),
-      startDate: startDate ?? today,
-      endDate: endDate ?? today,
-      sessions: [],
-      totals: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        totalCost: 0,
-      },
-    };
+    return authorityClient.requestGateway<SessionsUsageResult>("sessions.usage", {
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {}),
+    });
   }
 
-  async getChannelsStatus() {
-    const health = await authorityClient.health();
-    return {
-      authority: "online",
-      executor: health.executor.state,
-      provider: health.executor.provider,
-    };
+  async getChannelsStatus(): Promise<Record<string, unknown>> {
+    return authorityClient.requestGateway<Record<string, unknown>>("channels.status", {});
   }
 
-  async getSkillsStatus() {
-    return {
-      authority: "native",
-    };
+  async getSkillsStatus(agentId?: string): Promise<Record<string, unknown>> {
+    return authorityClient.requestGateway<Record<string, unknown>>("skills.status", agentId ? { agentId } : {});
   }
 
   getHealth() {
@@ -495,23 +550,22 @@ class AuthorityBackendAdapter implements AgentBackend {
     return authorityClient.health();
   }
 
-  async getConfigSnapshot() {
-    const bootstrap = await authorityClient.bootstrap();
-    return {
-      path: "authority://config",
-      exists: Boolean(bootstrap.config),
-      valid: true,
-      hash: bootstrap.config ? String(bootstrap.config.companies.length) : undefined,
-      config: (bootstrap.config ?? {}) as Record<string, unknown>,
-    };
+  getConfigSnapshot(): Promise<AuthorityGatewayConfigSnapshot> {
+    return authorityClient.requestGateway<AuthorityGatewayConfigSnapshot>("config.get", {});
   }
 
-  async setConfig() {
-    throw new Error("Authority config is managed through company commands.");
+  setConfig(config: Record<string, unknown>, baseHash: string) {
+    return authorityClient.requestGateway("config.set", {
+      raw: JSON.stringify(config, null, 2),
+      baseHash,
+    });
   }
 
-  async patchConfig() {
-    throw new Error("Authority config is managed through company commands.");
+  patchConfig(patch: Record<string, unknown>, baseHash: string) {
+    return authorityClient.requestGateway("config.patch", {
+      raw: JSON.stringify(patch, null, 2),
+      baseHash,
+    });
   }
 
   async alignAgentSkillsToDefaults(agentIds: string[]) {

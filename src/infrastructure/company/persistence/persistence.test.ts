@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthorityBootstrapSnapshot, AuthorityCompanyRuntimeSnapshot } from "../../authority/contract";
-import { authorityClient } from "../../authority/client";
 import {
   readCachedAuthorityRuntimeSnapshot,
   writeCachedAuthorityRuntimeSnapshot,
@@ -17,6 +16,17 @@ import {
   saveCompanyConfig,
   setPersistedActiveCompanyId,
 } from "./persistence";
+import {
+  deleteAuthorityCompany,
+  getAuthorityBootstrap,
+  saveAuthorityConfig as saveAuthorityConfigRequest,
+} from "../../../application/gateway/authority-control";
+
+vi.mock("../../../application/gateway/authority-control", () => ({
+  getAuthorityBootstrap: vi.fn(),
+  saveAuthorityConfig: vi.fn(),
+  deleteAuthorityCompany: vi.fn(),
+}));
 
 function createCompany(
   id: string,
@@ -84,10 +94,20 @@ function createBootstrap(config: CyberCompanyConfig | null): AuthorityBootstrapS
     activeCompany,
     runtime: activeCompany ? createRuntime(activeCompany.id) : null,
     executor: {
-      adapter: "single-executor-local",
+      adapter: "openclaw-bridge",
       state: "ready",
-      provider: "none",
+      provider: "openclaw",
       note: "test",
+    },
+    executorConfig: {
+      type: "openclaw",
+      openclaw: {
+        url: "ws://127.0.0.1:18789",
+        tokenConfigured: false,
+      },
+      connectionState: "ready",
+      lastError: null,
+      lastConnectedAt: Date.now(),
     },
     authority: {
       url: "http://127.0.0.1:18790",
@@ -105,7 +125,7 @@ describe("company persistence", () => {
 
   it("loads config from authority and hydrates the cached CEO owner", async () => {
     const config = createConfig();
-    vi.spyOn(authorityClient, "bootstrap").mockResolvedValue(createBootstrap(config));
+    vi.mocked(getAuthorityBootstrap).mockResolvedValue(createBootstrap(config));
 
     const loaded = await loadCompanyConfig();
 
@@ -117,21 +137,19 @@ describe("company persistence", () => {
 
   it("saves config through authority and refreshes the cached active company", async () => {
     const config = createConfig();
-    const updateConfig = vi
-      .spyOn(authorityClient, "updateConfig")
-      .mockResolvedValue(createBootstrap(config));
+    vi.mocked(saveAuthorityConfigRequest).mockResolvedValue(createBootstrap(config));
 
     const saved = await saveCompanyConfig(config);
 
     expect(saved).toBe(true);
-    expect(updateConfig).toHaveBeenCalledWith(config);
+    expect(saveAuthorityConfigRequest).toHaveBeenCalledWith(config);
     expect(peekCachedCompanyConfig()).toEqual(config);
     expect(getConfigOwnerAgentId()).toBe("new-ceo");
   });
 
   it("switches the cached active company without touching browser storage", async () => {
     const config = createConfig();
-    vi.spyOn(authorityClient, "bootstrap").mockResolvedValue(createBootstrap(config));
+    vi.mocked(getAuthorityBootstrap).mockResolvedValue(createBootstrap(config));
     await loadCompanyConfig();
 
     setPersistedActiveCompanyId("company-1");
@@ -148,12 +166,11 @@ describe("company persistence", () => {
       companies: [currentConfig.companies[1]!],
     };
     writeCachedAuthorityRuntimeSnapshot(createRuntime("company-1"));
-    const deleteCompany = vi.spyOn(authorityClient, "deleteCompany").mockResolvedValue({ ok: true });
-    vi.spyOn(authorityClient, "bootstrap").mockResolvedValue(createBootstrap(nextConfig));
+    vi.mocked(deleteAuthorityCompany).mockResolvedValue(createBootstrap(nextConfig));
 
     const result = await deleteCompanyCascade(currentConfig, "company-1");
 
-    expect(deleteCompany).toHaveBeenCalledWith("company-1");
+    expect(deleteAuthorityCompany).toHaveBeenCalledWith("company-1");
     expect(result).toEqual(nextConfig);
     expect(readCachedAuthorityRuntimeSnapshot("company-1")).toBeNull();
     expect(getPersistedActiveCompanyId()).toBe("company-2");
@@ -162,11 +179,10 @@ describe("company persistence", () => {
 
   it("returns the current config unchanged when the company is unknown", async () => {
     const currentConfig = createConfig();
-    const deleteCompany = vi.spyOn(authorityClient, "deleteCompany");
 
     const result = await deleteCompanyCascade(currentConfig, "missing-company");
 
     expect(result).toBe(currentConfig);
-    expect(deleteCompany).not.toHaveBeenCalled();
+    expect(deleteAuthorityCompany).not.toHaveBeenCalled();
   });
 });

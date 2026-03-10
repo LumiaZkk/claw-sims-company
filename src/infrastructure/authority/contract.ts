@@ -15,9 +15,16 @@ import type {
 import type { Company, CyberCompanyConfig } from "../../domain/org/types";
 import type {
   AgentListEntry,
+  CostUsageSummary,
   ChatMessage,
   CompanyEvent,
+  GatewayModelChoice,
+  GatewayModelsListParams,
   GatewaySessionRow,
+  SessionsArchivesGetResult,
+  SessionsArchivesListResult,
+  SessionsArchivesRestoreResult,
+  SessionsUsageResult,
 } from "../gateway";
 
 export const DEFAULT_AUTHORITY_URL = "http://127.0.0.1:18790";
@@ -28,6 +35,40 @@ export type AuthorityExecutorStatus = {
   state: "ready" | "degraded" | "blocked";
   provider: "none" | "openclaw";
   note: string;
+};
+
+export type AuthorityExecutorConnectionState =
+  | "idle"
+  | "connecting"
+  | "ready"
+  | "degraded"
+  | "blocked";
+
+export type AuthorityExecutorConfig = {
+  type: "openclaw";
+  openclaw: {
+    url: string;
+    tokenConfigured: boolean;
+  };
+  connectionState: AuthorityExecutorConnectionState;
+  lastError: string | null;
+  lastConnectedAt: number | null;
+};
+
+export type AuthorityExecutorConfigPatch = {
+  openclaw?: {
+    url?: string;
+    token?: string | null;
+  };
+  reconnect?: boolean;
+};
+
+export type AuthorityGatewayConfigSnapshot = {
+  path: string;
+  exists: boolean;
+  valid: boolean;
+  hash?: string;
+  config: Record<string, unknown>;
 };
 
 export type AuthorityCompanyRuntimeSnapshot = {
@@ -51,6 +92,7 @@ export type AuthorityBootstrapSnapshot = {
   activeCompany: Company | null;
   runtime: AuthorityCompanyRuntimeSnapshot | null;
   executor: AuthorityExecutorStatus;
+  executorConfig: AuthorityExecutorConfig;
   authority: {
     url: string;
     dbPath: string;
@@ -61,6 +103,7 @@ export type AuthorityBootstrapSnapshot = {
 export type AuthorityHealthSnapshot = {
   ok: true;
   executor: AuthorityExecutorStatus;
+  executorConfig: AuthorityExecutorConfig;
   authority: {
     dbPath: string;
     connected: true;
@@ -91,7 +134,7 @@ export type AuthorityEvent =
         runId: string;
         sessionKey: string;
         seq: number;
-        state: "final" | "error";
+        state: "delta" | "final" | "aborted" | "error";
         message?: ChatMessage;
         errorMessage?: string;
       };
@@ -193,3 +236,15 @@ export type AuthoritySessionListResponse = {
 export type AuthorityActorsResponse = {
   agents: AgentListEntry[];
 };
+
+export type AuthorityModelsResponse = {
+  models: GatewayModelChoice[];
+};
+
+export type AuthorityModelsListParams = GatewayModelsListParams;
+
+export type AuthoritySessionArchivesListResponse = SessionsArchivesListResult;
+export type AuthoritySessionArchiveGetResponse = SessionsArchivesGetResult;
+export type AuthoritySessionArchiveRestoreResponse = SessionsArchivesRestoreResult;
+export type AuthorityUsageCostResponse = CostUsageSummary;
+export type AuthoritySessionsUsageResponse = SessionsUsageResult;

@@ -58,14 +58,13 @@ function ConnectForm({
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
         <div className="mb-4 space-y-1 text-sm">
-          <div className="font-semibold text-slate-900">连接本机 authority</div>
+          <div className="font-semibold text-slate-900">连接工作引擎</div>
           <p className="text-slate-500">
-            前端会先连接本机 authority，再由 authority 选择可用执行器。当前目标是{" "}
-            {currentProvider?.label || "本机 authority"}。
+            通过统一协议接入 Agent 后端。当前使用 {currentProvider?.label || "工作引擎"}。
           </p>
           <p className="text-xs text-slate-400">
-            authority 是系统权威源。即使远程 provider 不可用，只要 authority 在线，你仍可以查看公司、
-            主线需求和历史记录。
+            如果你要切换到别的 provider，只需要在这里更换“后端提供方”。系统会按 provider 分别记住 URL 和
+            Token，不会把 OpenClaw 和 Authority 的连接配置混在一起。
           </p>
         </div>
 
@@ -90,6 +89,9 @@ function ConnectForm({
               {currentProvider?.description ? (
                 <p className="mt-1 text-xs text-slate-500">{currentProvider.description}</p>
               ) : null}
+              <p className="mt-1 text-[11px] text-slate-400">
+                每个 provider 会单独保存最近一次连接地址和令牌，后续切回来会自动回填。
+              </p>
               <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                 <div className="font-medium text-slate-800">执行器能力快照</div>
                 <div className="mt-1">
@@ -188,8 +190,8 @@ function ConnectForm({
                 {!connectError?.steps?.length ? (
                   <ul className="space-y-1 text-xs">
                     {[
-                      "确认本机 authority 进程正在运行",
-                      `检查 authority 地址是否正确（当前默认 ${currentProvider?.defaultUrl || "http://127.0.0.1:18790"}）`,
+                      "确认当前 provider 进程正在运行",
+                      `检查服务地址是否正确（当前默认 ${currentProvider?.defaultUrl || "ws://localhost:18789"}）`,
                       "如果启用了鉴权，确认 Token 输入无误",
                       "检查本机与目标地址网络可达（防火墙/端口）",
                     ].map((step) => (
@@ -240,7 +242,7 @@ function ConnectForm({
               </code>
             </>
           ) : (
-            "请先启动本机 authority，再回来连接。"
+            "请先启动后端工作引擎，再回来连接。"
           )}
         </p>
       </div>
@@ -271,17 +273,17 @@ export function ConnectPresentationPage() {
 
   useEffect(() => {
     if (connected) {
-      toast.success("连接成功", "本机 authority 已连接，正在进入公司选择。");
+      toast.success("连接成功", `${currentProvider?.label || "当前 provider"} 已连接，正在进入公司选择。`);
       navigate("/select");
     }
-  }, [connected, navigate]);
+  }, [connected, currentProvider?.label, navigate]);
 
   useEffect(() => {
     const previousPhase = previousPhaseRef.current;
     if (phase === "failed" && previousPhase !== "failed") {
       toast.error(
         connectError?.title || "自动重连失败",
-        connectError?.message || "请检查 authority 地址、Token 或本机服务状态。",
+        connectError?.message || "请检查地址、Token 或当前 provider 服务状态。",
       );
     }
     previousPhaseRef.current = phase;

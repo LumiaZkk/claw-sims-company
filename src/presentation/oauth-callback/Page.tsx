@@ -2,6 +2,7 @@ import { CheckCircle2, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGatewayStore } from "../../application/gateway";
+import { formatCodexRuntimeSyncDescription, reapplyCodexModelsToActiveSessions } from "../../application/gateway/codex-runtime";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { gateway } from "../../application/gateway";
@@ -62,15 +63,21 @@ export function CodexOAuthCallbackPresentationPage() {
       try {
         const completed = await gateway.completeCodexOAuth({ code, state });
         const refreshed = await gateway.refreshModels();
+        const reapplyResult = await reapplyCodexModelsToActiveSessions();
         const codexCount = (refreshed.models ?? []).filter((model) => model.provider === "openai-codex")
           .length;
         markModelsRefreshed();
         clearCallbackQuery();
         setResult({
           phase: "success",
-          message: `授权已完成，已导入 ${completed.profileId}，当前发现 ${codexCount} 个 Codex 模型。`,
+          message:
+            `授权已完成，已导入 ${completed.profileId}，当前发现 ${codexCount} 个 Codex 模型。`
+            + formatCodexRuntimeSyncDescription(reapplyResult),
         });
-        toast.success("Codex 授权成功", `已同步 ${codexCount} 个可用模型。`);
+        toast.success(
+          "Codex 授权成功",
+          `已同步 ${codexCount} 个可用模型。${formatCodexRuntimeSyncDescription(reapplyResult)}`,
+        );
 
         if (window.opener) {
           setTimeout(() => {

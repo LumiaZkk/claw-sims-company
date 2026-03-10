@@ -3,6 +3,11 @@ import { useCompanyShellCommands, useCompanyShellQuery } from "../company/shell"
 import { useOrgApp } from "../org";
 import { isOrgAutopilotEnabled } from "../assignment/org-fit";
 import { gateway, type GatewayModelChoice, useGatewayStore } from "./index";
+import {
+  formatCodexRuntimeSyncDescription,
+  reapplyCodexModelsToActiveSessions,
+  syncCodexModelsToAllowlist,
+} from "./codex-runtime";
 
 type JsonMap = Record<string, unknown>;
 export type GatewayConfigSnapshot = Awaited<ReturnType<typeof gateway.getConfigSnapshot>>;
@@ -17,57 +22,9 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function toModelRef(model: GatewayModelChoice) {
-  return `${model.provider}/${model.id}`;
-}
-
 async function refreshAvailableModels() {
   const modelsResult = await gateway.listModels();
   return modelsResult.models ?? [];
-}
-
-async function syncCodexModelsToAllowlist(models: GatewayModelChoice[]) {
-  const codexModels = models.filter((model) => model.provider === "openai-codex");
-  if (codexModels.length === 0) {
-    return false;
-  }
-
-  const snapshot = await gateway.getConfigSnapshot();
-  const hash = snapshot.hash;
-  if (!hash) {
-    return false;
-  }
-
-  const currentModels =
-    (snapshot.config as { agents?: { defaults?: { models?: Record<string, unknown> } } })?.agents?.defaults
-      ?.models ?? {};
-  const nextModels = { ...currentModels };
-  let changed = false;
-
-  for (const model of codexModels) {
-    const ref = toModelRef(model);
-    if (!(ref in nextModels)) {
-      nextModels[ref] = {};
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return false;
-  }
-
-  await gateway.patchConfig(
-    {
-      agents: {
-        defaults: {
-          models: nextModels,
-        },
-      },
-    },
-    hash,
-  );
-
-  return true;
 }
 
 export function useGatewaySettingsQuery() {
@@ -202,13 +159,16 @@ export function useGatewaySettingsCommands(input: {
       const imported = await gateway.importCodexCliAuth();
       const refreshed = await gateway.refreshModels();
       await syncCodexModelsToAllowlist(refreshed.models ?? []);
+      const reapplyResult = await reapplyCodexModelsToActiveSessions();
       const nextModels = await refreshAvailableModels();
       const nextCodexModels = nextModels.filter((model) => model.provider === "openai-codex");
       markModelsRefreshed();
       await input.refreshRuntime();
       return {
         title: "Codex 授权已同步",
-        description: `已导入 ${imported.profileId}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`,
+        description:
+          `已导入 ${imported.profileId}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`
+          + formatCodexRuntimeSyncDescription(reapplyResult),
       };
     } finally {
       setCodexImporting(false);
@@ -220,13 +180,16 @@ export function useGatewaySettingsCommands(input: {
     try {
       const refreshed = await gateway.refreshModels();
       await syncCodexModelsToAllowlist(refreshed.models ?? []);
+      const reapplyResult = await reapplyCodexModelsToActiveSessions();
       const nextModels = await refreshAvailableModels();
       const nextCodexModels = nextModels.filter((model) => model.provider === "openai-codex");
       markModelsRefreshed();
       await input.refreshRuntime();
       return {
         title: "Codex 模型已刷新",
-        description: `当前可用 ${nextCodexModels.length} 个 OpenAI Codex 模型。`,
+        description:
+          `当前可用 ${nextCodexModels.length} 个 OpenAI Codex 模型。`
+          + formatCodexRuntimeSyncDescription(reapplyResult),
       };
     } finally {
       setCodexRefreshing(false);
@@ -259,6 +222,7 @@ export function useGatewaySettingsCommands(input: {
 
         const refreshed = await gateway.refreshModels();
         await syncCodexModelsToAllowlist(refreshed.models ?? []);
+        const reapplyResult = await reapplyCodexModelsToActiveSessions();
         const nextModels = await refreshAvailableModels();
         const nextCodexModels = nextModels.filter((model) => model.provider === "openai-codex");
         markModelsRefreshed();
@@ -266,7 +230,9 @@ export function useGatewaySettingsCommands(input: {
         await input.refreshRuntime();
         return {
           title: "Codex 授权成功",
-          description: `已导入 ${status.profileId ?? "openai-codex"}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`,
+          description:
+            `已导入 ${status.profileId ?? "openai-codex"}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`
+            + formatCodexRuntimeSyncDescription(reapplyResult),
         };
       }
 

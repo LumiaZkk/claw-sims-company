@@ -1610,7 +1610,7 @@ export function ChatPageScreen() {
 
   return (
     <div
-      className="flex flex-col h-full bg-slate-50/50 relative"
+      className="relative flex h-full min-h-0 flex-col overflow-hidden bg-slate-50/50"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1892,7 +1892,7 @@ export function ChatPageScreen() {
 
           lastScrollTopRef.current = currentTop;
         }}
-        className="flex-1 overflow-y-auto p-3 md:p-6 space-y-6"
+        className="flex-1 min-h-0 space-y-6 overflow-y-auto p-3 md:p-6"
       >
         <ChatMessageFeed
           hiddenDisplayItemCount={hiddenDisplayItemCount}

@@ -44,6 +44,7 @@ export interface ProviderConversationRef {
 export interface DispatchRecord {
   id: string;
   workItemId: string;
+  revision?: number;
   roomId?: string | null;
   title: string;
   summary: string;
@@ -73,6 +74,11 @@ export interface RoomMessage {
   senderAgentId?: string;
   senderLabel?: string;
   senderRole?: string;
+  transport?: "company_report" | "sessions_send" | "inferred";
+  reportStatus?: "acknowledged" | "answered" | "blocked";
+  messageIntent?: "report" | "relay_notice" | "work_update" | "dispatch";
+  metadata?: unknown;
+  provenance?: Record<string, unknown>;
   visibility?: RoomVisibility;
   source?: RoomMessageSource;
   targetActorIds?: string[];
@@ -112,6 +118,7 @@ export interface RoomConversationBindingRecord extends ProviderConversationRef {
 
 export interface RequirementRoomRecord extends RoomRecord {
   sessionKey: string;
+  revision?: number;
   topicKey?: string;
   scope?: RequirementRoomScope;
   memberIds: string[];
@@ -243,6 +250,7 @@ export interface DecisionTicketOptionRecord {
 export interface DecisionTicketRecord {
   id: string;
   companyId: string;
+  revision?: number;
   sourceType: "escalation" | "requirement";
   sourceId: string;
   escalationId?: string | null;

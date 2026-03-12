@@ -23,6 +23,15 @@ type BuildRequestRecordsInput = {
   relatedTask?: TrackedTask | null;
 };
 
+type NormalizedReportPayload = {
+  summary?: string;
+  details?: string;
+};
+
+function normalizeSummaryText(text: string): string {
+  return text.replace(/^#+\s*/u, "").trim();
+}
+
 function extractText(message: MessageLike): string {
   if (typeof message.text === "string" && message.text.trim().length > 0) {
     return message.text.trim();
@@ -55,6 +64,51 @@ function extractText(message: MessageLike): string {
 
 function normalizeTimestamp(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function isStructuredReportBlock(text: string): boolean {
+  return /^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|\|.+\||```)/u.test(text.trim());
+}
+
+function normalizeReportPayload(
+  text: string | undefined,
+  transport: RequestRecord["transport"],
+): NormalizedReportPayload {
+  const normalized = text?.trim();
+  if (!normalized) {
+    return {};
+  }
+  if (transport !== "sessions_send") {
+    return {
+      summary: normalizeSummaryText(summarizeReportText(normalized)),
+      details: normalized,
+    };
+  }
+
+  const sections = normalized
+    .split(/\n{2,}/u)
+    .map((section) => section.trim())
+    .filter((section) => section.length > 0);
+  if (sections.length < 2) {
+    return {
+      summary: normalizeSummaryText(summarizeReportText(normalized)),
+      details: normalized,
+    };
+  }
+
+  const [firstSection, ...remainingSections] = sections;
+  const reportBody = remainingSections.join("\n\n").trim();
+  if (!reportBody || !isStructuredReportBlock(reportBody) || isStructuredReportBlock(firstSection)) {
+    return {
+      summary: normalizeSummaryText(summarizeReportText(normalized)),
+      details: normalized,
+    };
+  }
+
+  return {
+    summary: normalizeSummaryText(summarizeReportText(reportBody)),
+    details: reportBody,
+  };
 }
 
 export function buildRequestRecords(input: BuildRequestRecordsInput): RequestRecord[] {
@@ -102,10 +156,11 @@ export function buildRequestRecords(input: BuildRequestRecordsInput): RequestRec
       status = "answered";
       deliveryState = "answered";
       resolution = latestAnsweredMessage ? "complete" : "partial";
-      responseSummary = summarizeReportText(latestAnsweredMessage?.text ?? handoff.summary);
-      responseDetails = latestAnsweredMessage?.text;
       responseMessageTs = latestAnsweredMessage?.timestamp ?? handoff.updatedAt;
       transport = inferReportTransport(latestAnsweredMessage?.text ?? handoff.summary);
+      const normalizedPayload = normalizeReportPayload(latestAnsweredMessage?.text, transport);
+      responseSummary = normalizedPayload.summary ?? summarizeReportText(handoff.summary);
+      responseDetails = normalizedPayload.details;
     } else if (handoff.status === "blocked" || latestBlockedMessage) {
       status = "blocked";
       deliveryState = "blocked";
@@ -113,18 +168,20 @@ export function buildRequestRecords(input: BuildRequestRecordsInput): RequestRec
         latestBlockedMessage && /人工接管|手动接管|manual takeover|请(?:你|用户).{0,8}(?:执行|处理|发布|接管)/i.test(latestBlockedMessage.text)
           ? "manual_takeover"
           : "partial";
-      responseSummary = summarizeReportText(latestBlockedMessage?.text ?? handoff.summary);
-      responseDetails = latestBlockedMessage?.text;
       responseMessageTs = latestBlockedMessage?.timestamp ?? handoff.updatedAt;
       transport = inferReportTransport(latestBlockedMessage?.text ?? handoff.summary);
+      const normalizedPayload = normalizeReportPayload(latestBlockedMessage?.text, transport);
+      responseSummary = normalizedPayload.summary ?? summarizeReportText(handoff.summary);
+      responseDetails = normalizedPayload.details;
     } else if (handoff.status === "acknowledged" || latestAckMessage) {
       status = "acknowledged";
       deliveryState = "acknowledged";
       resolution = "pending";
-      responseSummary = summarizeReportText(latestAckMessage?.text ?? handoff.summary);
-      responseDetails = latestAckMessage?.text;
       responseMessageTs = latestAckMessage?.timestamp ?? handoff.updatedAt;
       transport = inferReportTransport(latestAckMessage?.text ?? handoff.summary);
+      const normalizedPayload = normalizeReportPayload(latestAckMessage?.text, transport);
+      responseSummary = normalizedPayload.summary ?? summarizeReportText(handoff.summary);
+      responseDetails = normalizedPayload.details;
     } else {
       status = "pending";
       deliveryState = "delivered";

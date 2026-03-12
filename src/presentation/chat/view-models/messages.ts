@@ -21,7 +21,10 @@ import {
   type ChatDisplayTier,
   type ChatNarrativeRole,
 } from "./message-types";
-import { parseCollaboratorReportMessage } from "./message-reports";
+import {
+  parseCollaboratorReportMessage,
+  readStructuredCollaborationMetadata,
+} from "./message-reports";
 import { isToolActivityMessage, isToolResultMessage, summarizeToolMessage } from "./message-tooling";
 
 export { CHAT_UI_MESSAGE_LIMIT } from "./message-types";
@@ -256,6 +259,13 @@ function isExecutiveBridgeText(message: ChatMessage, text: string): boolean {
 }
 
 function createThreadGroupKey(message: ChatMessage): string | null {
+  const structured = readStructuredCollaborationMetadata(message);
+  if (structured.dispatchId) {
+    return structured.dispatchId;
+  }
+  if (structured.requestId) {
+    return structured.requestId;
+  }
   if (typeof message.roomSessionKey === "string" && message.roomSessionKey.trim().length > 0) {
     return message.roomSessionKey.trim();
   }
@@ -318,7 +328,7 @@ function classifyReportDisplayItem(
     };
   }
   const split = splitNarrativeText(report.cleanText);
-  const summaryText = split.primaryText || report.summary;
+  const summaryText = report.summary || split.primaryText;
   const detailContent =
     report.showFullContent || split.detailText || report.detail
       ? [split.detailText, report.showFullContent ? report.cleanText : report.detail]
@@ -348,6 +358,7 @@ function classifyReportDisplayItem(
 }
 
 function classifyMessageDisplayItem(message: ChatMessage): DisplayClassification {
+  const structured = readStructuredCollaborationMetadata(message);
   const text = extractTextFromMessage(message)?.trim() ?? "";
   const split = splitNarrativeText(text);
   const primaryText = split.primaryText;
@@ -371,6 +382,16 @@ function classifyMessageDisplayItem(message: ChatMessage): DisplayClassification
       detailContent,
       threadGroupKey,
       displayText: detailContent ? "查看协作详情" : null,
+    };
+  }
+
+  if (structured.intent === "relay_notice") {
+    return {
+      displayTier: "detail",
+      narrativeRole: "system_noise",
+      detailContent: primaryText,
+      threadGroupKey,
+      displayText: "协作回传详情",
     };
   }
 
@@ -472,6 +493,22 @@ function buildDisplayItemId(
   const stableId = readChatMessageStableId(message);
   const baseId = stableId ? `${stableId}:${kind}` : `${message.timestamp ?? Date.now()}:${kind}`;
   return reserveDisplayItemId(baseId, usedIds);
+}
+
+function resolveDisplayActorKey(message: ChatMessage): string {
+  if (typeof message.senderAgentId === "string" && message.senderAgentId.trim().length > 0) {
+    return `agent:${message.senderAgentId.trim()}`;
+  }
+  if (typeof message.roomAgentId === "string" && message.roomAgentId.trim().length > 0) {
+    return `agent:${message.roomAgentId.trim()}`;
+  }
+  if (typeof message.provenance === "object" && message.provenance) {
+    const provenance = message.provenance as Record<string, unknown>;
+    if (typeof provenance.sourceActorId === "string" && provenance.sourceActorId.trim().length > 0) {
+      return `agent:${provenance.sourceActorId.trim()}`;
+    }
+  }
+  return `role:${message.role}`;
 }
 
 export function normalizeChatBlockType(type?: string): string {
@@ -709,7 +746,57 @@ export function buildChatDisplayItems(
   }
 
   flushToolSummary();
-  return displayItems;
+  return compactStructuredDisplayItems(displayItems);
+}
+
+function compactStructuredDisplayItems(displayItems: ChatDisplayItem[]): ChatDisplayItem[] {
+  const sessionsSendReportKeys = new Set<string>();
+  const relayNoticeByActorTimestamp = new Map<string, string>();
+  displayItems.forEach((item) => {
+    if (item.kind !== "report" || item.report.transport !== "sessions_send") {
+      return;
+    }
+    const timestamp = typeof item.message.timestamp === "number" ? item.message.timestamp : 0;
+    sessionsSendReportKeys.add(`${resolveDisplayActorKey(item.message)}:${timestamp}`);
+  });
+
+  const compactedItems = displayItems.map((item) => {
+    if (item.kind !== "message") {
+      return item;
+    }
+    const timestamp = typeof item.message.timestamp === "number" ? item.message.timestamp : 0;
+    const actorTimestampKey = `${resolveDisplayActorKey(item.message)}:${timestamp}`;
+    if (
+      item.message.role !== "user" &&
+      sessionsSendReportKeys.has(actorTimestampKey)
+    ) {
+      const originalText = extractTextFromMessage(item.message) ?? item.detailContent ?? null;
+      if (originalText?.trim()) {
+        relayNoticeByActorTimestamp.set(actorTimestampKey, originalText.trim());
+      }
+      return {
+        ...item,
+        message: overrideDisplayText(item.message, "协作回传详情"),
+        displayTier: "detail",
+        narrativeRole: "system_noise",
+        detailContent: originalText,
+      };
+    }
+    return item;
+  });
+
+  return compactedItems.filter((item) => {
+    if (item.kind !== "report" || item.report.transport !== "sessions_send") {
+      return true;
+    }
+    const timestamp = typeof item.message.timestamp === "number" ? item.message.timestamp : 0;
+    const actorTimestampKey = `${resolveDisplayActorKey(item.message)}:${timestamp}`;
+    const relayNotice = relayNoticeByActorTimestamp.get(actorTimestampKey);
+    if (!relayNotice) {
+      return true;
+    }
+    return item.report.summary.trim() !== relayNotice;
+  });
 }
 
 function matchesDecisionIdentity(

@@ -372,6 +372,152 @@ describe("buildChatDisplayItems", () => {
     });
   });
 
+  it("uses structured relay intent to demote sessions_send delivery notices without text heuristics", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "消息已发送给 CEO。",
+        timestamp: 2_360,
+        roomAgentId: "co-cto",
+        transport: "sessions_send",
+        messageIntent: "relay_notice",
+        metadata: {
+          collaboration: {
+            transport: "sessions_send",
+            intent: "relay_notice",
+            requestId: "request:alpha:1",
+          },
+        },
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "message",
+      displayTier: "detail",
+      narrativeRole: "system_noise",
+      message: expect.objectContaining({
+        text: "协作回传详情",
+      }),
+      detailContent: "消息已发送给 CEO。",
+      threadGroupKey: "request:alpha:1",
+    });
+  });
+
+  it("uses structured report transport and status before falling back to text inference", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "CTO 已提交完整技术方案。",
+        timestamp: 2_370,
+        roomAgentId: "co-cto",
+        transport: "sessions_send",
+        reportStatus: "answered",
+        messageIntent: "report",
+        metadata: {
+          collaboration: {
+            transport: "sessions_send",
+            reportStatus: "answered",
+            intent: "report",
+            dispatchId: "dispatch:alpha:1",
+            summaryText: "CTO 已提交完整技术方案。",
+            detailText: "## NovelCraft 技术底座\n- API 已完成\n- Agent 编排已完成",
+          },
+        },
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "report",
+      displayTier: "main",
+      report: expect.objectContaining({
+        status: "answered",
+        transport: "sessions_send",
+        summary: "CTO 已提交完整技术方案。",
+        cleanText: "## NovelCraft 技术底座\n- API 已完成\n- Agent 编排已完成",
+      }),
+      detailContent: expect.stringContaining("## NovelCraft 技术底座"),
+      threadGroupKey: "dispatch:alpha:1",
+    });
+  });
+
+  it("demotes same-timestamp sessions_send relay echoes using actor and timestamp instead of text matching", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "## 完整技术方案\n- NovelCraft API\n- Agent 编排器",
+        timestamp: 2_380,
+        roomAgentId: "co-cto",
+        transport: "sessions_send",
+        reportStatus: "answered",
+        messageIntent: "report",
+      },
+      {
+        role: "assistant",
+        text: "消息已发送给 CEO。",
+        timestamp: 2_380,
+        roomAgentId: "co-cto",
+      },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "report",
+      report: expect.objectContaining({
+        transport: "sessions_send",
+      }),
+    });
+    expect(items[1]).toMatchObject({
+      kind: "message",
+      displayTier: "detail",
+      narrativeRole: "system_noise",
+      message: expect.objectContaining({
+        text: "协作回传详情",
+      }),
+      detailContent: "消息已发送给 CEO。",
+    });
+  });
+
+  it("deduplicates relay-only sessions_send reports when the same notice is already shown as collaboration detail", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "消息已发送给 CEO。由于 company_report 不可用，我通过 sessions_send 完成了汇报。",
+        timestamp: 2_390,
+        roomAgentId: "co-cto",
+        transport: "sessions_send",
+        reportStatus: "answered",
+        messageIntent: "report",
+        metadata: {
+          collaboration: {
+            transport: "sessions_send",
+            reportStatus: "answered",
+            intent: "report",
+            summaryText: "消息已发送给 CEO。",
+          },
+        },
+      },
+      {
+        role: "assistant",
+        text: "消息已发送给 CEO。",
+        timestamp: 2_390,
+        roomAgentId: "co-cto",
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "message",
+      displayTier: "detail",
+      narrativeRole: "system_noise",
+      message: expect.objectContaining({
+        text: "协作回传详情",
+      }),
+      detailContent: "消息已发送给 CEO。",
+    });
+  });
+
   it("anchors a structured requirement decision card to the matching assistant reply", () => {
     const items = buildChatDisplayItems([
       {

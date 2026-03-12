@@ -7,6 +7,7 @@ import {
 import type { ChatMessage } from "../gateway";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import type { DispatchRecord, RequirementRoomRecord, RequestRecord } from "../../domain/delegation/types";
+import type { RequestTransport } from "../delegation/report-classifier";
 import type { RequirementAggregateRecord, RequirementEvidenceEvent, WorkItemRecord } from "../../domain/mission/types";
 import type { Company, EmployeeRef } from "../../domain/org/types";
 
@@ -88,6 +89,15 @@ function buildRequestText(request: RequestRecord): string | null {
   );
 }
 
+function buildRequestDisplaySummary(request: RequestRecord): string | null {
+  return (
+    readString(request.responseSummary) ??
+    readString(request.responseDetails) ??
+    readString(request.summary) ??
+    readString(request.title)
+  );
+}
+
 function createSyntheticIncomingMessage(input: {
   company: Company;
   actorId: string;
@@ -96,7 +106,34 @@ function createSyntheticIncomingMessage(input: {
   ownerAgentId: string | null;
   text: string;
   timestamp: number;
+  transport?: RequestTransport;
+  reportStatus?: "acknowledged" | "answered" | "blocked";
+  messageIntent?: "report" | "relay_notice" | "work_update";
+  dispatchId?: string | null;
+  requestId?: string | null;
+  summaryText?: string | null;
+  detailText?: string | null;
 }): ReturnType<typeof createIncomingRequirementRoomMessage> {
+  const collaborationMetadata =
+    input.transport ||
+    input.reportStatus ||
+    input.messageIntent ||
+    input.dispatchId ||
+    input.requestId ||
+    input.summaryText ||
+    input.detailText
+      ? {
+          collaboration: {
+            transport: input.transport ?? undefined,
+            reportStatus: input.reportStatus ?? undefined,
+            intent: input.messageIntent ?? undefined,
+            dispatchId: input.dispatchId ?? undefined,
+            requestId: input.requestId ?? undefined,
+            summaryText: input.summaryText ?? undefined,
+            detailText: input.detailText ?? undefined,
+          },
+        }
+      : undefined;
   return createIncomingRequirementRoomMessage({
     company: input.company,
     agentId: input.actorId,
@@ -108,8 +145,23 @@ function createSyntheticIncomingMessage(input: {
       text: input.text,
       content: [{ type: "text", text: input.text }],
       timestamp: input.timestamp,
+      ...(input.transport ? { transport: input.transport } : {}),
+      ...(input.reportStatus ? { reportStatus: input.reportStatus } : {}),
+      ...(input.messageIntent ? { messageIntent: input.messageIntent } : {}),
+      ...(collaborationMetadata ? { metadata: collaborationMetadata } : {}),
+      ...(input.transport
+        ? {
+            provenance: {
+              sourceTool: input.transport,
+            },
+          }
+        : {}),
     } satisfies ChatMessage,
   });
+}
+
+function buildActorTimestampKey(actorId: string, timestamp: number): string {
+  return `${actorId}:${timestamp}`;
 }
 
 export function backfillRequirementRoomRecord(input: {
@@ -178,23 +230,55 @@ export function backfillRequirementRoomRecord(input: {
     )
     .sort((left, right) => left.timestamp - right.timestamp);
   const relevantSnapshots = (input.snapshots ?? [])
-    .filter((snapshot) => memberIds.includes(snapshot.agentId))
-    .flatMap((snapshot) =>
-      snapshot.messages
-        .filter((message) => message.role === "assistant" && message.timestamp >= startedAt)
-        .map((message) =>
-          createSyntheticIncomingMessage({
-            company,
-            actorId: snapshot.agentId,
-            sessionKey: snapshot.sessionKey,
-            roomId,
-            ownerAgentId,
-            text: message.text,
-            timestamp: message.timestamp,
-          }),
-        )
-        .filter((message): message is NonNullable<typeof message> => Boolean(message)),
+    .flatMap((snapshot) => snapshot.messages.map((message) => ({ snapshot, message })))
+    .filter(
+      (entry) => memberIds.includes(entry.snapshot.agentId) && entry.message.role === "assistant" && entry.message.timestamp >= startedAt,
     );
+  const requestByActorTimestamp = new Map<string, RequestRecord>();
+  relevantRequests.forEach((request) => {
+    const actorId =
+      request.toAgentIds.find((candidate) => memberIds.includes(candidate)) ??
+      request.toAgentIds[0] ??
+      null;
+    const timestamp = request.responseMessageTs ?? request.updatedAt;
+    if (!actorId || !timestamp) {
+      return;
+    }
+    requestByActorTimestamp.set(buildActorTimestampKey(actorId, timestamp), request);
+  });
+  const relevantSnapshotMessages = relevantSnapshots
+    .map(({ snapshot, message }) => {
+      const matchedRequest = requestByActorTimestamp.get(
+        buildActorTimestampKey(snapshot.agentId, message.timestamp),
+      );
+      const requestText = matchedRequest ? buildRequestText(matchedRequest) : null;
+      const exactRequestEcho = Boolean(requestText && requestText === message.text);
+      return createSyntheticIncomingMessage({
+        company,
+        actorId: snapshot.agentId,
+        sessionKey: snapshot.sessionKey,
+        roomId,
+        ownerAgentId,
+        text: message.text,
+        timestamp: message.timestamp,
+        transport: matchedRequest?.transport,
+        reportStatus:
+          matchedRequest?.status === "acknowledged" ||
+          matchedRequest?.status === "answered" ||
+          matchedRequest?.status === "blocked"
+            ? matchedRequest.status
+            : undefined,
+        messageIntent:
+          matchedRequest?.transport === "sessions_send" && !exactRequestEcho
+            ? "relay_notice"
+            : matchedRequest
+              ? "report"
+              : "work_update",
+        dispatchId: matchedRequest?.dispatchId ?? null,
+        requestId: matchedRequest?.id ?? null,
+      });
+    })
+    .filter((message): message is NonNullable<typeof message> => Boolean(message));
 
   const requestIds = new Set(relevantRequests.map((request) => request.eventId).filter(Boolean));
   const backfilledTranscript = mergeRequirementRoomTranscript([
@@ -216,6 +300,11 @@ export function backfillRequirementRoomRecord(input: {
           request.toAgentIds[0] ??
           null;
         const text = buildRequestText(request);
+        const summaryText = buildRequestDisplaySummary(request);
+        const detailText =
+          text && summaryText && text.trim() !== summaryText.trim()
+            ? text
+            : null;
         if (!actorId || !text) {
           return null;
         }
@@ -225,8 +314,20 @@ export function backfillRequirementRoomRecord(input: {
           sessionKey: request.consumerSessionKey ?? `agent:${actorId}:main`,
           roomId,
           ownerAgentId,
-          text,
+          text: summaryText ?? text,
           timestamp: request.responseMessageTs ?? request.updatedAt,
+          transport: request.transport,
+          reportStatus:
+            request.status === "acknowledged" ||
+            request.status === "answered" ||
+            request.status === "blocked"
+              ? request.status
+              : undefined,
+          messageIntent: "report",
+          dispatchId: request.dispatchId ?? null,
+          requestId: request.id,
+          summaryText,
+          detailText,
         });
       })
       .filter((message): message is NonNullable<typeof message> => Boolean(message)),
@@ -257,7 +358,7 @@ export function backfillRequirementRoomRecord(input: {
         });
       })
       .filter((message): message is NonNullable<typeof message> => Boolean(message)),
-    ...relevantSnapshots,
+    ...relevantSnapshotMessages,
   ]);
 
   const updatedAt = backfilledTranscript.reduce(

@@ -64,7 +64,7 @@ describe("getChatSenderIdentity", () => {
     });
   });
 
-  it("uses neutral fallback labels for group relay guesses", () => {
+  it("uses neutral fallback labels for unknown group collaboration messages", () => {
     const identity = getChatSenderIdentity(
       createInput({
         isGroup: true,
@@ -77,10 +77,10 @@ describe("getChatSenderIdentity", () => {
     );
 
     expect(identity).toMatchObject({
-      name: "张三",
+      name: "协作消息",
       isRelayed: true,
-      badgeLabel: "同步转发",
-      metaLabel: "跨会话消息",
+      badgeLabel: "来源待识别",
+      metaLabel: "协作消息",
     });
   });
 
@@ -104,6 +104,27 @@ describe("getChatSenderIdentity", () => {
       isOutgoing: true,
       attributionKind: "user",
       metaLabel: "已发送给全体成员",
+    });
+  });
+
+  it("does not treat non-owner group user payloads as the current user", () => {
+    const identity = getChatSenderIdentity(
+      createInput({
+        isGroup: true,
+        msg: {
+          role: "user",
+          text: "已接单：启动平台账号注册任务。",
+          timestamp: 1_000,
+          roomMessageSource: "member_reply",
+        },
+      }),
+    );
+
+    expect(identity).toMatchObject({
+      name: "协作消息",
+      isOutgoing: false,
+      attributionKind: "unknown",
+      badgeLabel: "来源待识别",
     });
   });
 

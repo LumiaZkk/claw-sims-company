@@ -191,4 +191,83 @@ describe("backfillRequirementRoomRecord", () => {
     expect(room.transcript.some((message) => message.role === "assistant" && message.text?.includes("第一版技术方案"))).toBe(true);
     expect(room.progress).not.toBe("0 条可见消息");
   });
+
+  it("annotates sessions_send fallback notices with structured collaboration metadata", () => {
+    const company = createCompany();
+    const aggregate = createAggregate();
+
+    const room = backfillRequirementRoomRecord({
+      company: {
+        ...company,
+        requests: [
+          {
+            id: "request:alpha:sessions-send",
+            dispatchId: "dispatch:alpha:1",
+            sessionKey: "agent:co-ceo:main",
+            topicKey: "mission:alpha",
+            taskId: "topic:mission:alpha",
+            fromAgentId: "co-ceo",
+            toAgentIds: ["co-cto"],
+            title: "请输出技术方案",
+            summary: "先给我一版技术方案。",
+            status: "answered",
+            resolution: "complete",
+            responseSummary: "CTO 已提交完整技术方案。",
+            responseDetails: "## 完整技术方案\n- NovelCraft API\n- Agent 编排器",
+            consumerSessionKey: "agent:co-cto:main",
+            responseMessageTs: 1_950,
+            transport: "sessions_send",
+            createdAt: 1_200,
+            updatedAt: 1_950,
+          } satisfies RequestRecord,
+        ],
+      },
+      aggregate,
+      workItem: createWorkItem(),
+      room: createRoom(),
+      dispatches: [],
+      evidence: [],
+      snapshots: [
+        {
+          agentId: "co-cto",
+          sessionKey: "agent:co-cto:main",
+          updatedAt: 1_960,
+          messages: [
+            {
+              role: "assistant",
+              text: "消息已发送给 CEO。由于 company_report 不可用，我通过 sessions_send 完成了汇报。",
+              timestamp: 1_950,
+            },
+          ],
+        },
+      ],
+    });
+
+    const relayNotice = room.transcript.find((message) => message.messageIntent === "relay_notice");
+    const reportMessage = room.transcript.find((message) => message.messageIntent === "report");
+    expect(relayNotice).toMatchObject({
+      role: "assistant",
+      transport: "sessions_send",
+      reportStatus: "answered",
+      messageIntent: "relay_notice",
+      metadata: {
+        collaboration: {
+          transport: "sessions_send",
+          reportStatus: "answered",
+          intent: "relay_notice",
+          dispatchId: "dispatch:alpha:1",
+        },
+      },
+    });
+    expect(reportMessage).toMatchObject({
+      role: "assistant",
+      text: "CTO 已提交完整技术方案。",
+      metadata: {
+        collaboration: {
+          summaryText: "CTO 已提交完整技术方案。",
+          detailText: "## 完整技术方案\n- NovelCraft API\n- Agent 编排器",
+        },
+      },
+    });
+  });
 });

@@ -46,7 +46,11 @@ describe("buildRequestRecords", () => {
       resolution: "complete",
       transport: "sessions_send",
     });
-    expect(request.responseDetails).toContain("## 番茄小说创作团队技术方案");
+    expect(request.responseSummary).toBe("番茄小说创作团队技术方案");
+    expect(request.responseDetails).toBe(
+      "## 番茄小说创作团队技术方案\n- 创作工具：AI 大纲与章节编辑器\n- 数据监控：收益、曝光和竞品看板",
+    );
+    expect(request.responseDetails).not.toContain("sessions_send");
   });
 
   it("ignores placeholder and bridge messages instead of upgrading them to answered", () => {

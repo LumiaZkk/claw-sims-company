@@ -1,6 +1,5 @@
 import { memo, useMemo } from "react";
 import { Users } from "lucide-react";
-import { resolveMentionedEmployeesInEmployees } from "../../../application/assignment/chat-mentions";
 import { buildRequirementRoomRouteFromCompanyContext } from "../../../application/delegation/room-routing";
 import { inferMissionTopicKey, inferRequestTopicKey } from "../../../application/delegation/request-topic";
 import { readConversationWorkspaceState } from "../../../application/mission";
@@ -8,9 +7,12 @@ import { Avatar, AvatarImage } from "../../../components/ui/avatar";
 import type { EmployeeRef } from "../../../domain/org/types";
 import { buildCompanyChatRoute } from "../../../lib/chat-routes";
 import { resolveTaskTitle } from "../view-models/task-tracker";
+import { resolveAssignmentActionEmployees } from "./chat-assignment-actions";
 
 type ChatAssignmentActionsProps = {
   messageText: string;
+  targetAgentIds: string[];
+  allowMentionFallback: boolean;
   companyId: string | null;
   employees: EmployeeRef[];
   isCeoSession: boolean;
@@ -25,28 +27,31 @@ type ChatAssignmentActionsProps = {
 };
 
 export const ChatAssignmentActions = memo(function ChatAssignmentActions(input: ChatAssignmentActionsProps) {
-  const mentions = useMemo(
+  const actionSurface = useMemo(
     () =>
-      [...new Map(
-        resolveMentionedEmployeesInEmployees(input.messageText, input.employees).map((member) => [
-          member.agentId,
-          member,
-        ]),
-      ).values()],
-    [input.employees, input.messageText],
+      resolveAssignmentActionEmployees({
+        messageText: input.messageText,
+        employees: input.employees,
+        targetAgentIds: input.targetAgentIds,
+        allowMentionFallback: input.allowMentionFallback,
+      }),
+    [input.allowMentionFallback, input.employees, input.messageText, input.targetAgentIds],
   );
-  if (!input.companyId || mentions.length === 0) {
+  if (!input.companyId || actionSurface.employees.length === 0 || !actionSurface.kind) {
     return null;
   }
   const companyId = input.companyId;
+  const isDispatchSurface = actionSurface.kind === "dispatch";
+  const surfaceTitle = isDispatchSurface ? "🚀 检测到任务分派" : "👥 提到的成员";
+  const buttonTail = isDispatchSurface ? "→ 直达" : "→ 查看工作";
 
   return (
     <div className="mt-4 space-y-2 border-t border-slate-200/60 pt-3">
       <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-        <span>🚀 检测到任务分派</span>
+        <span>{surfaceTitle}</span>
       </div>
       <div className="flex flex-wrap gap-2">
-        {(!input.isCeoSession ? mentions : mentions.slice(0, 1)).map((member) => (
+        {actionSurface.employees.map((member) => (
           <button
             key={member.agentId}
             onClick={() =>
@@ -61,18 +66,18 @@ export const ChatAssignmentActions = memo(function ChatAssignmentActions(input: 
             </Avatar>
             <span className="text-xs font-medium text-indigo-700">{member.nickname}</span>
             <span className="ml-1 text-[10px] text-indigo-400 group-hover/btn:text-indigo-600">
-              → 直达
+              {buttonTail}
             </span>
           </button>
         ))}
-        {mentions.length >= 2 && !input.isGroup ? (
+        {isDispatchSurface && actionSurface.employees.length >= 2 && !input.isGroup ? (
           <button
             type="button"
             onClick={() => {
               const groupRoute = buildRequirementRoomRouteFromCompanyContext({
                 companyId,
                 employees: input.employees,
-                memberIds: mentions.map((member) => member.agentId),
+                memberIds: actionSurface.employees.map((member) => member.agentId),
                 topic: resolveTaskTitle(input.messageText, "任务小组"),
                 topicKey:
                   input.currentConversationRequirementTopicKey ??

@@ -270,6 +270,33 @@ function toRequirementRoomMessage(input: {
       annotated.role === "assistant" || input.agentId !== input.ownerAgentId
         ? senderEmployee?.nickname ?? input.agentId
         : undefined,
+    transport:
+      annotated.transport === "company_report" ||
+      annotated.transport === "sessions_send" ||
+      annotated.transport === "inferred"
+        ? annotated.transport
+        : undefined,
+    reportStatus:
+      annotated.reportStatus === "acknowledged" ||
+      annotated.reportStatus === "answered" ||
+      annotated.reportStatus === "blocked"
+        ? annotated.reportStatus
+        : undefined,
+    messageIntent:
+      annotated.messageIntent === "report" ||
+      annotated.messageIntent === "relay_notice" ||
+      annotated.messageIntent === "work_update" ||
+      annotated.messageIntent === "dispatch"
+        ? annotated.messageIntent
+        : undefined,
+    metadata:
+      typeof annotated.metadata === "object" && annotated.metadata
+        ? annotated.metadata
+        : undefined,
+    provenance:
+      typeof annotated.provenance === "object" && annotated.provenance
+        ? (annotated.provenance as Record<string, unknown>)
+        : undefined,
     audienceAgentIds,
     visibility: "public",
     source:
@@ -431,6 +458,11 @@ export function convertRequirementRoomRecordToChatMessages(
       roomAudienceAgentIds: message.audienceAgentIds,
       roomSessionKey: room.id,
       senderAgentId: message.senderAgentId ?? undefined,
+      transport: message.transport,
+      reportStatus: message.reportStatus,
+      messageIntent: message.messageIntent,
+      metadata: message.metadata,
+      provenance: message.provenance,
     }) satisfies ChatMessage);
 }
 

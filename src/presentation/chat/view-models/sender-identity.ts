@@ -77,6 +77,7 @@ export function getChatSenderIdentity({
           ? activeCompany.employees.find((employee) => employee.agentId === roomSessionAgentId) ?? null
           : null)
       : null;
+  const isOwnerDispatch = msg.roomMessageSource === "owner_dispatch";
 
   if (msg.role === "assistant" && isGroup && roomEmployee) {
     return {
@@ -182,7 +183,7 @@ export function getChatSenderIdentity({
   }
 
   const extractedName = rawText ? extractNameFromMessage(rawText) : null;
-  if (extractedName && msg.role === "user") {
+  if (!isGroup && extractedName && msg.role === "user") {
     return {
       name: extractedName.length > 10 ? "同步转发" : extractedName,
       avatarSeed: extractedName,
@@ -195,7 +196,7 @@ export function getChatSenderIdentity({
     };
   }
 
-  if (isGroup && msg.role === "user") {
+  if (isGroup && msg.role === "user" && isOwnerDispatch) {
     return {
       name: "我",
       avatarSeed: "me",
@@ -220,19 +221,7 @@ export function getChatSenderIdentity({
     };
   }
 
-  if (msg.role !== "user") {
-    return {
-      name: "系统",
-      avatarSeed: "system",
-      isOutgoing: false,
-      isRelayed: false,
-      attributionKind: "unknown",
-      badgeLabel: "系统消息",
-      badgeTone: "indigo",
-    };
-  }
-
-  if (isGroup) {
+  if (isGroup && msg.role === "user") {
     return {
       name: "协作消息",
       avatarSeed: "collaborator",
@@ -242,6 +231,18 @@ export function getChatSenderIdentity({
       badgeLabel: "来源待识别",
       badgeTone: "amber",
       metaLabel: "协作消息",
+    };
+  }
+
+  if (msg.role !== "user") {
+    return {
+      name: "系统",
+      avatarSeed: "system",
+      isOutgoing: false,
+      isRelayed: false,
+      attributionKind: "unknown",
+      badgeLabel: "系统消息",
+      badgeTone: "indigo",
     };
   }
 

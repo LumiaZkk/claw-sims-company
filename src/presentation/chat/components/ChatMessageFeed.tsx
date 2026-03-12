@@ -15,6 +15,7 @@ import { cn, formatTime, getAvatarUrl } from "../../../lib/utils";
 import { ChatContent } from "./ChatContent";
 import { ChatAssignmentActions } from "./ChatAssignmentActions";
 import { ChatDecisionTicketCard } from "./ChatDecisionTicketCard";
+import { pickBestAssignmentActionText, resolveStructuredAssignmentTargets } from "./chat-assignment-actions";
 
 function getDispatchStatusMeta(dispatch: DispatchRecord) {
   if (dispatch.status === "pending" && dispatch.deliveryState === "unknown") {
@@ -147,6 +148,22 @@ function ChatStatusRow(input: {
       </div>
     </div>
   );
+}
+
+function extractTextFromRenderableBlocks(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    return typeof content === "string" && content.trim().length > 0 ? content : null;
+  }
+  const text = content
+    .map((block) =>
+      typeof block === "object" && block && typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text.trim()
+        : "",
+    )
+    .filter((value) => value.length > 0)
+    .join("\n")
+    .trim();
+  return text.length > 0 ? text : null;
 }
 
 const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProps) {
@@ -395,6 +412,27 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
               ? msg.roomSenderLabel.trim()
               : null;
         const dispatchMeta = linkedDispatch ? getDispatchStatusMeta(linkedDispatch) : null;
+        const assignmentTargets = resolveStructuredAssignmentTargets({
+          linkedDispatchTargetAgentIds: linkedDispatch?.targetActorIds ?? null,
+          roomAudienceAgentIds: Array.isArray(msg.roomAudienceAgentIds) ? msg.roomAudienceAgentIds : null,
+          targetActorIds: Array.isArray(msg.targetActorIds) ? msg.targetActorIds.map((value) => String(value)) : null,
+          roomMessageSource:
+            typeof msg.roomMessageSource === "string" ? msg.roomMessageSource : null,
+          messageIntent:
+            typeof msg.messageIntent === "string" ? msg.messageIntent : null,
+        });
+        const assignmentSourceText =
+          msg.role === "assistant"
+            ? pickBestAssignmentActionText({
+                candidateTexts: [
+                  assignmentText ?? "",
+                  extractTextFromRenderableBlocks(bubbleContent) ?? "",
+                ],
+                employees: input.employees,
+                targetAgentIds: assignmentTargets.targetAgentIds,
+                allowMentionFallback: assignmentTargets.allowMentionFallback,
+              })
+            : "";
         const showRoomMeta =
           input.isGroup &&
           !sender.isOutgoing &&
@@ -518,9 +556,11 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
                     hideTaskTrackerPanel={input.isCeoSession && msg.role === "assistant"}
                     hideToolActivityBlocks
                   />
-                  {assignmentText ? (
+                  {assignmentSourceText ? (
                     <ChatAssignmentActions
-                      messageText={assignmentText}
+                      messageText={assignmentSourceText}
+                      targetAgentIds={assignmentTargets.targetAgentIds}
+                      allowMentionFallback={assignmentTargets.allowMentionFallback}
                       companyId={input.companyId}
                       employees={input.employees}
                       isCeoSession={input.isCeoSession}

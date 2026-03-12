@@ -99,6 +99,56 @@ type ChatMessageFeedProps = {
 
 type ChatMessageListProps = Omit<ChatMessageFeedProps, "hasActiveRun" | "streamText" | "isGenerating">;
 
+function ChatDetailDisclosure(input: {
+  detailContent?: string | null;
+  label?: string;
+}) {
+  if (!input.detailContent?.trim()) {
+    return null;
+  }
+  return (
+    <details className="mt-3 w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-slate-700">
+      <summary className="cursor-pointer list-none text-xs font-medium text-slate-500">
+        {input.label ?? "查看详情"}
+      </summary>
+      <div className="mt-3">
+        <ChatContent content={[{ type: "text", text: input.detailContent }]} hideToolActivityBlocks />
+      </div>
+    </details>
+  );
+}
+
+function ChatStatusRow(input: {
+  senderName: string;
+  timestamp?: number;
+  summary: string;
+  badgeLabel?: string;
+  badgeClassName?: string;
+  metaLabel?: string;
+  detailContent?: string | null;
+}) {
+  return (
+    <div className="flex justify-start">
+      <div className="w-full max-w-3xl rounded-2xl border border-slate-200/80 bg-slate-50/85 px-4 py-3 text-slate-700 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-medium text-slate-700">{input.senderName}</span>
+          {typeof input.timestamp === "number" ? (
+            <span className="text-slate-400">{formatTime(input.timestamp)}</span>
+          ) : null}
+          {input.badgeLabel ? (
+            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", input.badgeClassName)}>
+              {input.badgeLabel}
+            </span>
+          ) : null}
+          {input.metaLabel ? <span className="text-slate-400">{input.metaLabel}</span> : null}
+        </div>
+        <div className="mt-2 text-sm leading-6 text-slate-800">{input.summary}</div>
+        <ChatDetailDisclosure detailContent={input.detailContent} label="查看上下文详情" />
+      </div>
+    </div>
+  );
+}
+
 const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProps) {
   const activeDispatches = useConversationDispatches();
   const employeesByAgentId = useMemo(() => {
@@ -219,6 +269,31 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
                 ? "border-sky-200 bg-sky-50 text-sky-700"
                 : "border-rose-200 bg-rose-50 text-rose-700";
 
+          if (item.displayTier === "status") {
+            return (
+              <div key={item.id}>
+                <ChatStatusRow
+                  senderName={sender.name}
+                  timestamp={msg.timestamp}
+                  summary={item.report.summary}
+                  badgeLabel={item.report.statusLabel}
+                  badgeClassName={statusClassName}
+                  metaLabel={item.report.reportType}
+                  detailContent={item.detailContent}
+                />
+                {item.id === inlineDecisionAnchorId ? (
+                  <ChatDecisionTicketCard
+                    ticket={input.openRequirementDecisionTicket}
+                    legacyPending={input.showLegacyDecisionCard && !input.openRequirementDecisionTicket}
+                    submittingOptionId={input.decisionSubmittingOptionId}
+                    disabled={false}
+                    onSelectOption={input.onSelectDecisionOption}
+                  />
+                ) : null}
+              </div>
+            );
+          }
+
           return (
             <div
               key={item.id}
@@ -266,19 +341,15 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
                     <div className="mt-3 text-sm font-medium leading-6 text-slate-900">
                       {item.report.summary}
                     </div>
-                    {item.report.detail && !item.report.showFullContent ? (
+                    {item.report.detail && !item.report.showFullContent && !item.detailContent ? (
                       <div className="mt-2 text-sm leading-6 text-slate-600">
                         {item.report.detail}
                       </div>
                     ) : null}
-                    {item.report.showFullContent ? (
-                      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3">
-                        <ChatContent
-                          content={[{ type: "text", text: item.report.cleanText }]}
-                          hideToolActivityBlocks
-                        />
-                      </div>
-                    ) : null}
+                    <ChatDetailDisclosure
+                      detailContent={item.detailContent ?? (item.report.showFullContent ? item.report.cleanText : null)}
+                      label="查看完整回执"
+                    />
                   </div>
                   {item.id === inlineDecisionAnchorId ? (
                     <ChatDecisionTicketCard
@@ -331,6 +402,55 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
             Boolean(sourceLabel) ||
             Boolean(linkedDispatch) ||
             typeof msg.roomMessageSource === "string");
+
+        if (item.displayTier === "status") {
+          return (
+            <div key={item.id}>
+              <ChatStatusRow
+                senderName={sender.name}
+                timestamp={msg.timestamp}
+                summary={typeof msg.text === "string" ? msg.text : ""}
+                badgeLabel={sender.badgeLabel}
+                badgeClassName={
+                  sender.badgeTone === "amber"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-indigo-200 bg-indigo-50 text-indigo-700"
+                }
+                metaLabel={sender.metaLabel}
+                detailContent={item.detailContent}
+              />
+              {item.id === inlineDecisionAnchorId ? (
+                <ChatDecisionTicketCard
+                  ticket={input.openRequirementDecisionTicket}
+                  legacyPending={input.showLegacyDecisionCard && !input.openRequirementDecisionTicket}
+                  submittingOptionId={input.decisionSubmittingOptionId}
+                  disabled={false}
+                  onSelectOption={input.onSelectDecisionOption}
+                />
+              ) : null}
+            </div>
+          );
+        }
+
+        if (item.displayTier === "detail") {
+          return (
+            <div key={item.id} className="flex justify-start">
+              <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 text-slate-700 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="font-medium text-slate-700">{sender.name}</span>
+                  {typeof msg.timestamp === "number" ? <span>{formatTime(msg.timestamp)}</span> : null}
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px]">
+                    协作详情
+                  </span>
+                </div>
+                <div className="mt-2 text-sm leading-6 text-slate-700">
+                  {typeof msg.text === "string" && msg.text.trim() ? msg.text : "查看协作详情"}
+                </div>
+                <ChatDetailDisclosure detailContent={item.detailContent} label="展开完整内容" />
+              </div>
+            </div>
+          );
+        }
 
         return (
           <div
@@ -469,6 +589,7 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
                       ) : null}
                     </div>
                   ) : null}
+                  <ChatDetailDisclosure detailContent={item.detailContent} />
                 </div>
                 {item.id === inlineDecisionAnchorId ? (
                   <ChatDecisionTicketCard

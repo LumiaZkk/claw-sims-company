@@ -1,12 +1,14 @@
 import type { ChatMessage } from "../../../application/gateway";
 import { describeToolName, extractNameFromMessage, extractTextFromMessage } from "./messages";
 import type { Company, EmployeeRef } from "../../../domain/org/types";
+import { parseCollaboratorReportMessage } from "./message-reports";
 
 export type SenderIdentity = {
   name: string;
   avatarSeed: string | undefined;
   isOutgoing: boolean;
   isRelayed: boolean;
+  attributionKind: "user" | "agent" | "collaborator" | "unknown";
   badgeLabel?: string;
   badgeTone?: "slate" | "indigo" | "amber";
   metaLabel?: string;
@@ -82,6 +84,7 @@ export function getChatSenderIdentity({
       avatarSeed: roomEmployee.agentId,
       isOutgoing: false,
       isRelayed: false,
+      attributionKind: "agent",
       badgeLabel: roomEmployee.agentId === effectiveOwnerAgentId ? "当前负责人" : "团队成员",
       badgeTone: roomEmployee.agentId === effectiveOwnerAgentId ? "amber" : "indigo",
       metaLabel: roomEmployee.role,
@@ -94,6 +97,7 @@ export function getChatSenderIdentity({
       avatarSeed: isGroup ? groupTopic || "group" : emp?.agentId,
       isOutgoing: false,
       isRelayed: false,
+      attributionKind: "agent",
       metaLabel: isGroup ? "需求团队房间" : emp?.role,
     };
   }
@@ -104,6 +108,7 @@ export function getChatSenderIdentity({
       avatarSeed: "system",
       isOutgoing: false,
       isRelayed: false,
+      attributionKind: "unknown",
       badgeLabel: "工具回执",
       badgeTone: "indigo",
       metaLabel:
@@ -119,6 +124,7 @@ export function getChatSenderIdentity({
       avatarSeed: sourcedEmployee.agentId,
       isOutgoing: false,
       isRelayed: true,
+      attributionKind: "collaborator",
       badgeLabel: sourceTool === "sessions_send" ? "协作回传" : "跨会话消息",
       badgeTone: "indigo",
       metaLabel: sourcedEmployee.role,
@@ -131,6 +137,7 @@ export function getChatSenderIdentity({
       avatarSeed: roomEmployee.agentId,
       isOutgoing: false,
       isRelayed: true,
+      attributionKind: "collaborator",
       badgeLabel: "协作回传",
       badgeTone: "indigo",
       metaLabel: roomEmployee.role,
@@ -143,6 +150,7 @@ export function getChatSenderIdentity({
       avatarSeed: roomSessionEmployee.agentId,
       isOutgoing: false,
       isRelayed: true,
+      attributionKind: "collaborator",
       badgeLabel: "成员同步",
       badgeTone: "indigo",
       metaLabel: roomSessionEmployee.role,
@@ -155,6 +163,21 @@ export function getChatSenderIdentity({
       avatarSeed: "me",
       isOutgoing: true,
       isRelayed: false,
+      attributionKind: "user",
+    };
+  }
+
+  const collaboratorReport = parseCollaboratorReportMessage(msg);
+  if (isGroup && msg.role === "user" && collaboratorReport) {
+    return {
+      name: "协作消息",
+      avatarSeed: "collaborator",
+      isOutgoing: false,
+      isRelayed: true,
+      attributionKind: "unknown",
+      badgeLabel: "协作者回执",
+      badgeTone: "indigo",
+      metaLabel: "来源待识别",
     };
   }
 
@@ -165,9 +188,35 @@ export function getChatSenderIdentity({
       avatarSeed: extractedName,
       isOutgoing: false,
       isRelayed: true,
+      attributionKind: "unknown",
       badgeLabel: "同步转发",
       badgeTone: "amber",
       metaLabel: "跨会话消息",
+    };
+  }
+
+  if (isGroup && msg.role === "user") {
+    return {
+      name: "我",
+      avatarSeed: "me",
+      isOutgoing: true,
+      isRelayed: false,
+      attributionKind: "user",
+      metaLabel:
+        Array.isArray(msg.roomAudienceAgentIds) && msg.roomAudienceAgentIds.length > 0
+          ? (() => {
+              const labels = msg.roomAudienceAgentIds
+                .map((agentId) => employeesByAgentId?.get(agentId)?.nickname)
+                .filter((label): label is string => Boolean(label));
+              if (labels.length === 0) {
+                return "已发送到团队房间";
+              }
+              if (labels.length >= requirementRoomSessionsLength && requirementRoomSessionsLength > 0) {
+                return "已发送给全体成员";
+              }
+              return `已发送给 ${labels.slice(0, 3).join("、")}${labels.length > 3 ? ` +${labels.length - 3}` : ""}`;
+            })()
+          : undefined,
     };
   }
 
@@ -177,8 +226,22 @@ export function getChatSenderIdentity({
       avatarSeed: "system",
       isOutgoing: false,
       isRelayed: false,
+      attributionKind: "unknown",
       badgeLabel: "系统消息",
       badgeTone: "indigo",
+    };
+  }
+
+  if (isGroup) {
+    return {
+      name: "协作消息",
+      avatarSeed: "collaborator",
+      isOutgoing: false,
+      isRelayed: true,
+      attributionKind: "unknown",
+      badgeLabel: "来源待识别",
+      badgeTone: "amber",
+      metaLabel: "协作消息",
     };
   }
 
@@ -187,20 +250,6 @@ export function getChatSenderIdentity({
     avatarSeed: "me",
     isOutgoing: true,
     isRelayed: false,
-    metaLabel:
-      isGroup && Array.isArray(msg.roomAudienceAgentIds) && msg.roomAudienceAgentIds.length > 0
-        ? (() => {
-            const labels = msg.roomAudienceAgentIds
-              .map((agentId) => employeesByAgentId?.get(agentId)?.nickname)
-              .filter((label): label is string => Boolean(label));
-            if (labels.length === 0) {
-              return "已发送到团队房间";
-            }
-            if (labels.length >= requirementRoomSessionsLength && requirementRoomSessionsLength > 0) {
-              return "已发送给全体成员";
-            }
-            return `已发送给 ${labels.slice(0, 3).join("、")}${labels.length > 3 ? ` +${labels.length - 3}` : ""}`;
-          })()
-        : undefined,
+    attributionKind: "user",
   };
 }

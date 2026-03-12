@@ -10,15 +10,27 @@ import {
   dedupeVisibleChatMessages,
   extractTextFromMessage,
   normalizeMessage,
+  truncateText,
 } from "./message-basics";
 import type { DecisionTicketRecord } from "../../../domain/delegation/types";
 import { readAssistantControlEnvelope } from "../../../domain/shared/assistant-control";
-import { CHAT_UI_MESSAGE_LIMIT, type ChatBlock, type ChatDisplayItem } from "./message-types";
+import {
+  CHAT_UI_MESSAGE_LIMIT,
+  type ChatBlock,
+  type ChatDisplayItem,
+  type ChatDisplayTier,
+  type ChatNarrativeRole,
+} from "./message-types";
 import { parseCollaboratorReportMessage } from "./message-reports";
 import { isToolActivityMessage, isToolResultMessage, summarizeToolMessage } from "./message-tooling";
 
 export { CHAT_UI_MESSAGE_LIMIT } from "./message-types";
-export type { ChatBlock, ChatDisplayItem } from "./message-types";
+export type {
+  ChatBlock,
+  ChatDisplayItem,
+  ChatDisplayTier,
+  ChatNarrativeRole,
+} from "./message-types";
 export type { CollaboratorReportCardVM } from "./message-reports";
 export {
   createChatMentionRegex,
@@ -140,6 +152,255 @@ function sanitizeDisplayMessageText(message: ChatMessage, text: string): string 
   }
   sanitized = stripDispatchTransportEnvelope(sanitized);
   return sanitized.trim();
+}
+
+function dedupeAdjacentLines(lines: string[]): string[] {
+  const result: string[] = [];
+  for (const line of lines) {
+    if (result[result.length - 1] !== line) {
+      result.push(line);
+    }
+  }
+  return result;
+}
+
+function isWorkflowNoiseLine(line: string): boolean {
+  const normalized = line.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:Dispatch ID|当前理解|建议下一步|是否可推进)[:：]/iu.test(normalized)
+    || /^任务看板已更新/u.test(normalized)
+    || /^来自\s+[A-Z][A-Za-z ]+$/u.test(normalized);
+}
+
+function splitNarrativeText(text: string): {
+  primaryText: string;
+  detailText: string | null;
+} {
+  const normalizedLines = dedupeAdjacentLines(
+    text
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter((line, index, lines) => !(line.trim().length === 0 && lines[index - 1]?.trim().length === 0)),
+  );
+  const primaryLines: string[] = [];
+  const detailLines: string[] = [];
+  for (const line of normalizedLines) {
+    if (isWorkflowNoiseLine(line)) {
+      detailLines.push(line.trim());
+      continue;
+    }
+    primaryLines.push(line);
+  }
+  return {
+    primaryText: primaryLines.join("\n").trim(),
+    detailText: detailLines.length > 0 ? detailLines.join("\n").trim() : null,
+  };
+}
+
+function summarizeStatusText(text: string): string {
+  const firstLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) {
+    return text.trim();
+  }
+  return truncateText(firstLine, 96);
+}
+
+function isWorkflowStatusText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /(?:^|[\s，。；;])(?:收到|已收到|已接单|已派单|已转达|处理中|已同步|已更新看板|开始评估|开始处理|立即评估|立即处理)/u.test(
+    normalized,
+  ) || /(?:让我更新任务看板|已向.+传达|转给\s*[A-Z]{2,6}|派发给\s*[A-Z]{2,6})/u.test(normalized);
+}
+
+function isSubstantiveUpdateText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.length >= 48) {
+    return true;
+  }
+  return /(推荐|建议|结论|结果|风险|阻塞|确认|可行|不可行|优先|备选|支持|需要你|需你|是否可|账号|登录)/u.test(
+    normalized,
+  );
+}
+
+function isExecutiveFinalSummaryText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:结论|总结|先同步给你|给你一个结论|目前结论|最终结论)[:：]/u.test(normalized)
+    || /(?:建议下一步|需要你确认|请你确认|可推进)/u.test(normalized);
+}
+
+function createThreadGroupKey(message: ChatMessage): string | null {
+  if (typeof message.roomSessionKey === "string" && message.roomSessionKey.trim().length > 0) {
+    return message.roomSessionKey.trim();
+  }
+  const rawText = extractTextFromMessage(message) ?? "";
+  const dispatchMatch = rawText.match(/dispatch=([^\s]+)/u) ?? rawText.match(/dispatch:\s*([^\s]+)/u);
+  if (dispatchMatch?.[1]) {
+    return dispatchMatch[1].trim();
+  }
+  if (typeof message.roomMessageId === "string" && message.roomMessageId.trim().length > 0) {
+    return message.roomMessageId.trim();
+  }
+  return null;
+}
+
+function overrideDisplayText(message: ChatMessage, nextText: string): ChatMessage {
+  const trimmedText = nextText.trim();
+  const nextMessage: ChatMessage = {
+    ...message,
+    text: trimmedText || undefined,
+  };
+  const renderableContent = getRenderableMessageContent(message.content);
+  if (Array.isArray(renderableContent)) {
+    const nextBlocks: ChatBlock[] = [];
+    let insertedText = false;
+    for (const block of renderableContent) {
+      const type = normalizeChatBlockType(block.type);
+      if (type === "text") {
+        if (!insertedText && trimmedText) {
+          nextBlocks.push({ ...block, type: "text", text: trimmedText });
+          insertedText = true;
+        }
+        continue;
+      }
+      nextBlocks.push(block);
+    }
+    if (!insertedText && trimmedText) {
+      nextBlocks.unshift({ type: "text", text: trimmedText });
+    }
+    nextMessage.content = nextBlocks;
+  }
+  return nextMessage;
+}
+
+type DisplayClassification = {
+  displayTier: Exclude<ChatDisplayTier, "hidden"> | "hidden";
+  narrativeRole: ChatNarrativeRole;
+  detailContent?: string | null;
+  threadGroupKey?: string | null;
+  displayText?: string | null;
+};
+
+function classifyReportDisplayItem(
+  message: ChatMessage,
+  report: ReturnType<typeof parseCollaboratorReportMessage>,
+): DisplayClassification {
+  if (!report) {
+    return {
+      displayTier: "hidden",
+      narrativeRole: "system_noise",
+    };
+  }
+  const split = splitNarrativeText(report.cleanText);
+  const summaryText = split.primaryText || report.summary;
+  const detailContent =
+    report.showFullContent || split.detailText || report.detail
+      ? [split.detailText, report.showFullContent ? report.cleanText : report.detail]
+          .filter((part): part is string => Boolean(part && part.trim()))
+          .join("\n\n")
+          .trim() || null
+      : null;
+  const acknowledgedHasDecisionSignal = /(推荐|建议|结论|结果|风险|阻塞|确认|需要你|需你|可行|不可行|支持|备选)/u.test(
+    summaryText,
+  );
+  if (report.status === "acknowledged" && !acknowledgedHasDecisionSignal) {
+    return {
+      displayTier: "status",
+      narrativeRole: "workflow_status",
+      detailContent,
+      threadGroupKey: createThreadGroupKey(message),
+      displayText: summarizeStatusText(summaryText || report.summary),
+    };
+  }
+  return {
+    displayTier: report.status === "blocked" ? "main" : "main",
+    narrativeRole: report.status === "answered" ? "member_update" : "workflow_status",
+    detailContent,
+    threadGroupKey: createThreadGroupKey(message),
+    displayText: summaryText || report.summary,
+  };
+}
+
+function classifyMessageDisplayItem(message: ChatMessage): DisplayClassification {
+  const text = extractTextFromMessage(message)?.trim() ?? "";
+  const split = splitNarrativeText(text);
+  const primaryText = split.primaryText;
+  const detailContent = split.detailText;
+  const threadGroupKey = createThreadGroupKey(message);
+
+  if (message.displayTransport === "company_dispatch") {
+    return {
+      displayTier: "detail",
+      narrativeRole: "system_noise",
+      detailContent: primaryText || detailContent,
+      threadGroupKey,
+      displayText: summarizeStatusText(primaryText || "查看派单详情"),
+    };
+  }
+
+  if (!primaryText) {
+    return {
+      displayTier: detailContent ? "detail" : "hidden",
+      narrativeRole: "system_noise",
+      detailContent,
+      threadGroupKey,
+      displayText: detailContent ? "查看协作详情" : null,
+    };
+  }
+
+  if (message.role === "user") {
+    return {
+      displayTier: "main",
+      narrativeRole: "user_prompt",
+      detailContent,
+      threadGroupKey,
+      displayText: primaryText,
+    };
+  }
+
+  if (isWorkflowStatusText(primaryText) && !isSubstantiveUpdateText(primaryText)) {
+    return {
+      displayTier: "status",
+      narrativeRole: "workflow_status",
+      detailContent,
+      threadGroupKey,
+      displayText: summarizeStatusText(primaryText),
+    };
+  }
+
+  if (isExecutiveFinalSummaryText(primaryText)) {
+    return {
+      displayTier: "main",
+      narrativeRole: "final_summary",
+      detailContent,
+      threadGroupKey,
+      displayText: primaryText,
+    };
+  }
+
+  return {
+    displayTier: "main",
+    narrativeRole:
+      typeof message.roomAgentId === "string" && message.roomAgentId.trim().length > 0
+        ? "member_update"
+        : "executive_reply",
+    detailContent,
+    threadGroupKey,
+    displayText: primaryText,
+  };
 }
 
 function detectDisplayTransportKind(text: string | null): "company_dispatch" | null {
@@ -316,11 +577,27 @@ export function buildChatDisplayItems(
   const sanitizedMessages = sanitizeVisibleChatFlow(messages);
   const usedDisplayItemIds = new Set<string>();
   if (!includeToolSummaries) {
-    return sanitizedMessages.map((message) => ({
-      kind: "message",
-      id: buildDisplayItemId(message, "message", usedDisplayItemIds),
-      message,
-    }));
+    const items: ChatDisplayItem[] = [];
+    for (const message of sanitizedMessages) {
+      const classification = classifyMessageDisplayItem(message);
+      if (classification.displayTier === "hidden") {
+        continue;
+      }
+      const nextMessage =
+        classification.displayText && classification.displayText !== extractTextFromMessage(message)
+          ? overrideDisplayText(message, classification.displayText)
+          : message;
+      items.push({
+        kind: "message",
+        id: buildDisplayItemId(nextMessage, "message", usedDisplayItemIds),
+        message: nextMessage,
+        displayTier: classification.displayTier,
+        narrativeRole: classification.narrativeRole,
+        detailContent: classification.detailContent ?? null,
+        threadGroupKey: classification.threadGroupKey ?? null,
+      });
+    }
+    return items;
   }
 
   const displayItems: ChatDisplayItem[] = [];
@@ -363,21 +640,48 @@ export function buildChatDisplayItems(
 
     const report = parseCollaboratorReportMessage(message);
     if (report) {
+      const classification = classifyReportDisplayItem(message, report);
+      if (classification.displayTier === "hidden") {
+        continue;
+      }
+      const nextMessage =
+        classification.displayText && classification.displayText !== extractTextFromMessage(message)
+          ? overrideDisplayText(message, classification.displayText)
+          : message;
       flushToolSummary();
       displayItems.push({
         kind: "report",
-        id: buildDisplayItemId(message, "report", usedDisplayItemIds),
-        message,
-        report,
+        id: buildDisplayItemId(nextMessage, "report", usedDisplayItemIds),
+        message: nextMessage,
+        report: {
+          ...report,
+          summary: classification.displayText ?? report.summary,
+        },
+        displayTier: classification.displayTier,
+        narrativeRole: classification.narrativeRole,
+        detailContent: classification.detailContent ?? null,
+        threadGroupKey: classification.threadGroupKey ?? null,
       });
       continue;
     }
 
+    const classification = classifyMessageDisplayItem(message);
+    if (classification.displayTier === "hidden") {
+      continue;
+    }
+    const nextMessage =
+      classification.displayText && classification.displayText !== extractTextFromMessage(message)
+        ? overrideDisplayText(message, classification.displayText)
+        : message;
     flushToolSummary();
     displayItems.push({
       kind: "message",
-      id: buildDisplayItemId(message, "message", usedDisplayItemIds),
-      message,
+      id: buildDisplayItemId(nextMessage, "message", usedDisplayItemIds),
+      message: nextMessage,
+      displayTier: classification.displayTier,
+      narrativeRole: classification.narrativeRole,
+      detailContent: classification.detailContent ?? null,
+      threadGroupKey: classification.threadGroupKey ?? null,
     });
   }
 

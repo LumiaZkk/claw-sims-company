@@ -10,17 +10,35 @@ export type ChatBlock = {
   source?: unknown;
 };
 
+export type ChatDisplayTier = "main" | "status" | "detail" | "hidden";
+
+export type ChatNarrativeRole =
+  | "user_prompt"
+  | "executive_reply"
+  | "member_update"
+  | "workflow_status"
+  | "final_summary"
+  | "system_noise";
+
 export type ChatDisplayItem =
   | {
       kind: "message";
       id: string;
       message: ChatMessage;
+      displayTier: Exclude<ChatDisplayTier, "hidden">;
+      narrativeRole: ChatNarrativeRole;
+      detailContent?: string | null;
+      threadGroupKey?: string | null;
     }
   | {
       kind: "report";
       id: string;
       message: ChatMessage;
       report: CollaboratorReportCardVM;
+      displayTier: Exclude<ChatDisplayTier, "hidden">;
+      narrativeRole: ChatNarrativeRole;
+      detailContent?: string | null;
+      threadGroupKey?: string | null;
     }
   | {
       kind: "tool";

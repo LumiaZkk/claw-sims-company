@@ -45,6 +45,8 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({
       kind: "message",
+      displayTier: "main",
+      narrativeRole: "executive_reply",
       message: expect.objectContaining({
         role: "assistant",
         text: "我现在就派发任务给 CTO 和 COO。",
@@ -88,6 +90,11 @@ describe("buildChatDisplayItems", () => {
       "room-message:ceo:1:report",
       "room-message:ceo:2:report",
     ]);
+    expect(items.map((item) => ("displayTier" in item ? item.displayTier : null))).toEqual([
+      "main",
+      "status",
+      "status",
+    ]);
   });
 
   it("strips synthetic dispatch audience titles so owner-dispatch echoes collapse into one visible message", () => {
@@ -114,6 +121,8 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "message",
+      displayTier: "main",
+      narrativeRole: "user_prompt",
       message: expect.objectContaining({
         text: "回复 \"启动A\" - 让CTO开始开发\n回复 \"启动B\" - 让HR激活内容总监",
       }),
@@ -152,6 +161,8 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "report",
+      displayTier: "main",
+      narrativeRole: "member_update",
       report: expect.objectContaining({
         status: "answered",
         statusLabel: "已提交",
@@ -174,6 +185,7 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "message",
+      displayTier: "main",
       message: expect.objectContaining({
         role: "user",
       }),
@@ -195,6 +207,7 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "message",
+      displayTier: "main",
       message: expect.objectContaining({
         text: "全部启动 - 三管齐下并行推进 @CEO",
       }),
@@ -249,14 +262,16 @@ describe("buildChatDisplayItems", () => {
 
     expect(items[0]).toMatchObject({
       kind: "report",
+      displayTier: "main",
+      detailContent: expect.stringContaining("## 当前状态确认"),
       report: expect.objectContaining({
+        summary: expect.any(String),
         showFullContent: true,
-        cleanText: expect.stringContaining("## 当前状态确认"),
       }),
     });
   });
 
-  it("strips raw company_dispatch transport headers from visible member-sync messages", () => {
+  it("downgrades raw company_dispatch transport bodies into detail items", () => {
     const items = buildChatDisplayItems([
       {
         role: "assistant",
@@ -271,9 +286,72 @@ describe("buildChatDisplayItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "message",
+      displayTier: "detail",
+      narrativeRole: "system_noise",
       message: expect.objectContaining({
-        text: "CTO，请立即开始技术开发工作。\n\n任务：启动A - 开始开发",
+        text: "CTO，请立即开始技术开发工作。",
       }),
+      detailContent: expect.stringContaining("任务：启动A - 开始开发"),
+    });
+  });
+
+  it("downgrades short collaborator acknowledgements into workflow status rows", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "收到！立即向 COO 传达老板的决策。",
+        timestamp: 2_320,
+        roomAgentId: "co-ceo",
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "report",
+      displayTier: "status",
+      narrativeRole: "workflow_status",
+      message: expect.objectContaining({
+        text: "收到！立即向 COO 传达老板的决策。",
+      }),
+    });
+  });
+
+  it("keeps substantive collaborator analysis in the main chat flow", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text: "初步看，番茄支持手机号、抖音账号和扫码登录。建议优先抖音账号登录，备选手机号登录。",
+        timestamp: 2_330,
+        roomAgentId: "co-coo",
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "message",
+      displayTier: "main",
+      narrativeRole: "member_update",
+    });
+  });
+
+  it("strips workflow summary sections into expandable detail content", () => {
+    const items = buildChatDisplayItems([
+      {
+        role: "assistant",
+        text:
+          "✅ 决策已传达给 COO\n\n已向 COO 派发任务，明确老板决策。\n\nDispatch ID: dispatch:1\n任务看板已更新，【启动C】进度调整为 60%。\n当前理解：老板已决策使用现有账号。\n建议下一步：等待 COO 确认接单。\n是否可推进：是 ✅",
+        timestamp: 2_340,
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "message",
+      displayTier: "main",
+      message: expect.objectContaining({
+        text: "✅ 决策已传达给 COO\n\n已向 COO 派发任务，明确老板决策。",
+      }),
+      detailContent: expect.stringContaining("Dispatch ID: dispatch:1"),
     });
   });
 

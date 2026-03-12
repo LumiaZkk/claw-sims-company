@@ -17,6 +17,9 @@ progress.md
 task_plan.md
 employees-playwright.png
 .tmp/
+test-results/
+tmp/
+packages/authority-daemon/*.db
 
 # Editor directories and files
 .vscode/*

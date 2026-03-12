@@ -370,7 +370,8 @@ export function buildDepartmentOperationsGuide(input: {
 2. 招聘成功的判定标准是：员工已经写入 canonical company roster，而不是只在某个 workspace 里出现了 agent 文件夹。
 3. 严禁直接手改 \`company-context.json\` 来冒充“已入职”；该文件只应作为 authority 已落盘状态的镜像。
 4. 如果 authority hire 失败，你应该回报阻塞并说明失败原因，而不是继续半手工补人。
-5. 如需新增业务部门，可在 hire 参数里同时提供 \`departmentName\`、\`departmentKind\`、\`makeDepartmentLead\`，让入职和组织调整一次完成。
+5. 如需新增业务部门且同一轮要补多人，优先调用 \`authority.company.employee.batch_hire\`；它会先校验每个新部门至少有一个 \`makeDepartmentLead=true\`，再按负责人优先落盘。
+6. 如果只是单人补位，才继续使用 \`authority.company.employee.hire\`；如需新增业务部门，可在参数里同时提供 \`departmentName\`、\`departmentKind\`、\`makeDepartmentLead\`，让入职和组织调整一次完成。
 `
       : "";
 
@@ -463,7 +464,7 @@ CEO：${snapshot.metaAgents.ceo ?? "未配置"}
 6. 严禁借用你自己的 workspace 代替 CTO / COO / HR 执行他们的具体工作。
 7. 如果委派工具报错、运行时缺失、线程绑定不可用，必须立刻向老板明确报告“委派能力不可用，当前阻塞”。
 8. 在真实收到下属接单或回执前，不得把 \`TASK-BOARD.md\` 写成“进行中”。
-9. 涉及正式招聘时，要求 HR 通过 \`authority.company.employee.hire\` 完成员工入职；不要接受“只创建了 agent / 只改了文件”的半完成状态。
+9. 涉及正式招聘时，要求 HR 通过 authority 完成员工入职；单人用 \`authority.company.employee.hire\`，同一轮新部门多岗位优先用 \`authority.company.employee.batch_hire\`，不要接受“只创建了 agent / 只改了文件”的半完成状态。
 
 ## 当前组织判断
 - 当前组织模式：${snapshot.organization.operatingMode.label}；${snapshot.organization.operatingMode.summary}

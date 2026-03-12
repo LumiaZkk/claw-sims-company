@@ -67,7 +67,10 @@ function toHello(url: string): BackendHello {
       connId: url,
     },
     features: {
-      methods: ["authority.company.employee.hire"],
+      methods: [
+        "authority.company.employee.hire",
+        "authority.company.employee.batch_hire",
+      ],
       events: [
         "bootstrap.updated",
         "company.updated",
@@ -76,6 +79,7 @@ function toHello(url: string): BackendHello {
         "room.updated",
         "dispatch.updated",
         "artifact.updated",
+        "decision.updated",
         "executor.status",
         "chat",
       ],
@@ -279,6 +283,11 @@ class AuthorityBackendAdapter implements AgentBackend {
         params as Parameters<typeof authorityClient.hireEmployee>[0],
       )) as T;
     }
+    if (method === "authority.company.employee.batch_hire") {
+      return (await authorityClient.batchHireEmployees(
+        params as Parameters<typeof authorityClient.batchHireEmployees>[0],
+      )) as T;
+    }
     if (method === "authority.company.delete") {
       const companyId =
         typeof params === "object" && params && "companyId" in params
@@ -357,6 +366,16 @@ class AuthorityBackendAdapter implements AgentBackend {
     if (method === "authority.artifact.delete") {
       return (await authorityClient.deleteArtifact(
         params as Parameters<typeof authorityClient.deleteArtifact>[0],
+      )) as T;
+    }
+    if (method === "authority.decision.upsert") {
+      return (await authorityClient.upsertDecisionTicket(
+        params as Parameters<typeof authorityClient.upsertDecisionTicket>[0],
+      )) as T;
+    }
+    if (method === "authority.decision.delete") {
+      return (await authorityClient.deleteDecisionTicket(
+        params as Parameters<typeof authorityClient.deleteDecisionTicket>[0],
       )) as T;
     }
     if (method === "authority.executor.get") {

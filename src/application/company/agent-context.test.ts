@@ -249,6 +249,7 @@ describe("buildDepartmentOperationsGuide", () => {
 
     expect(guide).toContain("HR 招聘硬规则");
     expect(guide).toContain("authority.company.employee.hire");
+    expect(guide).toContain("authority.company.employee.batch_hire");
     expect(guide).toContain("不要走 `agents.create` + 手工补文件的旧流程");
   });
 });
@@ -263,6 +264,10 @@ describe("buildCollaborationContextSnapshot", () => {
     expect(snapshot.self).toMatchObject({
       agentId: "writer-a",
       departmentId: "dep-writing",
+    });
+    expect(snapshot.company).toMatchObject({
+      id: "company-1",
+      name: "测试公司",
     });
     expect(snapshot.manager).toMatchObject({
       agentId: "writer-lead",

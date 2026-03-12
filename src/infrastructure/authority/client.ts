@@ -6,6 +6,8 @@ import type {
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
   AuthorityBootstrapSnapshot,
+  AuthorityBatchHireEmployeesRequest,
+  AuthorityBatchHireEmployeesResponse,
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
   AuthorityCollaborationScopeResponse,
@@ -15,6 +17,8 @@ import type {
   AuthorityCreateCompanyResponse,
   AuthorityDispatchDeleteRequest,
   AuthorityDispatchUpsertRequest,
+  AuthorityDecisionTicketDeleteRequest,
+  AuthorityDecisionTicketUpsertRequest,
   AuthorityEvent,
   AuthorityExecutorConfig,
   AuthorityExecutorConfigPatch,
@@ -171,6 +175,17 @@ export class AuthorityClient {
     );
   }
 
+  async batchHireEmployees(body: AuthorityBatchHireEmployeesRequest) {
+    return requestJson<AuthorityBatchHireEmployeesResponse>(
+      this.baseUrl,
+      `/companies/${encodeURIComponent(body.companyId)}/employees/batch`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
   async deleteCompany(companyId: string) {
     return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, `/companies/${encodeURIComponent(companyId)}`, {
       method: "DELETE",
@@ -289,6 +304,20 @@ export class AuthorityClient {
 
   async deleteArtifact(body: AuthorityArtifactDeleteRequest) {
     return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/artifact.delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async upsertDecisionTicket(body: AuthorityDecisionTicketUpsertRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteDecisionTicket(body: AuthorityDecisionTicketDeleteRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });

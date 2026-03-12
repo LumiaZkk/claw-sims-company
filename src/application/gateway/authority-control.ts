@@ -4,6 +4,8 @@ import type {
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
+  AuthorityDecisionTicketDeleteRequest,
+  AuthorityDecisionTicketUpsertRequest,
   AuthorityDispatchUpsertRequest,
   AuthorityDispatchDeleteRequest,
   AuthorityRequirementPromoteRequest,
@@ -11,6 +13,8 @@ import type {
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
   AuthorityBootstrapSnapshot,
+  AuthorityBatchHireEmployeesRequest,
+  AuthorityBatchHireEmployeesResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityCreateCompanyRequest,
   AuthorityCreateCompanyResponse,
@@ -34,6 +38,13 @@ export function createAuthorityCompany(input: AuthorityCreateCompanyRequest) {
 
 export function hireAuthorityEmployee(input: AuthorityHireEmployeeRequest) {
   return gateway.request<AuthorityHireEmployeeResponse>("authority.company.employee.hire", input);
+}
+
+export function batchHireAuthorityEmployees(input: AuthorityBatchHireEmployeesRequest) {
+  return gateway.request<AuthorityBatchHireEmployeesResponse>(
+    "authority.company.employee.batch_hire",
+    input,
+  );
 }
 
 export function switchAuthorityCompany(companyId: string) {
@@ -93,6 +104,14 @@ export function syncAuthorityArtifactMirrors(input: AuthorityArtifactMirrorSyncR
 
 export function deleteAuthorityArtifact(input: AuthorityArtifactDeleteRequest) {
   return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.artifact.delete", input);
+}
+
+export function upsertAuthorityDecisionTicket(input: AuthorityDecisionTicketUpsertRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.decision.upsert", input);
+}
+
+export function deleteAuthorityDecisionTicket(input: AuthorityDecisionTicketDeleteRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.decision.delete", input);
 }
 
 export function getAuthorityExecutorConfig() {

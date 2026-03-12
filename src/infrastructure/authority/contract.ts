@@ -127,6 +127,7 @@ export type AuthorityEvent =
         | "room.updated"
         | "dispatch.updated"
         | "artifact.updated"
+        | "decision.updated"
         | "executor.status";
       companyId?: string | null;
       timestamp: number;
@@ -158,8 +159,7 @@ export type AuthorityCreateCompanyResponse = {
   runtime: AuthorityCompanyRuntimeSnapshot;
 };
 
-export type AuthorityHireEmployeeRequest = {
-  companyId: string;
+export type AuthorityHireEmployeeInput = {
   role: string;
   description: string;
   nickname?: string;
@@ -175,11 +175,28 @@ export type AuthorityHireEmployeeRequest = {
   budget?: number;
 };
 
+export type AuthorityHireEmployeeRequest = {
+  companyId: string;
+} & AuthorityHireEmployeeInput;
+
 export type AuthorityHireEmployeeResponse = {
   company: Company;
   config: CyberCompanyConfig;
   runtime: AuthorityCompanyRuntimeSnapshot;
   employee: Company["employees"][number];
+  warnings: string[];
+};
+
+export type AuthorityBatchHireEmployeesRequest = {
+  companyId: string;
+  hires: AuthorityHireEmployeeInput[];
+};
+
+export type AuthorityBatchHireEmployeesResponse = {
+  company: Company;
+  config: CyberCompanyConfig;
+  runtime: AuthorityCompanyRuntimeSnapshot;
+  employees: Company["employees"][number][];
   warnings: string[];
 };
 
@@ -264,6 +281,16 @@ export type AuthorityArtifactMirrorSyncRequest = {
   mirrorPrefix?: string;
 };
 
+export type AuthorityDecisionTicketUpsertRequest = {
+  companyId: string;
+  ticket: DecisionTicketRecord;
+};
+
+export type AuthorityDecisionTicketDeleteRequest = {
+  companyId: string;
+  ticketId: string;
+};
+
 export type AuthorityAppendCompanyEventRequest = {
   event: CompanyEvent;
 };
@@ -299,6 +326,10 @@ export type AuthorityCollaborationTarget = AuthorityCollaborationActor & {
 };
 
 export type AuthorityCollaborationScopeResponse = {
+  company: {
+    id: string;
+    name?: string;
+  };
   scopeVersion: number;
   generatedAt: number;
   self: AuthorityCollaborationActor;

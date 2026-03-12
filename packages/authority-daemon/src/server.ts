@@ -62,7 +62,9 @@ import type {
   WorkItemRecord,
 } from "../../../src/domain/mission/types";
 import { buildDefaultOrgSettings } from "../../../src/domain/org/autonomy-policy";
-import { planHiredEmployee } from "../../../src/domain/org/hiring";
+import {
+  planHiredEmployeesBatch,
+} from "../../../src/domain/org/hiring";
 import {
   buildDefaultMainCompany,
   isReservedSystemCompany,
@@ -72,6 +74,8 @@ import type {
   AuthorityAppendCompanyEventRequest,
   AuthorityAppendRoomRequest,
   AuthorityBootstrapSnapshot,
+  AuthorityBatchHireEmployeesRequest,
+  AuthorityBatchHireEmployeesResponse,
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
   AuthorityCollaborationScopeResponse,
@@ -82,6 +86,8 @@ import type {
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
+  AuthorityDecisionTicketDeleteRequest,
+  AuthorityDecisionTicketUpsertRequest,
   AuthorityDispatchDeleteRequest,
   AuthorityDispatchUpsertRequest,
   AuthorityEvent,
@@ -89,6 +95,7 @@ import type {
   AuthorityExecutorConfigPatch,
   AuthorityExecutorStatus,
   AuthorityHealthSnapshot,
+  AuthorityHireEmployeeInput,
   AuthorityHireEmployeeRequest,
   AuthorityHireEmployeeResponse,
   AuthorityRequirementPromoteRequest,
@@ -219,6 +226,50 @@ function isPresent<T>(value: T | null | undefined | false): value is T {
   return Boolean(value);
 }
 
+function shallowJsonEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizeDecisionTicketRevision(value: number | null | undefined): number {
+  return Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
+}
+
+function normalizeDecisionTicketRecord(
+  companyId: string,
+  ticket: DecisionTicketRecord,
+): DecisionTicketRecord {
+  return {
+    ...ticket,
+    companyId,
+    revision: normalizeDecisionTicketRevision(ticket.revision),
+    createdAt: ticket.createdAt || Date.now(),
+    updatedAt: ticket.updatedAt || Date.now(),
+  };
+}
+
+function decisionTicketMaterialChanged(
+  existing: DecisionTicketRecord,
+  next: DecisionTicketRecord,
+): boolean {
+  return (
+    existing.sourceType !== next.sourceType ||
+    existing.sourceId !== next.sourceId ||
+    (existing.escalationId ?? null) !== (next.escalationId ?? null) ||
+    (existing.aggregateId ?? null) !== (next.aggregateId ?? null) ||
+    (existing.workItemId ?? null) !== (next.workItemId ?? null) ||
+    (existing.sourceConversationId ?? null) !== (next.sourceConversationId ?? null) ||
+    existing.decisionOwnerActorId !== next.decisionOwnerActorId ||
+    existing.decisionType !== next.decisionType ||
+    existing.summary !== next.summary ||
+    !shallowJsonEqual(existing.options, next.options) ||
+    existing.requiresHuman !== next.requiresHuman ||
+    existing.status !== next.status ||
+    (existing.resolution ?? null) !== (next.resolution ?? null) ||
+    (existing.resolutionOptionId ?? null) !== (next.resolutionOptionId ?? null) ||
+    (existing.roomId ?? null) !== (next.roomId ?? null)
+  );
+}
+
 function slugify(input: string) {
   return input
     .toLowerCase()
@@ -262,6 +313,8 @@ function normalizeRuntimeSnapshot(
   company: Company | null | undefined,
   snapshot: AuthorityCompanyRuntimeSnapshot,
 ): AuthorityCompanyRuntimeSnapshot {
+  const normalizeRevision = (value: number | null | undefined) =>
+    Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
   return {
     ...snapshot,
     activeWorkItems: snapshot.activeWorkItems.map((workItem) =>
@@ -270,9 +323,24 @@ function normalizeRuntimeSnapshot(
         workItem,
       }),
     ),
+    activeRoomRecords: (snapshot.activeRoomRecords ?? []).map((room) => ({
+      ...room,
+      revision: normalizeRevision(room.revision),
+    })),
+    activeArtifacts: (snapshot.activeArtifacts ?? []).map((artifact) => ({
+      ...artifact,
+      revision: normalizeRevision(artifact.revision),
+    })),
+    activeDispatches: (snapshot.activeDispatches ?? []).map((dispatch) => ({
+      ...dispatch,
+      revision: normalizeRevision(dispatch.revision),
+    })),
     activeSupportRequests: (snapshot.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
     activeEscalations: snapshot.activeEscalations ?? [],
-    activeDecisionTickets: snapshot.activeDecisionTickets ?? [],
+    activeDecisionTickets: (snapshot.activeDecisionTickets ?? []).map((ticket) => ({
+      ...ticket,
+      revision: normalizeRevision(ticket.revision),
+    })),
   };
 }
 
@@ -284,7 +352,7 @@ function isAgentAlreadyExistsError(error: unknown) {
   return stringifyError(error).includes("already exists");
 }
 
-function buildEmployeeBootstrapFile(input: AuthorityHireEmployeeRequest & { agentId: string }) {
+function buildEmployeeBootstrapFile(input: AuthorityHireEmployeeInput & { agentId: string }) {
   const lines = [
     `# ${input.nickname?.trim() || input.role.trim()}`,
     "",
@@ -1933,6 +2001,52 @@ class AuthorityRepository {
     });
   }
 
+  upsertDecisionTicket(input: AuthorityDecisionTicketUpsertRequest) {
+    const runtime = this.loadRuntime(input.companyId);
+    const normalizedTicket = normalizeDecisionTicketRecord(input.companyId, input.ticket);
+    const existing =
+      runtime.activeDecisionTickets.find((ticket) => ticket.id === normalizedTicket.id) ?? null;
+    const nextTicket =
+      existing
+        ? (() => {
+            const candidate = normalizeDecisionTicketRecord(input.companyId, {
+              ...existing,
+              ...normalizedTicket,
+            });
+            const existingRevision = normalizeDecisionTicketRevision(existing.revision);
+            const requestedRevision = normalizeDecisionTicketRevision(normalizedTicket.revision);
+            const candidateRevision = decisionTicketMaterialChanged(existing, candidate)
+              ? Math.max(existingRevision, requestedRevision) + 1
+              : Math.max(existingRevision, requestedRevision);
+            if (
+              candidateRevision < existingRevision ||
+              (candidateRevision === existingRevision && candidate.updatedAt <= existing.updatedAt)
+            ) {
+              return existing;
+            }
+            return {
+              ...candidate,
+              revision: candidateRevision,
+            };
+          })()
+        : normalizedTicket;
+    return this.saveRuntime({
+      ...runtime,
+      activeDecisionTickets: [
+        nextTicket,
+        ...runtime.activeDecisionTickets.filter((ticket) => ticket.id !== nextTicket.id),
+      ].sort((left, right) => right.updatedAt - left.updatedAt),
+    });
+  }
+
+  deleteDecisionTicket(input: AuthorityDecisionTicketDeleteRequest) {
+    const runtime = this.loadRuntime(input.companyId);
+    return this.saveRuntime({
+      ...runtime,
+      activeDecisionTickets: runtime.activeDecisionTickets.filter((ticket) => ticket.id !== input.ticketId),
+    });
+  }
+
 }
 
 function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
@@ -2108,7 +2222,10 @@ function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
   return { company: normalizeCompany(company), agentFiles: buildManagedExecutorFilesForCompany(normalizeCompany(company)) };
 }
 
-async function hireCompanyEmployeeStrongConsistency(input: AuthorityHireEmployeeRequest): Promise<AuthorityHireEmployeeResponse> {
+async function hireCompanyEmployeesStrongConsistency(input: {
+  companyId: string;
+  hires: AuthorityHireEmployeeInput[];
+}): Promise<AuthorityBatchHireEmployeesResponse> {
   const currentConfig = repository.loadConfig();
   if (!currentConfig) {
     throw new Error("当前没有可用的公司配置。");
@@ -2119,7 +2236,7 @@ async function hireCompanyEmployeeStrongConsistency(input: AuthorityHireEmployee
     throw new Error(`Unknown company: ${input.companyId}`);
   }
 
-  const planned = planHiredEmployee(currentCompany, input);
+  const planned = planHiredEmployeesBatch(currentCompany, input.hires);
   const nextConfig: CyberCompanyConfig = {
     ...currentConfig,
     companies: currentConfig.companies.map((company) =>
@@ -2135,20 +2252,24 @@ async function hireCompanyEmployeeStrongConsistency(input: AuthorityHireEmployee
       await ensureManagedCompanyExecutorProvisioned(
         planned.company,
         repository.loadRuntime(planned.company.id),
-        "company.employee.hire",
+        input.hires.length > 1 ? "company.employee.batch_hire" : "company.employee.hire",
       );
-      const bootstrapFile = buildEmployeeBootstrapFile({
-        ...input,
-        agentId: planned.employee.agentId,
-      });
-      repository.setAgentFile(bootstrapFile.agentId, bootstrapFile.name, bootstrapFile.content);
-      await syncAgentFileToExecutor(bootstrapFile);
+      for (const hire of planned.hires) {
+        const bootstrapFile = buildEmployeeBootstrapFile({
+          ...input.hires[hire.inputIndex],
+          agentId: hire.employee.agentId,
+        });
+        repository.setAgentFile(bootstrapFile.agentId, bootstrapFile.name, bootstrapFile.content);
+        await syncAgentFileToExecutor(bootstrapFile);
+      }
     } catch (error) {
-      try {
-        await deleteManagedAgentFromExecutor(planned.employee.agentId);
-        repository.clearManagedExecutorAgent(planned.employee.agentId);
-      } catch {
-        // Best-effort rollback for partially provisioned hires.
+      for (const hire of [...planned.hires].reverse()) {
+        try {
+          await deleteManagedAgentFromExecutor(hire.employee.agentId);
+          repository.clearManagedExecutorAgent(hire.employee.agentId);
+        } catch {
+          // Best-effort rollback for partially provisioned hires.
+        }
       }
       repository.saveConfig(currentConfig);
       throw error;
@@ -2160,8 +2281,25 @@ async function hireCompanyEmployeeStrongConsistency(input: AuthorityHireEmployee
       repository.loadConfig()?.companies.find((company) => company.id === input.companyId) ?? planned.company,
     config: repository.loadConfig() ?? nextConfig,
     runtime: repository.loadRuntime(input.companyId),
-    employee: planned.employee,
     warnings: planned.warnings,
+    employees: planned.hires
+      .toSorted((left, right) => left.inputIndex - right.inputIndex)
+      .map((hire) => hire.employee),
+  };
+}
+
+async function hireCompanyEmployeeStrongConsistency(input: AuthorityHireEmployeeRequest): Promise<AuthorityHireEmployeeResponse> {
+  const batch = await hireCompanyEmployeesStrongConsistency({
+    companyId: input.companyId,
+    hires: [input],
+  });
+  const [employee] = batch.employees;
+  if (!employee) {
+    throw new Error("招聘结果缺少新员工记录。");
+  }
+  return {
+    ...batch,
+    employee,
   };
 }
 
@@ -2888,6 +3026,20 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && /\/companies\/[^/]+\/employees\/batch$/.test(url.pathname)) {
+      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+      const body = await readJsonBody<AuthorityBatchHireEmployeesRequest>(request);
+      const payload = await hireCompanyEmployeesStrongConsistency({
+        companyId,
+        hires: Array.isArray(body.hires) ? body.hires : [],
+      });
+      companyOpsEngine.schedule("company.employee.batch_hire", companyId);
+      sendJson(response, 200, payload);
+      broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
+      broadcast({ type: "company.updated", companyId, timestamp: Date.now() });
+      return;
+    }
+
     if (request.method === "DELETE" && url.pathname.startsWith("/companies/")) {
       const companyId = decodeURIComponent(url.pathname.slice("/companies/".length));
       try {
@@ -3178,6 +3330,22 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, repository.deleteArtifact(body));
       companyOpsEngine.schedule("artifact.delete", body.companyId);
       broadcast({ type: "artifact.updated", companyId: body.companyId, timestamp: Date.now() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/commands/decision.upsert") {
+      const body = await readJsonBody<AuthorityDecisionTicketUpsertRequest>(request);
+      sendJson(response, 200, repository.upsertDecisionTicket(body));
+      companyOpsEngine.schedule("decision.upsert", body.companyId);
+      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/commands/decision.delete") {
+      const body = await readJsonBody<AuthorityDecisionTicketDeleteRequest>(request);
+      sendJson(response, 200, repository.deleteDecisionTicket(body));
+      companyOpsEngine.schedule("decision.delete", body.companyId);
+      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
       return;
     }
 

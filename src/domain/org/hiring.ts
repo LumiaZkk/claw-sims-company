@@ -21,6 +21,16 @@ export type HireEmployeePlanResult = {
   warnings: string[];
 };
 
+export type HireEmployeesBatchPlanResult = {
+  company: Company;
+  hires: Array<{
+    inputIndex: number;
+    employee: EmployeeRef;
+    department: Department | null;
+  }>;
+  warnings: string[];
+};
+
 function slugify(input: string) {
   return input
     .trim()
@@ -79,6 +89,61 @@ function resolveDefaultManager(company: Company) {
   );
 }
 
+function normalizeDepartmentLocator(input: HireEmployeePlanInput) {
+  return {
+    departmentId: input.departmentId?.trim() || "",
+    departmentName: input.departmentName?.trim() || "",
+  };
+}
+
+function resolveRequestedDepartmentKey(company: Company, input: HireEmployeePlanInput): string | null {
+  const { departmentId, departmentName } = normalizeDepartmentLocator(input);
+  const departments = company.departments ?? [];
+  const byId = departmentId
+    ? departments.find((department) => department.id === departmentId) ?? null
+    : null;
+  const byName = departmentName
+    ? departments.find((department) => department.name === departmentName) ?? null
+    : null;
+  const matchedDepartment = byId ?? byName;
+  if (matchedDepartment) {
+    return `dept:${matchedDepartment.id}`;
+  }
+  if (departmentName) {
+    return `name:${departmentName.toLowerCase()}`;
+  }
+  if (departmentId) {
+    return `id:${departmentId}`;
+  }
+  return null;
+}
+
+function resolveRequestedDepartmentLabel(company: Company, input: HireEmployeePlanInput): string {
+  const { departmentId, departmentName } = normalizeDepartmentLocator(input);
+  const departments = company.departments ?? [];
+  const matchedDepartment =
+    (departmentId
+      ? departments.find((department) => department.id === departmentId) ?? null
+      : null)
+    ?? (departmentName
+      ? departments.find((department) => department.name === departmentName) ?? null
+      : null);
+  if (matchedDepartment) {
+    return matchedDepartment.name;
+  }
+  if (departmentName) {
+    return departmentName;
+  }
+  if (departmentId) {
+    return departmentId;
+  }
+  return "未命名部门";
+}
+
+function dedupeWarnings(warnings: string[]) {
+  return [...new Set(warnings)];
+}
+
 export function planHiredEmployee(company: Company, input: HireEmployeePlanInput): HireEmployeePlanResult {
   const role = input.role.trim();
   const description = input.description.trim();
@@ -120,12 +185,19 @@ export function planHiredEmployee(company: Company, input: HireEmployeePlanInput
     }
   }
 
+  const preferredManager =
+    !input.makeDepartmentLead && department?.leadAgentId?.trim()
+      ? department.leadAgentId.trim()
+      : null;
+
   const employee: EmployeeRef = {
     agentId,
     nickname: input.nickname?.trim() || role,
     role,
     isMeta: false,
-    reportsTo: input.makeDepartmentLead ? (defaultManager ?? undefined) : (input.reportsTo?.trim() || defaultManager || undefined),
+    reportsTo: input.makeDepartmentLead
+      ? (defaultManager ?? undefined)
+      : (input.reportsTo?.trim() || preferredManager || defaultManager || undefined),
     departmentId: department?.id ?? undefined,
     ...(input.avatarJobId ? { avatarJobId: input.avatarJobId } : {}),
   };
@@ -154,5 +226,99 @@ export function planHiredEmployee(company: Company, input: HireEmployeePlanInput
     employee: normalizedEmployee,
     department: normalizedDepartment,
     warnings: normalized.warnings,
+  };
+}
+
+export function planHiredEmployeesBatch(
+  company: Company,
+  inputs: HireEmployeePlanInput[],
+): HireEmployeesBatchPlanResult {
+  if (inputs.length === 0) {
+    throw new Error("至少提供一条招聘请求。");
+  }
+
+  const pending = inputs.map((input, inputIndex) => ({
+    input,
+    inputIndex,
+  }));
+
+  const leadByDepartmentKey = new Map<string, number[]>();
+  for (const item of pending) {
+    if (!item.input.makeDepartmentLead) {
+      continue;
+    }
+    const departmentKey = resolveRequestedDepartmentKey(company, item.input);
+    if (!departmentKey) {
+      continue;
+    }
+    const indices = leadByDepartmentKey.get(departmentKey) ?? [];
+    indices.push(item.inputIndex);
+    leadByDepartmentKey.set(departmentKey, indices);
+  }
+
+  const duplicatedLeadDepartment = [...leadByDepartmentKey.entries()].find(
+    ([, indices]) => indices.length > 1,
+  );
+  if (duplicatedLeadDepartment) {
+    const [departmentKey] = duplicatedLeadDepartment;
+    const sampleInput =
+      pending.find((item) => resolveRequestedDepartmentKey(company, item.input) === departmentKey)?.input
+      ?? { role: "部门负责人", description: "batch lead validation placeholder" };
+    throw new Error(
+      `部门「${resolveRequestedDepartmentLabel(company, sampleInput)}」在同一批次里出现了多个负责人招聘请求，请只保留一个 makeDepartmentLead=true。`,
+    );
+  }
+
+  let nextCompany = company;
+  const hires: HireEmployeesBatchPlanResult["hires"] = [];
+  const warnings: string[] = [];
+  const remaining = [...pending];
+
+  while (remaining.length > 0) {
+    const nextIndex = remaining.findIndex((candidate) => {
+      if (candidate.input.makeDepartmentLead) {
+        return true;
+      }
+      const departmentKey = resolveRequestedDepartmentKey(nextCompany, candidate.input);
+      if (!departmentKey) {
+        return true;
+      }
+      const hasPendingLeadForSameDepartment = remaining.some((other) =>
+        other.inputIndex !== candidate.inputIndex
+        && other.input.makeDepartmentLead
+        && resolveRequestedDepartmentKey(nextCompany, other.input) === departmentKey,
+      );
+      if (hasPendingLeadForSameDepartment) {
+        return false;
+      }
+      return departmentKey.startsWith("dept:");
+    });
+
+    if (nextIndex < 0) {
+      const unresolvedDepartments = [
+        ...new Set(
+          remaining.map((item) => resolveRequestedDepartmentLabel(nextCompany, item.input)),
+        ),
+      ];
+      throw new Error(
+        `以下部门在本批次里没有可先落盘的负责人：${unresolvedDepartments.join("、")}。请确保每个新部门至少有一条 makeDepartmentLead=true 的招聘请求。`,
+      );
+    }
+
+    const [nextHire] = remaining.splice(nextIndex, 1);
+    const planned = planHiredEmployee(nextCompany, nextHire.input);
+    nextCompany = planned.company;
+    hires.push({
+      inputIndex: nextHire.inputIndex,
+      employee: planned.employee,
+      department: planned.department,
+    });
+    warnings.push(...planned.warnings);
+  }
+
+  return {
+    company: nextCompany,
+    hires,
+    warnings: dedupeWarnings(warnings),
   };
 }

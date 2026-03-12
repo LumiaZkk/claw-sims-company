@@ -146,6 +146,9 @@ describe("company-executor-sync", () => {
     expect(files.find((file) => file.agentId === "company-1-designer" && file.name === "collaboration-context.json")?.content).toContain(
       '"manager"',
     );
+    expect(files.find((file) => file.agentId === "company-1-designer" && file.name === "collaboration-context.json")?.content).toContain(
+      '"company"',
+    );
     expect(files.find((file) => file.name === "OPERATIONS.md")?.content).toContain("当前 roster");
     expect(files.find((file) => file.agentId === "company-1-ceo" && file.name === "SOUL.md")?.content).toContain(
       "业务归属先判定",
@@ -155,6 +158,9 @@ describe("company-executor-sync", () => {
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
       "authority.company.employee.hire",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
+      "authority.company.employee.batch_hire",
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
       "严禁把 `agents.create` 当作正式招聘入口",
@@ -173,6 +179,9 @@ describe("company-executor-sync", () => {
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
       "authority.company.employee.hire",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
+      "authority.company.employee.batch_hire",
     );
   });
 

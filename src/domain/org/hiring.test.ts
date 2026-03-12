@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Company } from "./types";
-import { planHiredEmployee } from "./hiring";
+import { planHiredEmployee, planHiredEmployeesBatch } from "./hiring";
 
 function buildCompany(): Company {
   return {
@@ -99,5 +99,75 @@ describe("planHiredEmployee", () => {
     });
 
     expect(result.employee.agentId).toBe("nl-0845da-content-director-2");
+  });
+});
+
+describe("planHiredEmployeesBatch", () => {
+  it("creates the lead first for a new department even when members are listed earlier", () => {
+    const result = planHiredEmployeesBatch(buildCompany(), [
+      {
+        role: "内容主笔",
+        description: "负责长文交付",
+        departmentName: "内容创作事业部",
+      },
+      {
+        role: "内容总监",
+        description: "统筹内容创作事业部",
+        departmentName: "内容创作事业部",
+        makeDepartmentLead: true,
+      },
+      {
+        role: "内容编辑",
+        description: "负责校对与排版",
+        departmentName: "内容创作事业部",
+      },
+    ]);
+
+    expect(result.hires.map((item) => item.employee.role)).toEqual([
+      "内容总监",
+      "内容主笔",
+      "内容编辑",
+    ]);
+    expect(result.company.departments?.find((department) => department.name === "内容创作事业部")).toMatchObject({
+      leadAgentId: "nl-0845da-内容总监",
+    });
+    expect(result.company.employees.find((employee) => employee.role === "内容主笔")).toMatchObject({
+      departmentId: result.company.departments?.find((department) => department.name === "内容创作事业部")?.id,
+      reportsTo: "nl-0845da-内容总监",
+    });
+    expect(result.company.employees.find((employee) => employee.role === "内容编辑")).toMatchObject({
+      reportsTo: "nl-0845da-内容总监",
+    });
+  });
+
+  it("rejects a new department batch when no lead hire is present", () => {
+    expect(() =>
+      planHiredEmployeesBatch(buildCompany(), [
+        {
+          role: "内容主笔",
+          description: "负责长文交付",
+          departmentName: "内容创作事业部",
+        },
+      ]),
+    ).toThrow("makeDepartmentLead=true");
+  });
+
+  it("rejects multiple lead hires for the same department in one batch", () => {
+    expect(() =>
+      planHiredEmployeesBatch(buildCompany(), [
+        {
+          role: "内容总监",
+          description: "统筹内容创作事业部",
+          departmentName: "内容创作事业部",
+          makeDepartmentLead: true,
+        },
+        {
+          role: "执行总监",
+          description: "同时尝试接管同一个部门",
+          departmentName: "内容创作事业部",
+          makeDepartmentLead: true,
+        },
+      ]),
+    ).toThrow("多个负责人招聘请求");
   });
 });

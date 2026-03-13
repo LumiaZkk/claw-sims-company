@@ -43,13 +43,16 @@ export type WorkspaceFileRow = {
   kind: WorkspaceResourceKind;
   resourceType: WorkspaceResourceType;
   tags: string[];
+  resourceOrigin: WorkspaceResourceOrigin;
 };
+
+export type WorkspaceResourceOrigin = "declared" | "manifest" | "inferred";
 
 export type WorkspaceKnowledgeItemRow = SharedKnowledgeItem;
 
 export const RESOURCE_KIND_LABEL: Record<WorkspaceResourceKind, string> = {
-  chapter: "正文",
-  canon: "设定",
+  chapter: "主体内容",
+  canon: "参考资料",
   review: "报告",
   knowledge: "知识",
   tooling: "工具",
@@ -59,18 +62,18 @@ export const RESOURCE_KIND_LABEL: Record<WorkspaceResourceKind, string> = {
 export const WORKBENCH_TOOL_CARDS = [
   {
     id: "consistency-checker" as const,
-    title: "让 CTO 开发一致性工具",
-    summary: "围绕设定、人物、时间线和伏笔做结构化校验，避免写到后面又靠人肉回看。",
+    title: "让 CTO 开发校验工具",
+    summary: "围绕唯一真相源、关键规则和状态流转做结构化校验，避免靠人肉回看和口头对齐。",
   },
   {
     id: "novel-reader" as const,
-    title: "让 CTO 开发小说阅读器",
-    summary: "把章节目录、审校报告和共享设定放在同一个阅读界面里，便于创作团队直接对照。",
+    title: "让 CTO 开发内容查看器",
+    summary: "把主体内容、参考资料和过程报告放在同一个查看界面里，便于业务团队直接对照。",
   },
   {
     id: "chapter-review-console" as const,
-    title: "让 CTO 开发章节审阅台",
-    summary: "把章节状态、审校意见、终审结论和发布前检查收进一个公司内工具页。",
+    title: "让 CTO 开发审阅控制台",
+    summary: "把对象状态、审阅意见、验收结论和交付前检查收进一个公司内工具页。",
   },
 ] as const;
 
@@ -106,6 +109,68 @@ export {
   type WorkspaceReaderIndex,
   type WorkspaceReaderPageSnapshot,
 } from "./reader-state";
+export {
+  resolveWorkspaceEmbeddedAppRuntime,
+  type WorkspaceEmbeddedAppRuntime,
+  type WorkspaceEmbeddedAppRuntimeSection,
+} from "./embedded-app-runtime";
+export {
+  loadWorkspaceEmbeddedAppSnapshot,
+  saveWorkspaceEmbeddedAppSnapshot,
+  isWorkspaceEmbeddedAppSnapshotEqual,
+  withWorkspaceEmbeddedAppSelection,
+  type WorkspaceEmbeddedAppSnapshot,
+} from "./embedded-app-state";
+export { executeWorkspaceSkill } from "./skill-executor";
+export {
+  CAPABILITY_ISSUE_ACTION_LABEL,
+  CAPABILITY_ISSUE_STATUS_LABEL,
+  CAPABILITY_REQUEST_ACTION_LABEL,
+  CAPABILITY_REQUEST_STATUS_LABEL,
+  NEXT_CAPABILITY_ISSUE_STATUS,
+  NEXT_CAPABILITY_REQUEST_STATUS,
+  buildCapabilityVerificationQueue,
+  buildCapabilityIssueBoard,
+  buildCapabilityRequestBoard,
+  resolveCapabilityIssueLane,
+  resolveCapabilityRequestLane,
+  type CapabilityBoardItem,
+  type CapabilityBoardLane,
+  type CapabilityBoardLaneId,
+  type CapabilityVerificationItem,
+} from "./capability-governance";
+export {
+  normalizeWorkspaceSkillScriptOutput,
+  resolveWorkspaceSkillExecutionFromScriptRun,
+  type WorkspaceSkillScriptArtifactPayload,
+  type WorkspaceSkillScriptOutput,
+} from "./workspace-skill-script";
+export {
+  buildWorkspaceSkillExecutionInput,
+  listWorkspaceSkillExecutionInputTypes,
+  summarizeWorkspaceSkillExecutionInput,
+  type WorkspaceSkillExecutionInput,
+  type WorkspaceSkillExecutionInputResource,
+} from "./workspace-skill-contract";
+export {
+  buildSkillReleaseReadiness,
+  type SkillReleaseCheck,
+  type SkillReleaseReadiness,
+} from "./skill-release";
+export {
+  runWorkspaceSkill,
+  type RunWorkspaceSkillCallbacks,
+  type RunWorkspaceSkillInput,
+  type RunWorkspaceSkillResult,
+  type WorkspaceScriptExecutionAttempt,
+  type WorkspaceSkillIssueDraft,
+} from "./skill-runner";
+export {
+  getCompanyWorkflowCapabilityBindings,
+  hasStoredWorkflowCapabilityBindings,
+  resolveWorkflowCapabilityBindings,
+  type ResolvedWorkflowCapabilityBinding,
+} from "./workflow-capability-bindings";
 
 export function formatWorkspaceBytes(bytes?: number): string {
   if (bytes === undefined) {
@@ -170,6 +235,7 @@ function buildWorkspaceRows(input: {
         kind: descriptor.kind,
         resourceType: descriptor.resourceType,
         tags: descriptor.tags,
+        resourceOrigin: "inferred",
       });
     }
   }
@@ -195,6 +261,13 @@ function buildArtifactMirrorRows(input: {
         artifact.sourceName ?? artifact.title,
         artifact.sourcePath ?? artifact.sourceUrl ?? artifact.title,
       );
+      const isWorkspaceMirrorArtifact = artifact.id.startsWith("workspace:");
+      const resourceOrigin: WorkspaceResourceOrigin =
+        isWorkspaceMirrorArtifact
+          ? "inferred"
+          : artifact.resourceType || (artifact.resourceTags?.length ?? 0) > 0
+            ? "declared"
+            : "inferred";
       return {
         key: artifact.id,
         artifactId: artifact.id,
@@ -210,6 +283,7 @@ function buildArtifactMirrorRows(input: {
         kind: descriptor.kind,
         resourceType: artifact.resourceType ?? descriptor.resourceType,
         tags: artifact.resourceTags ?? descriptor.tags,
+        resourceOrigin,
       } satisfies WorkspaceFileRow;
     })
     .sort((left, right) => {
@@ -546,6 +620,12 @@ export function useWorkspaceViewModel(input: { isPageVisible: boolean }) {
               size: existing.size ?? row.size,
               resourceType: existing.resourceType ?? row.resourceType,
               tags: existing.tags.length > 0 ? existing.tags : row.tags,
+              resourceOrigin:
+                existing.resourceOrigin === "manifest"
+                  ? "manifest"
+                  : existing.resourceOrigin === "declared"
+                    ? "declared"
+                    : row.resourceOrigin,
             }
           : row,
       );

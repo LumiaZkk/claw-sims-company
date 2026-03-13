@@ -72,6 +72,35 @@ type BoardTaskSurfaceInput = {
   requirementSyntheticTask: TrackedTask | null;
 };
 
+function resolveTaskExecutionFromSnapshot(input: {
+  task: TrackedTask;
+  fallbackState: ResolvedExecutionState["state"];
+  taskSteps?: TrackedTask["steps"];
+}): ResolvedExecutionState {
+  const { task, fallbackState, taskSteps = task.steps } = input;
+  const syncedState = task.lastSyncedAt ? task.state ?? fallbackState : null;
+
+  if (syncedState) {
+    return resolveExecutionState({
+      fallbackState: syncedState,
+      evidenceTexts:
+        syncedState === "blocked_timeout" ||
+        syncedState === "blocked_tool_failure" ||
+        syncedState === "manual_takeover_required" ||
+        syncedState === "waiting_input" ||
+        syncedState === "waiting_peer"
+          ? [task.blockedReason, task.summary]
+          : undefined,
+    });
+  }
+
+  return resolveExecutionState({
+    fallbackState,
+    evidenceTexts: [task.blockedReason, task.summary],
+    taskSteps,
+  });
+}
+
 function buildZeroRequestHealth(): ReturnType<typeof summarizeRequestHealth> {
   return {
     total: 0,
@@ -228,7 +257,8 @@ export function buildBoardTaskSurface(input: BoardTaskSurfaceInput): BoardTaskSu
             (stepSummary.doneCount === stepSummary.total ? "completed" : "running"),
           taskSteps: task.steps,
         })
-      : resolveExecutionState({
+      : resolveTaskExecutionFromSnapshot({
+          task,
           fallbackState:
             task.state ??
             (stepSummary.doneCount === stepSummary.total
@@ -236,8 +266,6 @@ export function buildBoardTaskSurface(input: BoardTaskSurfaceInput): BoardTaskSu
               : stepSummary.wipCount > 0
                 ? "running"
                 : "idle"),
-          evidenceTexts: [task.blockedReason, task.summary],
-          taskSteps: task.steps,
         });
     const relatedHandoffs = isStrategicSyntheticTask
       ? []

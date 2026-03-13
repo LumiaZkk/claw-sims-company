@@ -1,25 +1,37 @@
 import { gateway } from "./index";
 import type {
   AuthorityAppendRoomRequest,
+  AuthorityApprovalMutationResponse,
+  AuthorityApprovalRequest,
+  AuthorityApprovalResolveRequest,
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
+  AuthorityConversationStateDeleteRequest,
+  AuthorityConversationStateUpsertRequest,
   AuthorityDecisionTicketCancelRequest,
   AuthorityDecisionTicketDeleteRequest,
   AuthorityDecisionTicketResolveRequest,
   AuthorityDecisionTicketUpsertRequest,
   AuthorityDispatchUpsertRequest,
   AuthorityDispatchDeleteRequest,
+  AuthorityMissionDeleteRequest,
+  AuthorityMissionUpsertRequest,
   AuthorityRequirementPromoteRequest,
   AuthorityRequirementTransitionRequest,
+  AuthorityRoundDeleteRequest,
+  AuthorityRoundUpsertRequest,
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
+  AuthorityWorkItemDeleteRequest,
+  AuthorityWorkItemUpsertRequest,
   AuthorityBootstrapSnapshot,
   AuthorityBatchHireEmployeesRequest,
   AuthorityBatchHireEmployeesResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityCreateCompanyRequest,
   AuthorityCreateCompanyResponse,
+  AuthorityRetryCompanyProvisioningResponse,
   AuthorityExecutorConfig,
   AuthorityExecutorConfigPatch,
   AuthorityHireEmployeeRequest,
@@ -38,6 +50,13 @@ export function createAuthorityCompany(input: AuthorityCreateCompanyRequest) {
   return gateway.request<AuthorityCreateCompanyResponse>("authority.company.create", input);
 }
 
+export function retryAuthorityCompanyProvisioning(companyId: string) {
+  return gateway.request<AuthorityRetryCompanyProvisioningResponse>(
+    "authority.company.provisioning.retry",
+    { companyId },
+  );
+}
+
 export function hireAuthorityEmployee(input: AuthorityHireEmployeeRequest) {
   return gateway.request<AuthorityHireEmployeeResponse>("authority.company.employee.hire", input);
 }
@@ -47,6 +66,14 @@ export function batchHireAuthorityEmployees(input: AuthorityBatchHireEmployeesRe
     "authority.company.employee.batch_hire",
     input,
   );
+}
+
+export function requestAuthorityApproval(input: AuthorityApprovalRequest) {
+  return gateway.request<AuthorityApprovalMutationResponse>("authority.approval.request", input);
+}
+
+export function resolveAuthorityApproval(input: AuthorityApprovalResolveRequest) {
+  return gateway.request<AuthorityApprovalMutationResponse>("authority.approval.resolve", input);
 }
 
 export function switchAuthorityCompany(companyId: string) {
@@ -82,6 +109,38 @@ export function appendAuthorityRoom(input: AuthorityAppendRoomRequest) {
 
 export function upsertAuthorityRoomBindings(input: AuthorityRoomBindingsUpsertRequest) {
   return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.room-bindings.upsert", input);
+}
+
+export function upsertAuthorityRound(input: AuthorityRoundUpsertRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.round.upsert", input);
+}
+
+export function deleteAuthorityRound(input: AuthorityRoundDeleteRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.round.delete", input);
+}
+
+export function upsertAuthorityMission(input: AuthorityMissionUpsertRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.mission.upsert", input);
+}
+
+export function deleteAuthorityMission(input: AuthorityMissionDeleteRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.mission.delete", input);
+}
+
+export function upsertAuthorityConversationState(input: AuthorityConversationStateUpsertRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.conversation-state.upsert", input);
+}
+
+export function deleteAuthorityConversationState(input: AuthorityConversationStateDeleteRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.conversation-state.delete", input);
+}
+
+export function upsertAuthorityWorkItem(input: AuthorityWorkItemUpsertRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.work-item.upsert", input);
+}
+
+export function deleteAuthorityWorkItem(input: AuthorityWorkItemDeleteRequest) {
+  return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.work-item.delete", input);
 }
 
 export function deleteAuthorityRoom(input: AuthorityRoomDeleteRequest) {

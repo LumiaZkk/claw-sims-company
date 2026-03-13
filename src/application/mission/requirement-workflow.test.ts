@@ -120,4 +120,26 @@ describe("buildRequirementWorkflowEvidencePayload", () => {
     });
     expect(payload.changedFields).toContain("primaryRequirementId");
   });
+
+  it("filters no-op explicit changes out of changedFields", () => {
+    const previousAggregate = createAggregate();
+    const nextAggregate = createAggregate({
+      revision: 3,
+      updatedAt: 9_000,
+      lastEvidenceAt: 9_000,
+    });
+
+    const payload = buildRequirementWorkflowEvidencePayload({
+      previousAggregate,
+      nextAggregate,
+      source: "local-command",
+      changes: {
+        ownerActorId: "co-ceo",
+        stage: "CEO 统筹",
+        nextAction: "继续推进 Alpha。",
+      },
+    });
+
+    expect(payload.changedFields).toEqual([]);
+  });
 });

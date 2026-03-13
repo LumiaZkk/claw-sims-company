@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Department } from "../../domain/org/types";
+import { requestAuthorityApproval } from "../gateway/authority-control";
+import type { ApprovalRecord } from "../../domain/governance/types";
+import type { Company, Department } from "../../domain/org/types";
 import type { ProviderManifest } from "../gateway";
 import {
   applyHrDepartmentPlanToCompany,
   applyOrgRecommendationToCompany,
   buildFixedOrganization,
   buildSavedDepartments,
+  summarizeDepartmentCreateRemoveChanges,
   buildUpdatedEmployeeProfiles,
 } from "./organization-commands";
 import {
@@ -18,10 +21,93 @@ import {
   updateEmployeeRolePrompt,
   type HireEmployeeConfig,
 } from "./directory-commands";
-import type { Company } from "../../domain/org/types";
 import type { HrPlanRuntimeState } from "./directory-commands";
 import type { OrgAdvisorSnapshot } from "../assignment/org-fit";
 import type { HireConfig } from "../../components/ui/immersive-hire-dialog";
+import { readCompanyRuntimeState } from "../../infrastructure/company/runtime/selectors";
+
+type SavedDepartmentsResult = ReturnType<typeof buildSavedDepartments>;
+
+export type SaveDirectoryDepartmentsResult =
+  | {
+      mode: "executed";
+      approval: null;
+      normalized: SavedDepartmentsResult;
+    }
+  | {
+      mode: "approval_requested";
+      approval: ApprovalRecord;
+      normalized: SavedDepartmentsResult;
+    };
+
+function describeDepartmentLabels(departments: Department[]) {
+  return departments
+    .map((department) => department.name.trim() || department.id)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join("、");
+}
+
+function buildDepartmentChangeApprovalSummary(input: {
+  created: Department[];
+  removed: Department[];
+}) {
+  const createdCount = input.created.length;
+  const removedCount = input.removed.length;
+  if (createdCount > 0 && removedCount > 0) {
+    return `审批更新部门配置（新增 ${createdCount} / 归档或移除 ${removedCount}）`;
+  }
+  if (createdCount > 0) {
+    return `审批新增 ${createdCount} 个部门`;
+  }
+  return `审批归档或移除 ${removedCount} 个部门`;
+}
+
+function buildDepartmentChangeApprovalDetail(input: {
+  created: Department[];
+  removed: Department[];
+}) {
+  const details: string[] = [];
+  if (input.created.length > 0) {
+    details.push(`准备新增部门：${describeDepartmentLabels(input.created)}`);
+  }
+  if (input.removed.length > 0) {
+    details.push(`准备归档或移除部门：${describeDepartmentLabels(input.removed)}`);
+  }
+  details.push("审批通过后才会把新的部门配置写回组织结构。");
+  return details.join("；");
+}
+
+function readApprovalPayloadDepartments(payload: ApprovalRecord["payload"]): Department[] {
+  if (!payload || !Array.isArray(payload.departments)) {
+    return [];
+  }
+  return payload.departments
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item): Department => {
+      const kind =
+        item.kind === "meta" || item.kind === "support" || item.kind === "business"
+          ? item.kind
+          : undefined;
+      const missionPolicy =
+        item.missionPolicy === "support_only"
+        || item.missionPolicy === "manager_delegated"
+        || item.missionPolicy === "direct_execution"
+          ? item.missionPolicy
+          : undefined;
+      return {
+        id: typeof item.id === "string" ? item.id : "",
+        name: typeof item.name === "string" ? item.name : "",
+        leadAgentId: typeof item.leadAgentId === "string" ? item.leadAgentId : "",
+        kind,
+        color: typeof item.color === "string" ? item.color : undefined,
+        order: typeof item.order === "number" && Number.isFinite(item.order) ? item.order : undefined,
+        missionPolicy,
+        archived: item.archived === true,
+      };
+    })
+    .filter((department) => department.id.trim().length > 0 && department.leadAgentId.trim().length > 0);
+}
 
 export async function openDirectoryWorkspaceFile(input: {
   agentId: string;
@@ -138,17 +224,85 @@ export async function saveDirectoryDepartments(input: {
   company: Company;
   nextDepartments: Department[];
   updateCompany: (patch: Partial<Company>) => Promise<void> | void;
-}) {
+  options?: {
+    skipApproval?: boolean;
+  };
+}): Promise<SaveDirectoryDepartmentsResult> {
   const normalized = buildSavedDepartments(input.company, input.nextDepartments);
+  const departmentChanges = summarizeDepartmentCreateRemoveChanges(
+    input.company.departments,
+    normalized.departments,
+  );
+  const needsApproval =
+    !input.options?.skipApproval &&
+    input.company.orgSettings?.autonomyPolicy?.humanApprovalRequiredForDepartmentCreateRemove !== false &&
+    departmentChanges.hasRiskyChanges;
+
+  if (needsApproval) {
+    const result = await requestAuthorityApproval({
+      companyId: input.company.id,
+      scope: "org",
+      actionType: "department_change",
+      summary: buildDepartmentChangeApprovalSummary(departmentChanges),
+      detail: buildDepartmentChangeApprovalDetail(departmentChanges),
+      requestedByActorId: "operator:local-user",
+      requestedByLabel: "当前操作者",
+      payload: {
+        departments: normalized.departments,
+        createdDepartmentIds: departmentChanges.created.map((department) => department.id),
+        createdDepartmentNames: departmentChanges.created.map(
+          (department) => department.name.trim() || department.id,
+        ),
+        removedDepartmentIds: departmentChanges.removed.map((department) => department.id),
+        removedDepartmentNames: departmentChanges.removed.map(
+          (department) => department.name.trim() || department.id,
+        ),
+      },
+    });
+    await readCompanyRuntimeState().loadConfig();
+    return {
+      mode: "approval_requested",
+      approval: result.approval,
+      normalized,
+    };
+  }
+
   await input.updateCompany({
     departments: normalized.departments,
     employees: normalized.employees,
   });
-  return normalized;
+  return {
+    mode: "executed",
+    approval: null,
+    normalized,
+  };
+}
+
+export async function applyApprovedDirectoryDepartmentChange(input: {
+  company: Company;
+  approval: ApprovalRecord;
+  updateCompany: (patch: Partial<Company>) => Promise<void> | void;
+}) {
+  const nextDepartments = readApprovalPayloadDepartments(input.approval.payload);
+  if (nextDepartments.length === 0) {
+    throw new Error("当前审批缺少可应用的部门配置快照。");
+  }
+  const result = await saveDirectoryDepartments({
+    company: input.company,
+    nextDepartments,
+    updateCompany: input.updateCompany,
+    options: {
+      skipApproval: true,
+    },
+  });
+  if (result.mode !== "executed") {
+    throw new Error("部门审批在批准后仍被再次拦截，请检查 approval gate 配置。");
+  }
+  return result.normalized;
 }
 
 export async function fireDirectoryEmployee(agentId: string) {
-  await fireCompanyEmployee(agentId);
+  return fireCompanyEmployee(agentId);
 }
 
 export function useOrgDirectoryCommands(input: {

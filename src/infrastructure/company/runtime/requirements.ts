@@ -11,6 +11,7 @@ import {
   reconcileRequirementAggregateState,
   sanitizeRequirementAggregateRecords,
 } from "../../../application/mission/requirement-aggregate";
+import { diffRequirementAggregateMaterialFields } from "../../../application/mission/requirement-aggregate-diff";
 import {
   loadRequirementAggregateRecords,
   persistRequirementAggregateRecords,
@@ -297,22 +298,35 @@ export function buildRequirementActions(
           if (aggregate.id !== transition.aggregateId) {
             return aggregate;
           }
-          return {
+          const nextLastEvidenceAt =
+            transition.changes.lastEvidenceAt ??
+            transition.timestamp ??
+            aggregate.lastEvidenceAt ??
+            null;
+          const nextAggregateBase: RequirementAggregateRecord = {
             ...aggregate,
             ...transition.changes,
             companyId: activeCompany.id,
             primary: aggregate.id === primaryRequirementId,
-            revision: aggregate.revision + 1,
-            updatedAt: Math.max(
-              aggregate.updatedAt,
-              transition.timestamp ?? Date.now(),
-              transition.changes.updatedAt ?? 0,
-            ),
-            lastEvidenceAt:
-              transition.changes.lastEvidenceAt ??
-              transition.timestamp ??
-              aggregate.lastEvidenceAt ??
-              null,
+            updatedAt: aggregate.updatedAt,
+            revision: aggregate.revision,
+            lastEvidenceAt: nextLastEvidenceAt,
+          };
+          const changedFields = diffRequirementAggregateMaterialFields(aggregate, nextAggregateBase);
+          if (changedFields.length === 0 && nextLastEvidenceAt === (aggregate.lastEvidenceAt ?? null)) {
+            return aggregate;
+          }
+          return {
+            ...nextAggregateBase,
+            updatedAt:
+              changedFields.length > 0
+                ? Math.max(
+                    aggregate.updatedAt,
+                    transition.timestamp ?? Date.now(),
+                    transition.changes.updatedAt ?? 0,
+                  )
+                : aggregate.updatedAt,
+            revision: changedFields.length > 0 ? aggregate.revision + 1 : aggregate.revision,
           };
         }),
         primaryRequirementId,
@@ -329,7 +343,7 @@ export function buildRequirementActions(
           })
         : null;
       const nextEvidence =
-        nextAggregate && kind
+        nextAggregate && kind && nextAggregate.revision !== target.revision
           ? appendRequirementLocalEvidence({
               companyId: activeCompany.id,
               evidence: activeRequirementEvidence,

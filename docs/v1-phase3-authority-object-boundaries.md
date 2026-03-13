@@ -1,4 +1,4 @@
-Status: In Progress
+Status: Complete
 Last updated: 2026-03-13
 Related docs:
 
@@ -31,7 +31,7 @@ Phase 2 已经把主链 mutation 收进 authority command。Phase 3 要解决的
 
 ## 1.1 当前切片进度
 
-`Phase 3 / Slice A` 目前拆成两刀：
+`Phase 3 / Slice A` 在 V1 范围内已完成三刀：
 
 - `Slice A-1`
   已完成。内容包括：
@@ -52,6 +52,22 @@ Phase 2 已经把主链 mutation 收进 authority command。Phase 3 要解决的
   - `companyOpsEngine` 已开始为自治引擎生成或收走的 `support request / escalation / decision` 写入 `ops_cycle_applied`、对应的 `*_record_upserted` 和 `*_record_deleted`
   剩余内容：
   - 把 authority repair / audit 规则写成更清晰的 operator-level 约束
+- `Slice A-3`
+  已完成。内容包括：
+  - `support request / escalation` 也开始补 revision baseline，不再只有 `DecisionTicket` 具备治理侧 revision 语义
+  - `companyOpsEngine` 生成或刷新 `support request` 时，摘要/owner/detail/SLA 等 material change 会递增 revision
+  - `openEscalation / resolveEscalation` 现在也会按 material change / status change 递增 revision
+  - `support_request_record_upserted / deleted` 与 `escalation_record_upserted / deleted` 的 company event payload 已开始显式带 `revision`
+  - `RequirementAggregate` 的 material-change 规则已经开始收口：reconcile 不再在无实质变化时刷新 `updatedAt`，duplicate evidence / no-op transition 也不再无条件 bump `revision`
+  - `requirement_*` workflow payload 的 `changedFields` 现在开始按 aggregate material diff 生成，而不是直接回显 no-op patch key
+  - `operator_action_recorded` 又继续覆盖了高信号异常入口：`Board / Lobby` 的“查看接管包”、`Requirement Center` 的“去排障 / 打开 Ops”、以及 `CEO 首页` 的“查看运营异常”
+
+V1 closeout 结论：
+
+- `RequirementAggregate / RequirementRoom / Dispatch / Artifact / DecisionTicket / SupportRequest / Escalation` 已在 V1 范围内收成带 revision 的 authority-owned 对象边界
+- 主读路径 repair 已拆出，`DecisionTicket` 已有显式 command
+- 第一批 lifecycle / workflow / operator audit 已形成统一 company event log
+- Phase 3 后续如果再扩，会进入 V2 的治理/approval/automation 主题，不再继续挂在这个 V1 closeout 上
 
 ## 2. 当前代码基线
 
@@ -186,6 +202,10 @@ revision 规则：
   - `status`
   - `acceptanceStatus`
   - `acceptanceNote`
+- 非 material 变化不再污染主线对象语义：
+  - reconcile 在字段未变化时保持 `updatedAt` 稳定，不再每次 `Date.now()` 刷新
+  - duplicate evidence / no-op transition 只允许 `lastEvidenceAt` 前进，不再无条件 `revision + 1`
+  - workflow `changedFields` 只记录真实 material diff，不再把 no-op patch key 当成主线变化
 
 允许的写入路径：
 
@@ -350,8 +370,8 @@ revision 规则：
 当前现状：
 
 - 对象已经在 runtime 中持久化
-- 但没有独立 authority command
-- requirement ticket 与 org/load ticket 目前都主要由 authority 内部 reconcile 生成
+- 已有独立 authority command
+- requirement ticket 与 org/load ticket 目前仍主要由 authority 内部 reconcile 生成
 
 稳定字段：
 
@@ -399,6 +419,57 @@ Phase 3 判断：
 - `DecisionTicket` 允许继续由 authority 引擎派生生成
 - 但“人类做出决策”不应再只是页面局部状态或消息副作用，必须进入显式 authority command
 
+### 4.6 `SupportRequest` / `Escalation`
+
+当前现状：
+
+- 两者都已经是 authority-owned governance object
+- `companyOpsEngine` 会自动生成、刷新、收口它们
+- 之前主要依赖 `updatedAt`，这轮开始补 revision baseline
+
+稳定字段：
+
+- `id`
+- `companyId`
+- `workItemId`
+- `requesterDepartmentId`
+- `targetDepartmentId`
+- `requestedByActorId`
+- `ownerActorId`
+- `targetActorId`
+- `sourceType`
+- `sourceId`
+- `createdAt`
+
+reconciled state 字段：
+
+- `summary`
+- `detail`
+- `status`
+- `slaDueAt`
+- `reason`
+- `severity`
+- `decisionTicketId`
+- `roomId`
+- `updatedAt`
+
+revision 规则：
+
+- `SupportRequest`
+  - `summary / detail / ownerActorId / status / slaDueAt / escalationId` 变化都递增
+- `Escalation`
+  - `reason / severity / status / targetActorId / decisionTicketId / roomId` 变化都递增
+
+允许的写入路径：
+
+- `companyOpsEngine`
+- authority governance repair / closeout
+
+Phase 3 判断：
+
+- 这两类对象可以继续由 authority 引擎生成
+- 但既然已经进入 company event audit，就不应该再只靠 `updatedAt` 表达治理变化；revision 和 audit payload 应该同步稳定下来
+
 ## 5. Phase 3 需要的最小类型升级
 
 最小升级，不追求一次性平台化。
@@ -411,6 +482,8 @@ Phase 3 判断：
 - `DispatchRecord`
 - `ArtifactRecord`
 - `DecisionTicketRecord`
+- `SupportRequestRecord`
+- `EscalationRecord`
 
 `RequirementAggregateRecord` 已有 `revision`，Phase 3 只需要把它真正变成写入边界的一部分。
 

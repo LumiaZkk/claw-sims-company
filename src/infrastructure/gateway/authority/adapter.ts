@@ -36,6 +36,8 @@ import {
   type SessionsUsageResult,
 } from "../runtime/types";
 import {
+  normalizeProviderProcessList,
+  normalizeProviderProcessRecord,
   normalizeProviderRuntimeEvent,
   normalizeProviderSessionStatus,
 } from "../../../application/agent-runtime";
@@ -81,6 +83,8 @@ function toHello(url: string): BackendHello {
       methods: [
         "authority.company.employee.hire",
         "authority.company.employee.batch_hire",
+        "authority.approval.request",
+        "authority.approval.resolve",
       ],
       events: [
         "bootstrap.updated",
@@ -290,6 +294,16 @@ class AuthorityBackendAdapter implements AgentBackend {
     if (method === "authority.company.create") {
       return (await authorityClient.createCompany(params as Parameters<typeof authorityClient.createCompany>[0])) as T;
     }
+    if (method === "authority.company.provisioning.retry") {
+      const companyId =
+        typeof params === "object" && params && "companyId" in params
+          ? String((params as { companyId: string }).companyId ?? "")
+          : "";
+      if (!companyId) {
+        throw new Error("authority.company.provisioning.retry requires companyId.");
+      }
+      return (await authorityClient.retryCompanyProvisioning(companyId)) as T;
+    }
     if (method === "authority.company.employee.hire") {
       return (await authorityClient.hireEmployee(
         params as Parameters<typeof authorityClient.hireEmployee>[0],
@@ -298,6 +312,16 @@ class AuthorityBackendAdapter implements AgentBackend {
     if (method === "authority.company.employee.batch_hire") {
       return (await authorityClient.batchHireEmployees(
         params as Parameters<typeof authorityClient.batchHireEmployees>[0],
+      )) as T;
+    }
+    if (method === "authority.approval.request") {
+      return (await authorityClient.requestApproval(
+        params as Parameters<typeof authorityClient.requestApproval>[0],
+      )) as T;
+    }
+    if (method === "authority.approval.resolve") {
+      return (await authorityClient.resolveApproval(
+        params as Parameters<typeof authorityClient.resolveApproval>[0],
       )) as T;
     }
     if (method === "authority.company.delete") {
@@ -348,6 +372,46 @@ class AuthorityBackendAdapter implements AgentBackend {
     if (method === "authority.room-bindings.upsert") {
       return (await authorityClient.upsertRoomBindings(
         params as Parameters<typeof authorityClient.upsertRoomBindings>[0],
+      )) as T;
+    }
+    if (method === "authority.round.upsert") {
+      return (await authorityClient.upsertRound(
+        params as Parameters<typeof authorityClient.upsertRound>[0],
+      )) as T;
+    }
+    if (method === "authority.round.delete") {
+      return (await authorityClient.deleteRound(
+        params as Parameters<typeof authorityClient.deleteRound>[0],
+      )) as T;
+    }
+    if (method === "authority.mission.upsert") {
+      return (await authorityClient.upsertMission(
+        params as Parameters<typeof authorityClient.upsertMission>[0],
+      )) as T;
+    }
+    if (method === "authority.mission.delete") {
+      return (await authorityClient.deleteMission(
+        params as Parameters<typeof authorityClient.deleteMission>[0],
+      )) as T;
+    }
+    if (method === "authority.conversation-state.upsert") {
+      return (await authorityClient.upsertConversationState(
+        params as Parameters<typeof authorityClient.upsertConversationState>[0],
+      )) as T;
+    }
+    if (method === "authority.conversation-state.delete") {
+      return (await authorityClient.deleteConversationState(
+        params as Parameters<typeof authorityClient.deleteConversationState>[0],
+      )) as T;
+    }
+    if (method === "authority.work-item.upsert") {
+      return (await authorityClient.upsertWorkItem(
+        params as Parameters<typeof authorityClient.upsertWorkItem>[0],
+      )) as T;
+    }
+    if (method === "authority.work-item.delete") {
+      return (await authorityClient.deleteWorkItem(
+        params as Parameters<typeof authorityClient.deleteWorkItem>[0],
       )) as T;
     }
     if (method === "authority.room.delete") {
@@ -405,6 +469,17 @@ class AuthorityBackendAdapter implements AgentBackend {
     }
     if (method === "authority.executor.patch") {
       return (await authorityClient.patchExecutorConfig(params as Parameters<typeof authorityClient.patchExecutorConfig>[0])) as T;
+    }
+    if (method === "authority.agent.file.run") {
+      const payload = params as { agentId: string; entryPath: string; payload?: Record<string, unknown>; timeoutMs?: number };
+      if (!payload?.agentId || !payload.entryPath) {
+        throw new Error("authority.agent.file.run requires agentId and entryPath.");
+      }
+      return (await authorityClient.runAgentFile(payload.agentId, {
+        entryPath: payload.entryPath,
+        payload: payload.payload,
+        timeoutMs: payload.timeoutMs,
+      })) as T;
     }
     return authorityClient.requestGateway<T>(method, params);
   }
@@ -669,6 +744,16 @@ class AuthorityBackendAdapter implements AgentBackend {
         handler(normalized);
       }
     });
+  }
+
+  async listProcesses(sessionKey?: string) {
+    const result = await authorityClient.requestGateway("process.list", sessionKey ? { sessionKey } : {});
+    return normalizeProviderProcessList(this.providerId, result, sessionKey ?? null);
+  }
+
+  async pollProcess(id: string) {
+    const result = await authorityClient.requestGateway("process.poll", { id });
+    return normalizeProviderProcessRecord(this.providerId, result);
   }
 
   getConfigSnapshot(): Promise<AuthorityGatewayConfigSnapshot> {

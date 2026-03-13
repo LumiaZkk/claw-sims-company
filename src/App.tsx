@@ -15,6 +15,7 @@ import {
 import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
 import { ApprovalModalHost } from "./components/system/approval-modal-host";
+import { AuthorityHealthBanner } from "./components/system/authority-health-banner";
 import { CompanyAuthoritySyncHost } from "./components/system/company-authority-sync-host";
 import { GatewayNotificationHost } from "./components/system/gateway-notification-host";
 import { RequirementAggregateHost } from "./components/system/requirement-aggregate-host";
@@ -134,7 +135,10 @@ type NavGroup = {
 
 function MainlineQuickSwitch({ hasPrimaryRequirement }: QuickSwitchProps) {
   const location = useLocation();
-  const options = [{ name: "CEO 首页", path: "/" }];
+  const options = [
+    { name: "运行态", path: "/runtime" },
+    { name: "CEO 首页", path: "/ceo" },
+  ];
   if (hasPrimaryRequirement) {
     options.push({ name: "需求中心", path: "/requirement" });
   }
@@ -164,6 +168,7 @@ function MainlineQuickSwitch({ hasPrimaryRequirement }: QuickSwitchProps) {
 
 export default function App() {
   const location = useLocation();
+  const isChatRoute = location.pathname.startsWith("/chat/");
   const { loadConfig } = useCompanyShellCommands();
   const { loading, activeCompany, bootstrapPhase } = useCompanyShellQuery();
   const hasPrimaryRequirement = useCompanyRuntimeStore(
@@ -365,7 +370,8 @@ export default function App() {
         {
           label: "主线",
           items: [
-            { path: "/", label: "CEO 首页", icon: Building2 },
+            { path: "/runtime", label: "运行态", icon: Activity, primary: true },
+            { path: "/ceo", label: "CEO 首页", icon: Building2 },
             { path: "/requirement", label: "需求中心", icon: BookOpenCheck, primary: true },
           ],
         },
@@ -373,7 +379,6 @@ export default function App() {
           label: "执行",
           items: [
             { path: "/ops", label: "运营大厅", icon: ShieldAlert },
-            { path: "/runtime", label: "运行态", icon: Activity },
             { path: "/board", label: "工作看板", icon: LayoutDashboard },
             ...(workspaceApps.length > 0
               ? [{ path: "/workspace", label: "工作目录", icon: BookOpen }]
@@ -492,34 +497,57 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="flex-1 flex flex-col h-full overflow-hidden relative min-w-0">
-            <header className="h-14 border-b border-inherit flex items-center justify-between px-4 md:px-6 shrink-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-              <div className="flex items-center gap-2 md:gap-4">
-                <button
-                  type="button"
-                  className="md:hidden h-8 w-8 -ml-2 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground"
-                  onClick={() => setIsMobileMenuOpen(true)}
-                >
-                  <Menu className="w-5 h-5" />
-                  <span className="sr-only">Toggle Sidebar</span>
-                </button>
-                <h1 className="text-base md:text-lg font-semibold truncate max-w-[150px] md:max-w-none">
-                  {resolvedCompany.icon || "🏢"} {resolvedCompany.name || "加载中..."}
-                </h1>
-                <span className="text-sm hidden md:inline-block text-muted-foreground truncate">
-                  {resolvedCompany.description || ""}
-                </span>
-              </div>
-              <div className="flex items-center gap-4">
-                <MainlineQuickSwitch hasPrimaryRequirement={hasPrimaryRequirement} />
-                <div className="flex items-center gap-2">
-                  <div className={`h-2 w-2 rounded-full ${connectionIndicatorClass}`} />
-                  <span className="text-sm text-muted-foreground mr-2">{connectionLabel}</span>
+          <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+            {!isChatRoute ? (
+              <header className="h-14 border-b border-inherit flex items-center justify-between px-4 md:px-6 shrink-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                <div className="flex items-center gap-2 md:gap-4">
+                  <button
+                    type="button"
+                    className="md:hidden h-8 w-8 -ml-2 inline-flex items-center justify-center rounded-md hover:bg-muted text-muted-foreground"
+                    onClick={() => setIsMobileMenuOpen(true)}
+                  >
+                    <Menu className="w-5 h-5" />
+                    <span className="sr-only">Toggle Sidebar</span>
+                  </button>
+                  <h1 className="text-base md:text-lg font-semibold truncate max-w-[150px] md:max-w-none">
+                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || "加载中..."}
+                  </h1>
+                  <span className="text-sm hidden md:inline-block text-muted-foreground truncate">
+                    {resolvedCompany.description || ""}
+                  </span>
                 </div>
-              </div>
-            </header>
+                <div className="flex items-center gap-4">
+                  <MainlineQuickSwitch hasPrimaryRequirement={hasPrimaryRequirement} />
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2 w-2 rounded-full ${connectionIndicatorClass}`} />
+                    <span className="text-sm text-muted-foreground mr-2">{connectionLabel}</span>
+                  </div>
+                </div>
+              </header>
+            ) : (
+              <header className="flex h-11 items-center justify-between border-b border-inherit bg-background/92 px-3 backdrop-blur md:hidden">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+                    onClick={() => setIsMobileMenuOpen(true)}
+                  >
+                    <Menu className="h-5 w-5" />
+                    <span className="sr-only">Toggle Sidebar</span>
+                  </button>
+                  <div className="truncate text-sm font-semibold">
+                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || "加载中..."}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <div className={`h-2 w-2 rounded-full ${connectionIndicatorClass}`} />
+                  <span>{connectionLabel}</span>
+                </div>
+              </header>
+            )}
 
             <div className="flex-1 overflow-auto relative z-10">
+              <AuthorityHealthBanner />
               {shouldUseSilentRestoreShell ? (
                 <div className="border-b bg-background/90 px-4 py-2 text-xs text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/70">
                   正在后台恢复最新状态，你可以继续停留在当前页面。
@@ -527,7 +555,8 @@ export default function App() {
               ) : null}
               <Suspense fallback={<RouteLoadingScreen />}>
                 <Routes>
-                  <Route path="/" element={<CEOHomePage />} />
+                  <Route path="/" element={<Navigate to="/runtime" replace />} />
+                  <Route path="/ceo" element={<CEOHomePage />} />
                   <Route path="/ops" element={<CompanyLobby />} />
                   <Route path="/lobby" element={<Navigate to="/ops" replace />} />
                   <Route path="/runtime" element={<RuntimeInspectorPage />} />
@@ -541,7 +570,7 @@ export default function App() {
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/oauth/codex/callback" element={<CodexOAuthCallbackPage />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
+                  <Route path="*" element={<Navigate to="/runtime" replace />} />
                 </Routes>
               </Suspense>
             </div>

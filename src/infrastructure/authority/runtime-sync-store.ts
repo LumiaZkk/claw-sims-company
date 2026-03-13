@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AuthorityCompanyRuntimeSnapshot } from "./contract";
+import { hasCompatibilityRuntimeSlices } from "./runtime-slice-ownership";
 
 export type AuthorityRuntimeSyncOperation = "push" | "pull" | "command";
 export type AuthorityRuntimeSyncMode = "compatibility_snapshot" | "command_preferred";
@@ -29,6 +30,14 @@ const DEFAULT_COMMAND_ROUTES = [
   "room.append",
   "room.delete",
   "room-bindings.upsert",
+  "round.upsert",
+  "round.delete",
+  "mission.upsert",
+  "mission.delete",
+  "conversation-state.upsert",
+  "conversation-state.delete",
+  "work-item.upsert",
+  "work-item.delete",
   "dispatch.create",
   "dispatch.delete",
   "artifact.upsert",
@@ -48,9 +57,9 @@ export function buildAuthorityRuntimeSignature(snapshot: AuthorityCompanyRuntime
 }
 
 export const useAuthorityRuntimeSyncStore = create<AuthorityRuntimeSyncState>(() => ({
-  compatibilityPathEnabled: true,
+  compatibilityPathEnabled: hasCompatibilityRuntimeSlices(),
   commandRoutes: DEFAULT_COMMAND_ROUTES,
-  mode: "compatibility_snapshot",
+  mode: hasCompatibilityRuntimeSlices() ? "compatibility_snapshot" : "command_preferred",
   lastSnapshotUpdatedAt: null,
   lastAppliedSignature: null,
   lastAppliedSource: null,

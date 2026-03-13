@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gateway } from "../../../application/gateway";
 import * as authorityControl from "../../../application/gateway/authority-control";
+import type { AuthorityCompanyRuntimeSnapshot } from "../../authority/contract";
 import { useAuthorityRuntimeSyncStore } from "../../authority/runtime-sync-store";
 import { useCompanyRuntimeStore } from "./store";
-import type { Company, WorkItemRecord } from "./types";
+import type { Company, RequirementAggregateRecord, WorkItemRecord } from "./types";
 
 function createCompany(): Company {
   return {
@@ -60,6 +61,64 @@ function createWorkItem(overrides: Partial<WorkItemRecord> = {}): WorkItemRecord
     summary: "当前主线正在推进。",
     nextAction: "继续推进 CTO 输出。",
     steps: [],
+    ...overrides,
+  };
+}
+
+function createAggregate(
+  overrides: Partial<RequirementAggregateRecord> = {},
+): RequirementAggregateRecord {
+  return {
+    id: "topic:mission:alpha",
+    companyId: "company-1",
+    topicKey: "mission:alpha",
+    kind: "strategic",
+    primary: true,
+    workItemId: "topic:mission:alpha",
+    roomId: "workitem:topic:mission:alpha",
+    ownerActorId: "co-ceo",
+    ownerLabel: "CEO",
+    lifecyclePhase: "active_requirement",
+    stageGateStatus: "confirmed",
+    stage: "CEO 统筹",
+    summary: "当前主线正在推进。",
+    nextAction: "继续推进 CTO 输出。",
+    memberIds: ["co-ceo", "co-cto"],
+    sourceConversationId: "agent:co-ceo:main",
+    startedAt: 1_000,
+    updatedAt: 2_000,
+    revision: 2,
+    lastEvidenceAt: 2_000,
+    status: "active",
+    acceptanceStatus: "not_requested",
+    ...overrides,
+  };
+}
+
+function createAuthorityRuntimeSnapshot(
+  overrides: Partial<AuthorityCompanyRuntimeSnapshot> = {},
+): AuthorityCompanyRuntimeSnapshot {
+  return {
+    companyId: "company-1",
+    activeRoomRecords: [],
+    activeMissionRecords: [],
+    activeConversationStates: [],
+    activeWorkItems: [],
+    activeRequirementAggregates: [],
+    activeRequirementEvidence: [],
+    primaryRequirementId: null,
+    activeRoundRecords: [],
+    activeArtifacts: [],
+    activeDispatches: [],
+    activeRoomBindings: [],
+    activeSupportRequests: [],
+    activeEscalations: [],
+    activeDecisionTickets: [],
+    activeAgentSessions: [],
+    activeAgentRuns: [],
+    activeAgentRuntime: [],
+    activeAgentStatuses: [],
+    updatedAt: 2_000,
     ...overrides,
   };
 }
@@ -407,6 +466,35 @@ describe("useCompanyRuntimeStore requirement aggregate", () => {
     ).toBe(true);
   });
 
+  it("does not append workflow evidence for no-op requirement transitions", () => {
+    useCompanyRuntimeStore.setState({
+      activeRequirementAggregates: [createAggregate()],
+      activeRequirementEvidence: [],
+      primaryRequirementId: "topic:mission:alpha",
+    });
+
+    useCompanyRuntimeStore.getState().applyRequirementTransition({
+      aggregateId: "topic:mission:alpha",
+      changes: {
+        status: "active",
+        stage: "CEO 统筹",
+        summary: "当前主线正在推进。",
+        nextAction: "继续推进 CTO 输出。",
+      },
+      timestamp: 7_000,
+      source: "local-command",
+    });
+
+    const state = useCompanyRuntimeStore.getState();
+    expect(state.activeRequirementAggregates[0]).toMatchObject({
+      id: "topic:mission:alpha",
+      updatedAt: 2_000,
+      revision: 2,
+      lastEvidenceAt: 7_000,
+    });
+    expect(state.activeRequirementEvidence).toEqual([]);
+  });
+
   it("routes requirement transitions through authority when runtime is authority-backed", async () => {
     useCompanyRuntimeStore.setState({
       authorityBackedState: true,
@@ -729,5 +817,452 @@ describe("useCompanyRuntimeStore requirement aggregate", () => {
       expect(state.primaryRequirementId).toBe("topic:mission:beta");
       expect(state.activeRequirementAggregates.find((aggregate) => aggregate.id === "topic:mission:beta")?.primary).toBe(true);
     });
+  });
+
+  it("keeps authority-owned requirement slices stable during authority-backed conversation-state writes", async () => {
+    useCompanyRuntimeStore.setState({
+      authorityBackedState: true,
+      activeRequirementAggregates: [createAggregate()],
+      activeRequirementEvidence: [
+        {
+          id: "evidence-alpha",
+          companyId: "company-1",
+          aggregateId: "topic:mission:alpha",
+          source: "local-command",
+          sessionKey: "agent:co-ceo:main",
+          actorId: "co-ceo",
+          eventType: "requirement_promoted",
+          timestamp: 2_000,
+          payload: { source: "authority" },
+          applied: true,
+        },
+      ],
+      primaryRequirementId: "topic:mission:alpha",
+    });
+    const upsertConversationSpy = vi
+      .spyOn(authorityControl, "upsertAuthorityConversationState")
+      .mockResolvedValue(
+        createAuthorityRuntimeSnapshot({
+          activeConversationStates: [
+            {
+              companyId: "company-1",
+              conversationId: "agent:co-ceo:main",
+              currentWorkKey: null,
+              currentWorkItemId: null,
+              currentRoundId: null,
+              draftRequirement: {
+                topicKey: "mission:beta",
+                topicText: "切到 Beta",
+                summary: "这只是本地兼容草稿。",
+                ownerActorId: "co-cto",
+                ownerLabel: "CTO",
+                stage: "本地草稿",
+                nextAction: "等待 authority 收敛。",
+                stageGateStatus: "waiting_confirmation",
+                state: "draft_ready",
+                promotionReason: null,
+                promotable: true,
+                updatedAt: 9_000,
+              },
+              updatedAt: 9_000,
+            },
+          ],
+          activeRequirementAggregates: [createAggregate()],
+          activeRequirementEvidence: [
+            {
+              id: "evidence-alpha",
+              companyId: "company-1",
+              aggregateId: "topic:mission:alpha",
+              source: "local-command",
+              sessionKey: "agent:co-ceo:main",
+              actorId: "co-ceo",
+              eventType: "requirement_promoted",
+              timestamp: 2_000,
+              payload: { source: "authority" },
+              applied: true,
+            },
+          ],
+          primaryRequirementId: "topic:mission:alpha",
+        }),
+      );
+
+    useCompanyRuntimeStore.getState().setConversationDraftRequirement("agent:co-ceo:main", {
+      topicKey: "mission:beta",
+      topicText: "切到 Beta",
+      summary: "这只是本地兼容草稿。",
+      ownerActorId: "co-cto",
+      ownerLabel: "CTO",
+      stage: "本地草稿",
+      nextAction: "等待 authority 收敛。",
+      stageGateStatus: "waiting_confirmation",
+      state: "draft_ready",
+      promotionReason: null,
+      promotable: true,
+      updatedAt: 9_000,
+    });
+
+    await vi.waitFor(() => {
+      expect(upsertConversationSpy).toHaveBeenCalled();
+      const state = useCompanyRuntimeStore.getState();
+      expect(state.activeConversationStates[0]?.conversationId).toBe("agent:co-ceo:main");
+      expect(state.activeRequirementAggregates).toHaveLength(1);
+      expect(state.activeRequirementAggregates[0]?.id).toBe("topic:mission:alpha");
+      expect(state.activeRequirementEvidence).toHaveLength(1);
+      expect(state.activeRequirementEvidence[0]?.id).toBe("evidence-alpha");
+      expect(state.primaryRequirementId).toBe("topic:mission:alpha");
+    });
+  });
+
+  it("does not let authority-backed mission writes rewrite requirement or room truth", async () => {
+    useCompanyRuntimeStore.setState({
+      authorityBackedState: true,
+      activeRoomRecords: [
+        {
+          id: "workitem:topic:mission:alpha",
+          companyId: "company-1",
+          workItemId: "topic:mission:alpha",
+          topicKey: "mission:alpha",
+          title: "Alpha 房间",
+          summary: "当前房间由 authority 持有。",
+          ownerActorId: "co-ceo",
+          ownerAgentId: "co-ceo",
+          ownerLabel: "CEO",
+          memberAgentIds: ["co-ceo", "co-cto"],
+          status: "active",
+          updatedAt: 2_000,
+          transcript: [],
+        } as never,
+      ],
+      activeRequirementAggregates: [createAggregate()],
+      activeRequirementEvidence: [
+        {
+          id: "evidence-alpha",
+          companyId: "company-1",
+          aggregateId: "topic:mission:alpha",
+          source: "local-command",
+          sessionKey: "agent:co-ceo:main",
+          actorId: "co-ceo",
+          eventType: "requirement_promoted",
+          timestamp: 2_000,
+          payload: { source: "authority" },
+          applied: true,
+        },
+      ],
+      primaryRequirementId: "topic:mission:alpha",
+    });
+    const upsertMissionSpy = vi
+      .spyOn(authorityControl, "upsertAuthorityMission")
+      .mockResolvedValue(
+        createAuthorityRuntimeSnapshot({
+          activeRoomRecords: [
+            {
+              id: "workitem:topic:mission:alpha",
+              companyId: "company-1",
+              workItemId: "topic:mission:alpha",
+              topicKey: "mission:alpha",
+              title: "Alpha 房间",
+              summary: "当前房间由 authority 持有。",
+              ownerActorId: "co-ceo",
+              ownerAgentId: "co-ceo",
+              ownerLabel: "CEO",
+              memberAgentIds: ["co-ceo", "co-cto"],
+              status: "active",
+              updatedAt: 2_000,
+              transcript: [],
+            } as never,
+          ],
+          activeMissionRecords: [
+            {
+              id: "topic:mission:beta",
+              sessionKey: "agent:co-cto:main",
+              topicKey: "mission:beta",
+              roomId: "workitem:topic:mission:beta",
+              startedAt: 5_000,
+              promotionState: "promoted_auto",
+              promotionReason: "multi_actor_dispatch",
+              lifecyclePhase: "active_requirement",
+              stageGateStatus: "confirmed",
+              title: "Beta 主线",
+              statusLabel: "推进中",
+              progressLabel: "CTO 接手",
+              ownerAgentId: "co-cto",
+              ownerLabel: "CTO",
+              currentStepLabel: "拆解执行方案",
+              nextAgentId: "co-coo",
+              nextLabel: "COO",
+              summary: "这条 mission 仍走 compatibility path。",
+              guidance: "等待 authority 合并。",
+              completed: false,
+              updatedAt: 5_000,
+              planSteps: [],
+            },
+          ],
+          activeWorkItems: [
+            createWorkItem({
+              id: "topic:mission:beta",
+              workKey: "topic:mission:beta",
+              roundId: "topic:mission:beta",
+              topicKey: "mission:beta",
+              roomId: "workitem:topic:mission:beta",
+              title: "Beta 主线执行方案",
+              goal: "推进 Beta 主线",
+              headline: "CTO 拆解 Beta 主线",
+              displayStage: "CTO 拆解执行方案",
+              displaySummary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+              displayOwnerLabel: "CTO",
+              displayNextAction: "等待 COO 收口 Beta 主线的执行方案。",
+              stageLabel: "CTO 拆解执行方案",
+              ownerActorId: "co-cto",
+              ownerLabel: "CTO",
+              batonActorId: "co-coo",
+              batonLabel: "COO",
+              summary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+              nextAction: "等待 COO 收口 Beta 主线的执行方案。",
+              updatedAt: 6_000,
+            }),
+          ],
+          activeRequirementAggregates: [createAggregate()],
+          activeRequirementEvidence: [
+            {
+              id: "evidence-alpha",
+              companyId: "company-1",
+              aggregateId: "topic:mission:alpha",
+              source: "local-command",
+              sessionKey: "agent:co-ceo:main",
+              actorId: "co-ceo",
+              eventType: "requirement_promoted",
+              timestamp: 2_000,
+              payload: { source: "authority" },
+              applied: true,
+            },
+          ],
+          primaryRequirementId: "topic:mission:alpha",
+        }),
+      );
+    const upsertWorkItemSpy = vi
+      .spyOn(authorityControl, "upsertAuthorityWorkItem")
+      .mockResolvedValue(
+        createAuthorityRuntimeSnapshot({
+          activeRoomRecords: [
+            {
+              id: "workitem:topic:mission:alpha",
+              companyId: "company-1",
+              workItemId: "topic:mission:alpha",
+              topicKey: "mission:alpha",
+              title: "Alpha 房间",
+              summary: "当前房间由 authority 持有。",
+              ownerActorId: "co-ceo",
+              ownerAgentId: "co-ceo",
+              ownerLabel: "CEO",
+              memberAgentIds: ["co-ceo", "co-cto"],
+              status: "active",
+              updatedAt: 2_000,
+              transcript: [],
+            } as never,
+          ],
+          activeMissionRecords: [
+            {
+              id: "topic:mission:beta",
+              sessionKey: "agent:co-cto:main",
+              topicKey: "mission:beta",
+              roomId: "workitem:topic:mission:beta",
+              startedAt: 5_000,
+              promotionState: "promoted_auto",
+              promotionReason: "multi_actor_dispatch",
+              lifecyclePhase: "active_requirement",
+              stageGateStatus: "confirmed",
+              title: "Beta 主线",
+              statusLabel: "推进中",
+              progressLabel: "CTO 接手",
+              ownerAgentId: "co-cto",
+              ownerLabel: "CTO",
+              currentStepLabel: "拆解执行方案",
+              nextAgentId: "co-coo",
+              nextLabel: "COO",
+              summary: "这条 mission 仍走 compatibility path。",
+              guidance: "等待 authority 合并。",
+              completed: false,
+              updatedAt: 5_000,
+              planSteps: [],
+            },
+          ],
+          activeWorkItems: [
+            createWorkItem({
+              id: "topic:mission:beta",
+              workKey: "topic:mission:beta",
+              roundId: "topic:mission:beta",
+              topicKey: "mission:beta",
+              roomId: "workitem:topic:mission:beta",
+              title: "Beta 主线执行方案",
+              goal: "推进 Beta 主线",
+              headline: "CTO 拆解 Beta 主线",
+              displayStage: "CTO 拆解执行方案",
+              displaySummary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+              displayOwnerLabel: "CTO",
+              displayNextAction: "等待 COO 收口 Beta 主线的执行方案。",
+              stageLabel: "CTO 拆解执行方案",
+              ownerActorId: "co-cto",
+              ownerLabel: "CTO",
+              batonActorId: "co-coo",
+              batonLabel: "COO",
+              summary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+              nextAction: "等待 COO 收口 Beta 主线的执行方案。",
+              updatedAt: 6_000,
+            }),
+          ],
+          activeRequirementAggregates: [createAggregate()],
+          activeRequirementEvidence: [
+            {
+              id: "evidence-alpha",
+              companyId: "company-1",
+              aggregateId: "topic:mission:alpha",
+              source: "local-command",
+              sessionKey: "agent:co-ceo:main",
+              actorId: "co-ceo",
+              eventType: "requirement_promoted",
+              timestamp: 2_000,
+              payload: { source: "authority" },
+              applied: true,
+            },
+          ],
+          primaryRequirementId: "topic:mission:alpha",
+        }),
+      );
+
+    useCompanyRuntimeStore.getState().upsertMissionRecord({
+      id: "topic:mission:beta",
+      sessionKey: "agent:co-cto:main",
+      topicKey: "mission:beta",
+      roomId: "workitem:topic:mission:beta",
+      startedAt: 5_000,
+      promotionState: "promoted_auto",
+      promotionReason: "multi_actor_dispatch",
+      lifecyclePhase: "active_requirement",
+      stageGateStatus: "confirmed",
+      title: "Beta 主线",
+      statusLabel: "推进中",
+      progressLabel: "CTO 接手",
+      ownerAgentId: "co-cto",
+      ownerLabel: "CTO",
+      currentStepLabel: "拆解执行方案",
+      nextAgentId: "co-coo",
+      nextLabel: "COO",
+      summary: "这条 mission 仍走 compatibility path。",
+      guidance: "等待 authority 合并。",
+      completed: false,
+      updatedAt: 5_000,
+      planSteps: [],
+    });
+    useCompanyRuntimeStore.getState().upsertWorkItemRecord(
+      createWorkItem({
+        id: "topic:mission:beta",
+        workKey: "topic:mission:beta",
+        roundId: "topic:mission:beta",
+        topicKey: "mission:beta",
+        roomId: "workitem:topic:mission:beta",
+        title: "Beta 主线执行方案",
+        goal: "推进 Beta 主线",
+        headline: "CTO 拆解 Beta 主线",
+        displayStage: "CTO 拆解执行方案",
+        displaySummary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+        displayOwnerLabel: "CTO",
+        displayNextAction: "等待 COO 收口 Beta 主线的执行方案。",
+        stageLabel: "CTO 拆解执行方案",
+        ownerActorId: "co-cto",
+        ownerLabel: "CTO",
+        batonActorId: "co-coo",
+        batonLabel: "COO",
+        summary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+        nextAction: "等待 COO 收口 Beta 主线的执行方案。",
+        updatedAt: 6_000,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(upsertMissionSpy).toHaveBeenCalled();
+      expect(upsertWorkItemSpy).toHaveBeenCalled();
+      const state = useCompanyRuntimeStore.getState();
+      expect(state.activeMissionRecords[0]?.id).toBe("topic:mission:beta");
+      expect(state.activeRoomRecords).toHaveLength(1);
+      expect(state.activeRoomRecords[0]?.id).toBe("workitem:topic:mission:alpha");
+      expect(state.activeRequirementAggregates).toHaveLength(1);
+      expect(state.activeRequirementAggregates[0]?.id).toBe("topic:mission:alpha");
+      expect(state.activeRequirementEvidence).toHaveLength(1);
+      expect(state.activeRequirementEvidence[0]?.id).toBe("evidence-alpha");
+      expect(state.primaryRequirementId).toBe("topic:mission:alpha");
+    });
+  });
+
+  it("does not let authority-backed work-item writes rewrite requirement or room truth", () => {
+    useCompanyRuntimeStore.setState({
+      authorityBackedState: true,
+      activeRoomRecords: [
+        {
+          id: "workitem:topic:mission:alpha",
+          companyId: "company-1",
+          workItemId: "topic:mission:alpha",
+          topicKey: "mission:alpha",
+          title: "Alpha 房间",
+          summary: "当前房间由 authority 持有。",
+          ownerActorId: "co-ceo",
+          ownerAgentId: "co-ceo",
+          ownerLabel: "CEO",
+          memberAgentIds: ["co-ceo", "co-cto"],
+          status: "active",
+          updatedAt: 2_000,
+          transcript: [],
+        } as never,
+      ],
+      activeRequirementAggregates: [createAggregate()],
+      activeRequirementEvidence: [
+        {
+          id: "evidence-alpha",
+          companyId: "company-1",
+          aggregateId: "topic:mission:alpha",
+          source: "local-command",
+          sessionKey: "agent:co-ceo:main",
+          actorId: "co-ceo",
+          eventType: "requirement_promoted",
+          timestamp: 2_000,
+          payload: { source: "authority" },
+          applied: true,
+        },
+      ],
+      primaryRequirementId: "topic:mission:alpha",
+    });
+
+    useCompanyRuntimeStore.getState().upsertWorkItemRecord(
+      createWorkItem({
+        id: "topic:mission:beta",
+        workKey: "topic:mission:beta",
+        roundId: "topic:mission:beta",
+        topicKey: "mission:beta",
+        roomId: "workitem:topic:mission:beta",
+        title: "Beta 主线执行方案",
+        goal: "推进 Beta 主线",
+        headline: "CTO 拆解 Beta 主线",
+        displayStage: "CTO 拆解执行方案",
+        displaySummary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+        displayOwnerLabel: "CTO",
+        displayNextAction: "等待 COO 收口 Beta 主线的执行方案。",
+        stageLabel: "CTO 拆解执行方案",
+        ownerActorId: "co-cto",
+        ownerLabel: "CTO",
+        batonActorId: "co-coo",
+        batonLabel: "COO",
+        summary: "CTO 正在拆解 Beta 主线执行方案，等待 COO 收口。",
+        nextAction: "等待 COO 收口 Beta 主线的执行方案。",
+        updatedAt: 6_000,
+      }),
+    );
+
+    const state = useCompanyRuntimeStore.getState();
+    expect(state.activeRoomRecords).toHaveLength(1);
+    expect(state.activeRoomRecords[0]?.id).toBe("workitem:topic:mission:alpha");
+    expect(state.activeRequirementAggregates).toHaveLength(1);
+    expect(state.activeRequirementAggregates[0]?.id).toBe("topic:mission:alpha");
+    expect(state.activeRequirementEvidence).toHaveLength(1);
+    expect(state.activeRequirementEvidence[0]?.id).toBe("evidence-alpha");
+    expect(state.primaryRequirementId).toBe("topic:mission:alpha");
   });
 });

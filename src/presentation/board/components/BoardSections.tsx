@@ -69,7 +69,7 @@ export function BoardHeroSection(props: {
   globalPct: number;
   canOpenCeo: boolean;
   canOpenRequirementCenter?: boolean;
-  onOpenOps: () => void;
+  onOpenRuntime: () => void;
   onOpenCeo: () => void;
   onOpenRequirementCenter?: () => void;
 }) {
@@ -82,7 +82,7 @@ export function BoardHeroSection(props: {
     globalPct,
     canOpenCeo,
     canOpenRequirementCenter = false,
-    onOpenOps,
+    onOpenRuntime,
     onOpenCeo,
     onOpenRequirementCenter,
   } = props;
@@ -103,9 +103,9 @@ export function BoardHeroSection(props: {
             返回需求中心
           </Button>
         ) : null}
-        <Button variant="outline" onClick={onOpenOps}>
+        <Button variant="outline" onClick={onOpenRuntime}>
           <Play className="w-4 h-4 mr-2" />
-          去运营大厅看监控
+          去运行态总控
         </Button>
         {canOpenCeo ? (
           <Button variant="outline" onClick={onOpenCeo}>

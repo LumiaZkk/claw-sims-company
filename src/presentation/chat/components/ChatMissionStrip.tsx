@@ -83,6 +83,10 @@ export function ChatMissionStrip(input: {
   } = input;
   const hasSecondaryActions = hasContextSummary;
   const showCollaborationMode = isGroup && Boolean(collaborationSurface);
+  const showSettledSummaryMeta =
+    showSettledRequirementSummary &&
+    (Boolean(settledRequirementSummary) || Boolean(settledRequirementNextAction));
+  const showMissionMetaRow = !showCollaborationMode || showSettledSummaryMeta;
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -128,40 +132,10 @@ export function ChatMissionStrip(input: {
                     </span>
                   ) : null}
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-slate-600">
-                  {showCollaborationMode ? (
-                    <>
-                      <span>
-                        <span className="font-medium text-slate-700">当前阶段：</span>
-                        {collaborationSurface?.headerSummary.phaseLabel ?? effectiveStepLabel}
-                      </span>
-                      <span className="h-1 w-1 rounded-full bg-slate-300" />
-                      <span>
-                        <span className="font-medium text-slate-700">活跃参与者：</span>
-                        {collaborationSurface?.headerSummary.activeParticipantsLabel ?? "等待成员接入"}
-                      </span>
-                      {collaborationSurface?.headerSummary.currentBlocker ? (
-                        <>
-                          <span className="h-1 w-1 rounded-full bg-slate-300" />
-                          <span className="min-w-0 max-w-full text-[11px] text-slate-500">
-                            <span className="font-medium text-slate-700">当前卡点：</span>
-                            {collaborationSurface.headerSummary.currentBlocker}
-                          </span>
-                        </>
-                      ) : null}
-                      {collaborationSurface?.isSingleOwnerClosure &&
-                      collaborationSurface.closureOwnerLabel ? (
-                        <>
-                          <span className="h-1 w-1 rounded-full bg-slate-300" />
-                          <span>
-                            <span className="font-medium text-slate-700">当前收口人：</span>
-                            {collaborationSurface.closureOwnerLabel}
-                          </span>
-                        </>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
+                {showMissionMetaRow ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-slate-600">
+                    {!showCollaborationMode ? (
+                      <>
                       <span>
                         <span className="font-medium text-slate-700">负责人：</span>
                         {effectiveOwnerLabel}
@@ -176,27 +150,32 @@ export function ChatMissionStrip(input: {
                         <span className="font-medium text-slate-700">下一棒：</span>
                         {displayNextBatonLabel}
                       </span>
-                    </>
-                  )}
-                  {showSettledRequirementSummary && settledRequirementSummary ? (
-                    <>
-                      <span className="h-1 w-1 rounded-full bg-indigo-300" />
-                      <span className="inline-flex min-w-0 max-w-full items-center rounded-full border border-indigo-100 bg-indigo-50/80 px-2 py-0.5 text-[11px] text-indigo-700">
-                        <span className="font-medium">收敛：</span>
-                        <span className="ml-1 max-w-[32rem] truncate">{settledRequirementSummary}</span>
-                      </span>
-                    </>
-                  ) : null}
-                  {showSettledRequirementSummary && settledRequirementNextAction ? (
-                    <>
-                      <span className="h-1 w-1 rounded-full bg-slate-300" />
-                      <span className="min-w-0 max-w-full text-[11px] text-slate-500">
-                        <span className="font-medium text-slate-600">下一步：</span>
-                        {settledRequirementNextAction}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
+                      </>
+                    ) : null}
+                    {showSettledRequirementSummary && settledRequirementSummary ? (
+                      <>
+                        {!showCollaborationMode ? (
+                          <span className="h-1 w-1 rounded-full bg-indigo-300" />
+                        ) : null}
+                        <span className="inline-flex min-w-0 max-w-full items-center rounded-full border border-indigo-100 bg-indigo-50/80 px-2 py-0.5 text-[11px] text-indigo-700">
+                          <span className="font-medium">收敛：</span>
+                          <span className="ml-1 max-w-[32rem] truncate">{settledRequirementSummary}</span>
+                        </span>
+                      </>
+                    ) : null}
+                    {showSettledRequirementSummary && settledRequirementNextAction ? (
+                      <>
+                        {!showCollaborationMode || settledRequirementSummary ? (
+                          <span className="h-1 w-1 rounded-full bg-slate-300" />
+                        ) : null}
+                        <span className="min-w-0 max-w-full text-[11px] text-slate-500">
+                          <span className="font-medium text-slate-600">下一步：</span>
+                          {settledRequirementNextAction}
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                 {showCollaborationMode && hasContextSummary ? (

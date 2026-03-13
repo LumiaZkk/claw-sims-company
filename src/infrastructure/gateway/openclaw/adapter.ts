@@ -12,6 +12,8 @@ import {
   type ProviderMessage,
 } from "../runtime/types";
 import {
+  normalizeProviderProcessList,
+  normalizeProviderProcessRecord,
   normalizeProviderRuntimeEvent,
   normalizeProviderSessionStatus,
 } from "../../../application/agent-runtime";
@@ -337,6 +339,16 @@ class OpenClawBackendAdapter implements AgentBackend {
         handler(normalized);
       }
     });
+  }
+
+  async listProcesses(sessionKey?: string) {
+    const result = await this.gateway.request("process.list", sessionKey ? { sessionKey } : {});
+    return normalizeProviderProcessList(this.providerId, result, sessionKey ?? null);
+  }
+
+  async pollProcess(id: string) {
+    const result = await this.gateway.request("process.poll", { id });
+    return normalizeProviderProcessRecord(this.providerId, result);
   }
 
   getConfigSnapshot() {

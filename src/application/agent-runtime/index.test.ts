@@ -6,6 +6,8 @@ import {
   buildCanonicalAgentStatusProjection,
   buildAgentRuntimeProjection,
   buildAgentSessionRecordsFromSessions,
+  normalizeProviderProcessList,
+  normalizeProviderProcessRecord,
   normalizeProviderSessionStatus,
 } from "./index";
 import type { DispatchRecord } from "../../domain/delegation/types";
@@ -150,6 +152,117 @@ describe("agent runtime projection", () => {
 
     expect(completed.runs).toHaveLength(0);
     expect(completed.sessions[0]?.sessionState).toBe("idle");
+  });
+
+  it("clears stale runtime errors after a later successful run completes", () => {
+    const failed = applyProviderRuntimeEvent({
+      sessions: [],
+      runs: [],
+      event: {
+        providerId: "openclaw",
+        agentId: "cto",
+        sessionKey: "agent:cto:main",
+        runId: "run-error",
+        streamKind: "lifecycle",
+        runState: "error",
+        timestamp: 100,
+        errorMessage: "rate limit",
+      },
+    });
+
+    expect(failed.sessions[0]).toMatchObject({
+      sessionState: "error",
+      lastError: "rate limit",
+    });
+
+    const recovered = applyProviderRuntimeEvent({
+      sessions: failed.sessions,
+      runs: failed.runs,
+      event: {
+        providerId: "openclaw",
+        agentId: "cto",
+        sessionKey: "agent:cto:main",
+        runId: "run-recovered",
+        streamKind: "lifecycle",
+        runState: "completed",
+        timestamp: 200,
+      },
+    });
+
+    expect(recovered.sessions[0]).toMatchObject({
+      sessionState: "idle",
+      abortedLastRun: false,
+      lastError: null,
+      lastTerminalRunState: "completed",
+    });
+  });
+
+  it("remembers tool names on active runs for richer runtime replay", () => {
+    const toolRunning = applyProviderRuntimeEvent({
+      sessions: [],
+      runs: [],
+      event: {
+        providerId: "openclaw",
+        agentId: "cto",
+        sessionKey: "agent:cto:main",
+        runId: "run-tool",
+        streamKind: "tool",
+        runState: "running",
+        timestamp: 100,
+        toolName: "write",
+      },
+    });
+
+    expect(toolRunning.runs[0]).toMatchObject({
+      state: "running",
+      streamKindsSeen: ["tool"],
+      toolNamesSeen: ["write"],
+    });
+  });
+
+  it("normalizes provider process telemetry into stable runtime records", () => {
+    const processes = normalizeProviderProcessList("openclaw", {
+      processes: [
+        {
+          id: "proc-1",
+          sessionKey: "agent:cto:main",
+          status: "running",
+          command: "python worker.py",
+          updatedAt: 123,
+        },
+      ],
+    });
+
+    expect(processes).toHaveLength(1);
+    expect(processes[0]).toMatchObject({
+      processId: "proc-1",
+      agentId: "cto",
+      sessionKey: "agent:cto:main",
+      state: "running",
+      title: "python worker.py",
+      command: "python worker.py",
+      updatedAt: 123,
+    });
+
+    const polled = normalizeProviderProcessRecord("openclaw", {
+      process: {
+        id: "proc-1",
+        sessionKey: "agent:cto:main",
+        state: "completed",
+        title: "worker",
+        command: "python worker.py",
+        exitCode: 0,
+        finishedAt: 150,
+      },
+    });
+
+    expect(polled).toMatchObject({
+      processId: "proc-1",
+      state: "completed",
+      title: "worker",
+      exitCode: 0,
+      endedAt: 150,
+    });
   });
 
   it("prefers session status snapshots when the provider reports idle or error", () => {
@@ -544,6 +657,58 @@ describe("agent runtime projection", () => {
     expect(statuses.find((status) => status.agentId === "hr")).toMatchObject({
       runtimeState: "idle",
       coordinationState: "none",
+      interventionState: "healthy",
+    });
+  });
+
+  it("does not keep an agent blocked when only a stale runtime error remains after completion", () => {
+    const statuses = buildCanonicalAgentStatusProjection({
+      company: createCompany(),
+      activeWorkItems: [],
+      activeDispatches: [
+        {
+          id: "dispatch-cto-complete",
+          workItemId: "work-1",
+          roomId: "workitem:work-1",
+          title: "需求团队派单 · CTO",
+          fromActorId: "ceo",
+          targetActorIds: ["cto"],
+          summary: "@CTO 技术评估",
+          status: "answered",
+          createdAt: 100,
+          updatedAt: 200,
+        },
+      ] satisfies DispatchRecord[],
+      activeSupportRequests: [],
+      activeEscalations: [],
+      activeAgentRuntime: [
+        {
+          agentId: "cto",
+          providerId: "openclaw",
+          availability: "degraded",
+          activeSessionKeys: [],
+          activeRunIds: [],
+          lastSeenAt: 300,
+          lastBusyAt: null,
+          lastIdleAt: null,
+          latestTerminalAt: 300,
+          latestTerminalSummary: "⚠️ API rate limit reached. Please try again later.",
+          currentWorkload: "free",
+          runtimeEvidence: [
+            {
+              kind: "error",
+              summary: "⚠️ API rate limit reached. Please try again later.",
+              timestamp: 300,
+            },
+          ],
+        },
+      ],
+      now: 400,
+    });
+
+    expect(statuses.find((status) => status.agentId === "cto")).toMatchObject({
+      runtimeState: "degraded",
+      coordinationState: "completed",
       interventionState: "healthy",
     });
   });

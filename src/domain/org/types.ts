@@ -8,6 +8,7 @@ import type {
 } from "../delegation/types";
 import type { TrackedTask } from "../mission/types";
 import type { RetrospectiveRecord } from "../governance/types";
+import type { ApprovalRecord } from "../governance/types";
 import type { ArtifactResourceType } from "../artifact/types";
 
 export interface CyberCompanyConfig {
@@ -29,6 +30,7 @@ export interface Company {
   employees: EmployeeRef[];
   quickPrompts: QuickPrompt[];
   workspaceApps?: CompanyWorkspaceApp[];
+  workflowCapabilityBindings?: WorkflowCapabilityBinding[];
   skillDefinitions?: SkillDefinition[];
   skillRuns?: SkillRunRecord[];
   capabilityRequests?: CapabilityRequestRecord[];
@@ -39,6 +41,7 @@ export interface Company {
   supportRequests?: SupportRequestRecord[];
   escalations?: EscalationRecord[];
   decisionTickets?: DecisionTicketRecord[];
+  approvals?: ApprovalRecord[];
   knowledgeItems?: SharedKnowledgeItem[];
   retrospectives?: RetrospectiveRecord[];
   createdAt: number;
@@ -48,6 +51,12 @@ export interface CompanySystemMetadata {
   reserved?: boolean;
   kind?: "openclaw-main";
   mappedAgentId?: string;
+  executorProvisioning?: {
+    state: "ready" | "degraded" | "blocked";
+    pendingAgentIds?: string[];
+    lastError?: string | null;
+    updatedAt: number;
+  };
 }
 
 export interface CompanyOrgSettings {
@@ -64,6 +73,7 @@ export interface CompanyAutonomyPolicy {
   autoApproveSupportRequests?: boolean;
   humanApprovalRequiredForLayoffs?: boolean;
   humanApprovalRequiredForDepartmentCreateRemove?: boolean;
+  humanApprovalRequiredForAutomationEnable?: boolean;
   maxAutoHeadcountDelta?: number;
   maxAutoBudgetDelta?: number;
   supportSlaHours?: number;
@@ -172,10 +182,24 @@ export interface CompanyWorkspaceApp {
   embeddedPermissions?: CompanyWorkspaceAppEmbeddedPermissions | null;
 }
 
+export interface WorkflowCapabilityBinding {
+  id: string;
+  label: string;
+  required: boolean;
+  guidance?: string | null;
+  titleMatchers?: string[];
+  stageMatchers?: string[];
+  nextActionMatchers?: string[];
+  appIds?: string[];
+  appTemplates?: CompanyWorkspaceAppTemplate[];
+  skillIds?: string[];
+}
+
 export type SkillDefinitionStatus = "draft" | "ready" | "degraded" | "retired";
 export type SkillDefinitionTrigger = "app_action" | "workflow_step";
 export type SkillRunTrigger = SkillDefinitionTrigger | "manual";
 export type SkillRunStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+export type SkillRunExecutionMode = "builtin_bridge" | "workspace_script";
 
 export interface SkillDefinition {
   id: string;
@@ -205,7 +229,14 @@ export interface SkillRunRecord {
   requestedByActorId?: string | null;
   requestedByLabel?: string | null;
   status: SkillRunStatus;
+  executionMode?: SkillRunExecutionMode | null;
+  executionEntryPath?: string | null;
+  executionNote?: string | null;
+  inputSchemaVersion?: number;
   inputSummary?: string;
+  inputResourceCount?: number;
+  inputResourceTypes?: ArtifactResourceType[];
+  resultSummary?: string;
   outputArtifactIds?: string[];
   outputResourceTypes?: ArtifactResourceType[];
   errorMessage?: string | null;
@@ -234,6 +265,11 @@ export interface CapabilityRequestRecord {
   ownerActorId?: string | null;
   appId?: string | null;
   skillId?: string | null;
+  contextActionId?: string | null;
+  contextAppSection?: string | null;
+  contextFileKey?: string | null;
+  contextFileName?: string | null;
+  contextRunId?: string | null;
   status: CapabilityRequestStatus;
   createdAt: number;
   updatedAt: number;
@@ -259,6 +295,11 @@ export interface CapabilityIssueRecord {
   ownerActorId?: string | null;
   appId?: string | null;
   skillId?: string | null;
+  contextActionId?: string | null;
+  contextAppSection?: string | null;
+  contextFileKey?: string | null;
+  contextFileName?: string | null;
+  contextRunId?: string | null;
   status: CapabilityIssueStatus;
   createdAt: number;
   updatedAt: number;

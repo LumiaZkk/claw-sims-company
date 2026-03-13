@@ -194,6 +194,7 @@ export type SupportRequestStatus =
 
 export interface SupportRequestRecord {
   id: string;
+  revision?: number;
   workItemId: string;
   parentWorkItemId?: string | null;
   requesterDepartmentId: string;
@@ -216,6 +217,7 @@ export type EscalationStatus = "open" | "acknowledged" | "resolved" | "dismissed
 
 export interface EscalationRecord {
   id: string;
+  revision?: number;
   sourceType: EscalationSourceType;
   sourceId: string;
   companyId: string;

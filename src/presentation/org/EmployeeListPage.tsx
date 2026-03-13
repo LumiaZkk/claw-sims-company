@@ -272,11 +272,16 @@ function EmployeeListContent() {
 
   const handleSaveDepartments = async (nextDepartments: Department[]) => {
     try {
-      const normalized = await saveDepartments(nextDepartments);
-      if (!normalized) {
+      const result = await saveDepartments(nextDepartments);
+      if (!result) {
         return;
       }
-      for (const warning of normalized.warnings) {
+      if (result.mode === "approval_requested") {
+        toast.info("部门变更已提交审批", `请先批准「${result.approval.summary}」，再继续执行。`);
+        setDepartmentsDialogOpen(false);
+        return;
+      }
+      for (const warning of result.normalized.warnings) {
         toast.info("部门校准", warning);
       }
       toast.success("部门配置已更新", "已写入公司注册表 (company-config.json)。");
@@ -309,8 +314,11 @@ function EmployeeListContent() {
   const onFireEmployeeSubmit = async () => {
     if (!fireEmployeeTarget) return;
     try {
-      await fireEmployee(fireEmployeeTarget);
-      setTimeout(() => window.location.reload(), 1500);
+      const result = await fireEmployee(fireEmployeeTarget);
+      setFireEmployeeDialogOpen(false);
+      if (result.mode === "executed") {
+        setTimeout(() => window.location.reload(), 1500);
+      }
     } catch (e: unknown) {
       console.error(e);
     }

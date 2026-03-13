@@ -4,11 +4,19 @@ import type { CompanyRuntimeState, ConversationMissionRecord, RuntimeGet, Runtim
 import { buildWorkItemRecordFromMission } from "../../../application/mission/work-item";
 import { isArtifactRequirementTopic } from "../../../application/mission/requirement-kind";
 import { reconcileWorkItemRecord } from "../../../application/mission/work-item-reconciler";
+import {
+  deleteAuthorityMission,
+  upsertAuthorityMission,
+} from "../../../application/gateway/authority-control";
 import { persistActiveWorkItems } from "./work-items";
 import {
   persistActiveRequirementAggregates,
   reconcileActiveRequirementState,
 } from "./requirements";
+import {
+  applyAuthorityRuntimeCommandError,
+  applyAuthorityRuntimeSnapshotToStore,
+} from "../../authority/runtime-command";
 
 export function persistActiveMissions(
   companyId: string | null | undefined,
@@ -77,6 +85,7 @@ export function buildMissionActions(
     upsertMissionRecord: (mission) => {
       const {
         activeCompany,
+        authorityBackedState,
         activeConversationStates,
         activeMissionRecords,
         activeRequirementAggregates,
@@ -157,6 +166,31 @@ export function buildMissionActions(
       }
 
       const sortedWorkItems = sanitizeWorkItemRecords(nextWorkItems);
+      if (authorityBackedState) {
+        set({ activeMissionRecords: sorted });
+        persistActiveMissions(activeCompany.id, sorted);
+        void upsertAuthorityMission({
+          companyId: activeCompany.id,
+          mission,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "mission.upsert",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to upsert mission through authority",
+            });
+          });
+        return;
+      }
       const reconciledRequirements = reconcileActiveRequirementState({
         companyId: activeCompany.id,
         activeRequirementAggregates,
@@ -178,12 +212,38 @@ export function buildMissionActions(
     },
 
     deleteMissionRecord: (missionId) => {
-      const { activeCompany, activeMissionRecords } = get();
+      const { activeCompany, activeMissionRecords, authorityBackedState } = get();
       if (!activeCompany) {
         return;
       }
-
       const next = activeMissionRecords.filter((mission) => mission.id !== missionId);
+
+      if (authorityBackedState) {
+        set({ activeMissionRecords: next });
+        persistActiveMissions(activeCompany.id, next);
+        void deleteAuthorityMission({
+          companyId: activeCompany.id,
+          missionId,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "mission.delete",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to delete mission through authority",
+            });
+          });
+        return;
+      }
+
       set({ activeMissionRecords: next });
       persistActiveMissions(activeCompany.id, next);
     },

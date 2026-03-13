@@ -27,6 +27,7 @@ export function buildAuthorityRuntimeStatePatch(input: {
   | "activeAgentRuns"
   | "activeAgentRuntime"
   | "activeAgentStatuses"
+  | "activeAgentStatusHealth"
   | "activeCompany"
 > {
   const runtimePatch = runtimeStateFromAuthorityRuntimeSnapshot(input.snapshot);

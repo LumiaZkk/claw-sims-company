@@ -15,6 +15,10 @@ import {
   touchWorkItemDispatches,
 } from "../../../application/mission/work-item";
 import {
+  deleteAuthorityWorkItem,
+  upsertAuthorityWorkItem,
+} from "../../../application/gateway/authority-control";
+import {
   areWorkItemRecordsEquivalent,
 } from "../../../application/mission/work-item-equivalence";
 import { isArtifactRequirementTopic } from "../../../application/mission/requirement-kind";
@@ -27,6 +31,10 @@ import {
   persistActiveRequirementEvidence,
   reconcileActiveRequirementState,
 } from "./requirements";
+import {
+  applyAuthorityRuntimeCommandError,
+  applyAuthorityRuntimeSnapshotToStore,
+} from "../../authority/runtime-command";
 
 export function persistActiveWorkItems(
   companyId: string | null | undefined,
@@ -156,6 +164,7 @@ export function buildWorkItemActions(
     upsertWorkItemRecord: (workItem) => {
       const {
         activeCompany,
+        authorityBackedState,
         activeConversationStates,
         activeRequirementAggregates,
         activeRequirementEvidence,
@@ -202,6 +211,29 @@ export function buildWorkItemActions(
       }
 
       const sorted = sanitizeWorkItemRecords(next);
+      if (authorityBackedState) {
+        void upsertAuthorityWorkItem({
+          companyId: activeCompany.id,
+          workItem: normalizedWorkItem,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "work-item.upsert",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to upsert work item through authority",
+            });
+          });
+        return;
+      }
       const nextRooms = activeRoomRecords.map((room) =>
         room.workItemId === normalizedWorkItem.id || room.id === normalizedWorkItem.roomId
           ? {
@@ -278,6 +310,7 @@ export function buildWorkItemActions(
     deleteWorkItemRecord: (workItemId) => {
       const {
         activeCompany,
+        authorityBackedState,
         activeConversationStates,
         activeRequirementAggregates,
         activeRequirementEvidence,
@@ -290,6 +323,29 @@ export function buildWorkItemActions(
       }
 
       const next = activeWorkItems.filter((item) => item.id !== workItemId);
+      if (authorityBackedState) {
+        void deleteAuthorityWorkItem({
+          companyId: activeCompany.id,
+          workItemId,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "work-item.delete",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to delete work item through authority",
+            });
+          });
+        return;
+      }
       const reconciledRequirements = reconcileActiveRequirementState({
         companyId: activeCompany.id,
         activeRequirementAggregates,

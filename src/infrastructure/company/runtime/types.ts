@@ -1,6 +1,7 @@
 import type { ArtifactRecord, SharedKnowledgeItem } from "../../../domain/artifact/types";
 import type {
   CanonicalAgentStatusRecord,
+  CanonicalAgentStatusHealthRecord,
   AgentRunRecord,
   AgentRuntimeRecord,
   AgentSessionRecord,
@@ -30,6 +31,7 @@ import type { Company, CyberCompanyConfig } from "../../../domain/org/types";
 export type { ArtifactRecord, SharedKnowledgeItem } from "../../../domain/artifact/types";
 export type {
   CanonicalAgentStatusRecord,
+  CanonicalAgentStatusHealthRecord,
   AgentRunRecord,
   AgentRuntimeRecord,
   AgentSessionRecord,
@@ -80,6 +82,7 @@ export interface CompanyRuntimeState {
   activeAgentRuns: AgentRunRecord[];
   activeAgentRuntime: AgentRuntimeRecord[];
   activeAgentStatuses: CanonicalAgentStatusRecord[];
+  activeAgentStatusHealth: CanonicalAgentStatusHealthRecord;
   loading: boolean;
   error: string | null;
   bootstrapPhase: CompanyBootstrapPhase;
@@ -87,6 +90,7 @@ export interface CompanyRuntimeState {
   saveConfig: () => Promise<void>;
   switchCompany: (id: string) => void;
   deleteCompany: (id: string) => Promise<void>;
+  retryCompanyProvisioning: (id: string) => Promise<void>;
   updateCompany: (company: Partial<Company>) => Promise<void>;
   upsertTask: (task: TrackedTask) => Promise<void>;
   upsertHandoff: (handoff: HandoffRecord) => Promise<void>;

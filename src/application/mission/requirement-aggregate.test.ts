@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyRequirementEvidenceToAggregates,
   buildAggregateBackedRequirementOverview,
@@ -478,5 +478,116 @@ describe("requirement aggregate", () => {
 
     expect(overview?.topicKey).toBe("mission:alpha");
     expect(overview?.title).toBe("从头开始搭建 AI 小说创作团队。");
+  });
+
+  it("keeps aggregate updatedAt stable across reconcile when nothing material changed", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T10:00:00.000Z"));
+    const previous: RequirementAggregateRecord = {
+      id: "topic:mission:alpha",
+      companyId: "company-1",
+      topicKey: "mission:alpha",
+      kind: "strategic",
+      primary: true,
+      workItemId: "topic:mission:alpha",
+      roomId: "workitem:topic:mission:alpha",
+      ownerActorId: "co-ceo",
+      ownerLabel: "CEO",
+      lifecyclePhase: "active_requirement",
+      stageGateStatus: "confirmed",
+      stage: "CTO 制定方案",
+      summary: "主线正在推进一致性底座。",
+      nextAction: "跟进 CTO 方案输出。",
+      memberIds: ["co-ceo", "co-cto"],
+      sourceConversationId: "agent:co-ceo:main",
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      revision: 2,
+      lastEvidenceAt: 2_000,
+      status: "active",
+      acceptanceStatus: "not_requested",
+    };
+
+    const result = reconcileRequirementAggregateState({
+      companyId: "company-1",
+      existingAggregates: [previous],
+      primaryRequirementId: previous.id,
+      activeConversationStates: [],
+      activeWorkItems: [createWorkItem()],
+      activeRoomRecords: [createRoom()],
+      activeRequirementEvidence: [],
+    });
+
+    expect(result.activeRequirementAggregates[0]).toMatchObject({
+      id: previous.id,
+      updatedAt: 2_000,
+      revision: 2,
+      lastEvidenceAt: 2_000,
+    });
+    vi.useRealTimers();
+  });
+
+  it("advances lastEvidenceAt without bumping revision for duplicate evidence", () => {
+    const company = createCompany();
+    const aggregate: RequirementAggregateRecord = {
+      id: "topic:mission:alpha",
+      companyId: "company-1",
+      topicKey: "mission:alpha",
+      kind: "strategic",
+      primary: true,
+      workItemId: "topic:mission:alpha",
+      roomId: "workitem:topic:mission:alpha",
+      ownerActorId: "co-ceo",
+      ownerLabel: "CEO",
+      lifecyclePhase: "active_requirement",
+      stageGateStatus: "confirmed",
+      stage: "CTO 制定方案",
+      summary: "主线正在推进一致性底座。",
+      nextAction: "跟进 CTO 方案输出。",
+      memberIds: ["co-ceo", "co-cto"],
+      sourceConversationId: "agent:co-ceo:main",
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      revision: 2,
+      lastEvidenceAt: 2_000,
+      status: "active",
+      acceptanceStatus: "not_requested",
+    };
+    const result = applyRequirementEvidenceToAggregates({
+      company,
+      activeConversationStates: [],
+      activeRequirementAggregates: [aggregate],
+      activeRoomRecords: [createRoom()],
+      activeWorkItems: [createWorkItem()],
+      primaryRequirementId: aggregate.id,
+      event: {
+        id: "evt-duplicate",
+        companyId: "company-1",
+        aggregateId: aggregate.id,
+        source: "company-event",
+        sessionKey: aggregate.sourceConversationId,
+        actorId: aggregate.ownerActorId,
+        eventType: "requirement_progressed",
+        timestamp: 5_000,
+        payload: {
+          roomId: aggregate.roomId,
+          topicKey: aggregate.topicKey,
+          ownerActorId: aggregate.ownerActorId,
+          status: aggregate.status,
+          stage: aggregate.stage,
+          summary: aggregate.summary,
+          nextAction: aggregate.nextAction,
+          memberIds: aggregate.memberIds,
+        },
+        applied: false,
+      },
+    });
+
+    expect(result.activeRequirementAggregates[0]).toMatchObject({
+      id: aggregate.id,
+      updatedAt: 2_000,
+      revision: 2,
+      lastEvidenceAt: 5_000,
+    });
   });
 });

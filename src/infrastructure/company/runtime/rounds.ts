@@ -1,6 +1,14 @@
 import { persistRoundRecords } from "../persistence/round-persistence";
 import { sanitizeRoundRecords } from "../persistence/round-persistence";
 import type { CompanyRuntimeState, RoundRecord, RuntimeGet, RuntimeSet } from "./types";
+import {
+  deleteAuthorityRound,
+  upsertAuthorityRound,
+} from "../../../application/gateway/authority-control";
+import {
+  applyAuthorityRuntimeCommandError,
+  applyAuthorityRuntimeSnapshotToStore,
+} from "../../authority/runtime-command";
 
 export function persistActiveRounds(companyId: string | null | undefined, rounds: RoundRecord[]) {
   persistRoundRecords(companyId, rounds);
@@ -53,8 +61,35 @@ export function buildRoundActions(
 ): Pick<CompanyRuntimeState, "upsertRoundRecord" | "deleteRoundRecord"> {
   return {
     upsertRoundRecord: (round) => {
-      const { activeCompany, activeRoundRecords } = get();
+      const { activeCompany, activeRoundRecords, authorityBackedState } = get();
       if (!activeCompany) {
+        return;
+      }
+
+      if (authorityBackedState) {
+        void upsertAuthorityRound({
+          companyId: activeCompany.id,
+          round: {
+            ...round,
+            companyId: activeCompany.id,
+          },
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "round.upsert",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to upsert round through authority",
+            });
+          });
         return;
       }
 
@@ -83,8 +118,32 @@ export function buildRoundActions(
     },
 
     deleteRoundRecord: (roundId) => {
-      const { activeCompany, activeRoundRecords } = get();
+      const { activeCompany, activeRoundRecords, authorityBackedState } = get();
       if (!activeCompany) {
+        return;
+      }
+
+      if (authorityBackedState) {
+        void deleteAuthorityRound({
+          companyId: activeCompany.id,
+          roundId,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "round.delete",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to delete round through authority",
+            });
+          });
         return;
       }
 

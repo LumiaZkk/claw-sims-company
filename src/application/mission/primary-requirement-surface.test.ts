@@ -270,4 +270,86 @@ describe("buildPrimaryRequirementSurface", () => {
 
     expect(surface.title).toBe("全自动AI小说创作系统");
   });
+
+  it("keeps the structured requirement title stable after later CEO instructions", () => {
+    const surface = buildPrimaryRequirementSurface({
+      company: createCompany(),
+      activeConversationStates: [],
+      activeWorkItems: [
+        {
+          ...createPreviewWorkItem(),
+          title: "AI 小说创作自动化平台",
+          displaySummary: "推进小说创作全流程自动化。",
+          summary: "推进小说创作全流程自动化。",
+        },
+      ],
+      activeRequirementAggregates: [
+        {
+          ...createDecisionAggregate(),
+          summary: "推进小说创作全流程自动化。",
+        },
+      ],
+      activeRequirementEvidence: [],
+      activeDecisionTickets: [],
+      primaryRequirementId: "topic:mission:alpha",
+      activeRoomRecords: [createDecisionRoom()],
+      companySessions: [],
+      companySessionSnapshots: [
+        {
+          agentId: "co-ceo",
+          sessionKey: "agent:co-ceo:main",
+          updatedAt: 2_500,
+          messages: [
+            {
+              role: "user",
+              text: "继续推进 AI 小说创作自动化平台，覆盖选题、生成、润色与发布全链路。",
+              timestamp: 1_100,
+            },
+            {
+              role: "user",
+              text: "需求团队派单，CEO 全部启动，三管齐下并行推进。",
+              timestamp: 2_400,
+            },
+          ],
+        },
+      ],
+      currentTime: 5_000,
+      ceoAgentId: "co-ceo",
+    });
+
+    expect(surface.title).toBe("AI 小说创作自动化平台");
+  });
+
+  it("does not surface generic strategic placeholders when a descriptive summary exists", () => {
+    const surface = buildPrimaryRequirementSurface({
+      company: createCompany(),
+      activeConversationStates: [],
+      activeWorkItems: [
+        {
+          ...createPreviewWorkItem(),
+          title: "当前战略任务",
+          displaySummary:
+            "我想通过ai完成完整的小说创作，选题可以自动化完成题材探索，也可以支持人工选题，要求高质量，一致性高不能前后文不一致，要去ai味，可以自动发布到对应小说平台。",
+          summary:
+            "我想通过ai完成完整的小说创作，选题可以自动化完成题材探索，也可以支持人工选题，要求高质量，一致性高不能前后文不一致，要去ai味，可以自动发布到对应小说平台。",
+        },
+      ],
+      activeRequirementAggregates: [
+        {
+          ...createDecisionAggregate(),
+          summary: "当前战略任务",
+        },
+      ],
+      activeRequirementEvidence: [],
+      activeDecisionTickets: [],
+      primaryRequirementId: "topic:mission:alpha",
+      activeRoomRecords: [createDecisionRoom()],
+      companySessions: [],
+      companySessionSnapshots: [],
+      currentTime: 5_000,
+      ceoAgentId: "co-ceo",
+    });
+
+    expect(surface.title).toBe("全自动AI小说创作系统");
+  });
 });

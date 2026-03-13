@@ -13,6 +13,7 @@ vi.mock("../persistence/persistence", () => ({
 vi.mock("../../../application/gateway/authority-control", () => ({
   getAuthorityBootstrap: vi.fn(),
   getAuthorityCompanyRuntime: vi.fn(),
+  retryAuthorityCompanyProvisioning: vi.fn(),
   switchAuthorityCompany: vi.fn(),
 }));
 

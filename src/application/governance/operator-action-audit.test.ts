@@ -122,6 +122,52 @@ describe("buildOperatorActionAuditEvent", () => {
     });
   });
 
+  it("captures takeover route opening intent", () => {
+    const event = buildOperatorActionAuditEvent({
+      companyId: "company-1",
+      action: "takeover_route_open",
+      surface: "board",
+      outcome: "succeeded",
+      details: {
+        sessionKey: "agent:co-cto:main",
+        targetActorId: "co-cto",
+        route: "/chat/co-cto?session=agent:co-cto:main",
+      },
+    });
+
+    expect(event.payload).toMatchObject({
+      action: "takeover_route_open",
+      surface: "board",
+      outcome: "succeeded",
+      sessionKey: "agent:co-cto:main",
+      targetActorId: "co-cto",
+      route: "/chat/co-cto?session=agent:co-cto:main",
+    });
+  });
+
+  it("captures ops route opening intent from ceo surfaces", () => {
+    const event = buildOperatorActionAuditEvent({
+      companyId: "company-1",
+      action: "ops_route_open",
+      surface: "ceo",
+      outcome: "succeeded",
+      details: {
+        route: "/ops",
+        openEscalations: 2,
+        pendingHumanDecisions: 1,
+      },
+    });
+
+    expect(event.payload).toMatchObject({
+      action: "ops_route_open",
+      surface: "ceo",
+      outcome: "succeeded",
+      route: "/ops",
+      openEscalations: 2,
+      pendingHumanDecisions: 1,
+    });
+  });
+
   it("captures quick task assignment intent with target and preview", () => {
     const preview = "请先整理今天的运营阻塞并给出处理顺序";
     const event = buildOperatorActionAuditEvent({
@@ -166,6 +212,29 @@ describe("buildOperatorActionAuditEvent", () => {
       targetActorId: "employee-cto",
       role: "Chief Platform Officer",
       descriptionLength: 32,
+    });
+  });
+
+  it("captures approval request intent for risky org actions", () => {
+    const event = buildOperatorActionAuditEvent({
+      companyId: "company-1",
+      action: "approval_request",
+      surface: "lobby",
+      outcome: "succeeded",
+      details: {
+        approvalId: "approval-1",
+        approvalActionType: "employee_fire",
+        targetActorId: "employee-ops",
+      },
+    });
+
+    expect(event.payload).toMatchObject({
+      action: "approval_request",
+      surface: "lobby",
+      outcome: "succeeded",
+      approvalId: "approval-1",
+      approvalActionType: "employee_fire",
+      targetActorId: "employee-ops",
     });
   });
 });

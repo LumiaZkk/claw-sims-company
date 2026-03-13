@@ -164,3 +164,36 @@ export function buildSavedDepartments(company: Company, nextDepartments: Departm
     nextEmployees: company.employees,
   });
 }
+
+export function summarizeDepartmentCreateRemoveChanges(
+  currentDepartments: Department[] | null | undefined,
+  nextDepartments: Department[],
+) {
+  const current = Array.isArray(currentDepartments) ? currentDepartments : [];
+  const currentById = new Map(current.map((department) => [department.id, department] as const));
+  const nextById = new Map(nextDepartments.map((department) => [department.id, department] as const));
+
+  const created = nextDepartments.filter(
+    (department) => !currentById.has(department.id) && !department.archived,
+  );
+
+  const removedById = new Map<string, Department>();
+  for (const department of current) {
+    if (!department.archived && !nextById.has(department.id)) {
+      removedById.set(department.id, department);
+    }
+  }
+  for (const department of nextDepartments) {
+    const existing = currentById.get(department.id);
+    if (existing && !existing.archived && department.archived) {
+      removedById.set(department.id, department);
+    }
+  }
+
+  const removed = [...removedById.values()];
+  return {
+    created,
+    removed,
+    hasRiskyChanges: created.length > 0 || removed.length > 0,
+  };
+}

@@ -2,6 +2,7 @@ import { readCachedAuthorityConfig, readCachedAuthorityRuntimeSnapshot } from ".
 import { runtimeStateFromAuthorityRuntimeSnapshot } from "../../authority/runtime-snapshot";
 import type {
   CanonicalAgentStatusRecord,
+  CanonicalAgentStatusHealthRecord,
   AgentRunRecord,
   AgentRuntimeRecord,
   AgentSessionRecord,
@@ -35,6 +36,7 @@ export type LoadedCompanyProductState = {
   loadedAgentRuns: AgentRunRecord[];
   loadedAgentRuntime: AgentRuntimeRecord[];
   loadedAgentStatuses: CanonicalAgentStatusRecord[];
+  loadedAgentStatusHealth: CanonicalAgentStatusHealthRecord;
   loadedRequirementAggregates: RequirementAggregateRecord[];
   loadedRequirementEvidence: RequirementEvidenceEvent[];
   primaryRequirementId: string | null;
@@ -62,6 +64,7 @@ export function loadProductState(companyId: string): LoadedCompanyProductState {
     loadedAgentRuns: state.activeAgentRuns,
     loadedAgentRuntime: state.activeAgentRuntime,
     loadedAgentStatuses: state.activeAgentStatuses,
+    loadedAgentStatusHealth: state.activeAgentStatusHealth,
     loadedRequirementAggregates: state.activeRequirementAggregates,
     loadedRequirementEvidence: state.activeRequirementEvidence,
     primaryRequirementId: state.primaryRequirementId,
@@ -89,6 +92,7 @@ export function createEmptyProductState(): Pick<
   | "activeAgentRuns"
   | "activeAgentRuntime"
   | "activeAgentStatuses"
+  | "activeAgentStatusHealth"
 > {
   return {
     authorityBackedState: false,
@@ -110,6 +114,16 @@ export function createEmptyProductState(): Pick<
     activeAgentRuns: [],
     activeAgentRuntime: [],
     activeAgentStatuses: [],
+    activeAgentStatusHealth: {
+      source: "fallback",
+      coverage: "fallback",
+      coveredAgentCount: 0,
+      expectedAgentCount: 0,
+      missingAgentIds: [],
+      isComplete: false,
+      generatedAt: null,
+      note: "Authority runtime not hydrated yet.",
+    },
   };
 }
 
@@ -141,6 +155,7 @@ export function loadInitialCompanyState() {
     activeAgentRuns: state?.loadedAgentRuns ?? [],
     activeAgentRuntime: state?.loadedAgentRuntime ?? [],
     activeAgentStatuses: state?.loadedAgentStatuses ?? [],
+    activeAgentStatusHealth: state?.loadedAgentStatusHealth ?? createEmptyProductState().activeAgentStatusHealth,
     bootstrapPhase: activeCompany ? ("ready" as const) : config ? ("missing" as const) : ("idle" as const),
   };
 }

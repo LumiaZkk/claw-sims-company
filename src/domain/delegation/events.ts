@@ -33,6 +33,10 @@ export type WorkflowEventKind =
 export type GovernanceEventKind =
   | "ops_cycle_applied"
   | "operator_action_recorded"
+  | "approval_record_upserted"
+  | "approval_record_deleted"
+  | "approval_resolved"
+  | "approval_rejected"
   | "support_request_record_upserted"
   | "support_request_record_deleted"
   | "escalation_record_upserted"

@@ -39,6 +39,7 @@ export const useCompanyRuntimeStore = create<CompanyRuntimeState>((set, get) => 
   activeAgentRuns: initialCompanyState.activeAgentRuns,
   activeAgentRuntime: initialCompanyState.activeAgentRuntime,
   activeAgentStatuses: initialCompanyState.activeAgentStatuses,
+  activeAgentStatusHealth: initialCompanyState.activeAgentStatusHealth,
   loading: false,
   error: null,
   bootstrapPhase: initialCompanyState.bootstrapPhase,

@@ -1,7 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Play, Pause, Trash2, Clock, GitCommit } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { requestAutomationEnableApproval, buildAutomationApprovalInputFromJob } from "../../application/automation/approval";
 import { useOrgQuery } from "../../application/org";
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 import { ActionFormDialog } from "../../components/ui/action-form-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -95,31 +97,43 @@ export function AutomationPresentationPage() {
       return;
     }
 
-    let scheduleParams = {};
-    if (draftScheduleType === "cron") {
-      if (!draftExpr.trim()) return toast.error("验证失败", "未填写 Cron 表达式");
-      scheduleParams = { kind: "cron", expr: draftExpr.trim() };
-    } else {
-      scheduleParams = { kind: "every", everyMs: parseInt(draftEveryMs, 10) };
+    if (draftScheduleType === "cron" && !draftExpr.trim()) {
+      return toast.error("验证失败", "未填写 Cron 表达式");
     }
 
     setActionRunning(true);
     try {
-      await gateway.addCron({
-        name: draftName.trim(),
-        agentId: draftAgentId,
-        enabled: true,
-        sessionTarget: "main",
-        wakeMode: "now",
-        schedule: scheduleParams,
-        payload: {
-          kind: "agentTurn",
+      const result = await requestAutomationEnableApproval({
+        company: activeCompany,
+        automation: {
+          name: draftName.trim(),
+          agentId: draftAgentId,
+          schedule:
+            draftScheduleType === "cron"
+              ? { kind: "cron", expr: draftExpr.trim() }
+              : { kind: "every", everyMs: parseInt(draftEveryMs, 10) },
           message: draftTask.trim(),
         },
       });
-      toast.success("执行班次已创建", "新的自动化部署已启动");
+      if (result.mode === "approval_requested") {
+        await appendOperatorActionAuditEvent({
+          companyId: activeCompany.id,
+          action: "approval_request",
+          surface: "automation",
+          outcome: "succeeded",
+          details: {
+            approvalId: result.approval.id,
+            approvalActionType: result.approval.actionType,
+            targetActorId: result.approval.targetActorId ?? null,
+            targetLabel: result.approval.targetLabel ?? null,
+          },
+        });
+        toast.info("已提交自动化审批", `请先批准「${result.approval.summary}」，再继续执行。`);
+      } else {
+        toast.success("执行班次已创建", "新的自动化部署已启动");
+        await loadJobs();
+      }
       setCreateDialogOpen(false);
-      await loadJobs();
     } catch (e: unknown) {
       toast.error("创建失败", e instanceof Error ? e.message : String(e));
     } finally {
@@ -130,8 +144,33 @@ export function AutomationPresentationPage() {
   const toggleCronStatus = async (job: CronJob) => {
     try {
       const nextStatus = !(job.enabled !== false);
-      await gateway.updateCron(job.id, { enabled: nextStatus });
-      toast.success("状态已更新", `已${nextStatus ? "开启" : "停用"}班次: ${job.name}`);
+      if (nextStatus) {
+        const result = await requestAutomationEnableApproval({
+          company: activeCompany,
+          automation: buildAutomationApprovalInputFromJob(job),
+        });
+        if (result.mode === "approval_requested") {
+          await appendOperatorActionAuditEvent({
+            companyId: activeCompany.id,
+            action: "approval_request",
+            surface: "automation",
+            outcome: "succeeded",
+            details: {
+              approvalId: result.approval.id,
+              approvalActionType: result.approval.actionType,
+              targetActorId: result.approval.targetActorId ?? null,
+              targetLabel: result.approval.targetLabel ?? null,
+            },
+          });
+          toast.info("已提交自动化审批", `请先批准「${result.approval.summary}」，再继续执行。`);
+        } else {
+          toast.success("状态已更新", `已开启班次: ${job.name}`);
+          await loadJobs();
+        }
+        return;
+      }
+      await gateway.updateCron(job.id, { enabled: false });
+      toast.success("状态已更新", `已停用班次: ${job.name}`);
       await loadJobs();
     } catch (e: unknown) {
       toast.error("状态更新失败", e instanceof Error ? e.message : String(e));

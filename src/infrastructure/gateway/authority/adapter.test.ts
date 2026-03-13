@@ -102,4 +102,55 @@ describe("authority backend adapter", () => {
 
     expect(mocks.batchHireEmployees).toHaveBeenCalledWith(payload);
   });
+
+  it("routes process telemetry calls through authority gateway and normalizes the result", async () => {
+    mocks.requestGateway
+      .mockResolvedValueOnce({
+        processes: [
+          {
+            id: "proc-1",
+            sessionKey: "agent:cto:main",
+            status: "running",
+            command: "python worker.py",
+            updatedAt: 120,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        process: {
+          id: "proc-1",
+          sessionKey: "agent:cto:main",
+          state: "completed",
+          title: "worker",
+          command: "python worker.py",
+          exitCode: 0,
+          finishedAt: 150,
+        },
+      });
+
+    const listed = await authorityBackend.listProcesses("agent:cto:main");
+    const polled = await authorityBackend.pollProcess("proc-1");
+
+    expect(mocks.requestGateway).toHaveBeenNthCalledWith(
+      1,
+      "process.list",
+      { sessionKey: "agent:cto:main" },
+    );
+    expect(mocks.requestGateway).toHaveBeenNthCalledWith(
+      2,
+      "process.poll",
+      { id: "proc-1" },
+    );
+    expect(listed[0]).toMatchObject({
+      processId: "proc-1",
+      agentId: "cto",
+      state: "running",
+      title: "python worker.py",
+    });
+    expect(polled).toMatchObject({
+      processId: "proc-1",
+      state: "completed",
+      exitCode: 0,
+    });
+  });
 });

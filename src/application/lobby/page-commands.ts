@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
+import { applyApprovedAutomationEnable } from "../automation/approval";
 import { buildCompanyBlueprint } from "../company/blueprint";
+import { resolveAuthorityApproval } from "../gateway/authority-control";
 import { appendOperatorActionAuditEvent } from "../governance/operator-action-audit";
 import { useLobbyCommunicationSyncState } from "./communication-sync";
 import { buildRequirementRoomRoute } from "../delegation/room-routing";
@@ -12,11 +14,14 @@ import {
   type HireEmployeeConfig,
   updateEmployeeRolePrompt,
 } from "../org/directory-commands";
+import { applyApprovedDirectoryDepartmentChange } from "../org/page-commands";
 import type { ArtifactRecord } from "../../domain/artifact/types";
+import type { ApprovalRecord } from "../../domain/governance/types";
 import type { RequirementRoomRecord } from "../../domain/delegation/types";
 import type { DispatchRecord } from "../../domain/delegation/types";
 import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
 import type { Company } from "../../domain/org/types";
+import { readCompanyRuntimeState } from "../../infrastructure/company/runtime/selectors";
 
 export function buildLobbyBlueprintText(input: {
   company: Company;
@@ -55,8 +60,26 @@ export async function updateLobbyEmployeeRole(agentId: string, role: string, des
   await updateEmployeeRolePrompt(agentId, role, description);
 }
 
-export async function fireLobbyEmployee(agentId: string) {
-  await fireCompanyEmployee(agentId);
+export async function fireLobbyEmployee(agentId: string, options?: { skipApproval?: boolean }) {
+  return fireCompanyEmployee(agentId, options);
+}
+
+export async function resolveLobbyApproval(input: {
+  companyId: string;
+  approvalId: string;
+  decision: "approved" | "rejected";
+  resolution?: string | null;
+}) {
+  const result = await resolveAuthorityApproval({
+    companyId: input.companyId,
+    approvalId: input.approvalId,
+    decision: input.decision,
+    resolution: input.resolution ?? null,
+    decidedByActorId: "operator:local-user",
+    decidedByLabel: "当前操作者",
+  });
+  await readCompanyRuntimeState().loadConfig();
+  return result.approval;
 }
 
 export async function assignLobbyQuickTask(agentId: string, text: string) {
@@ -69,6 +92,14 @@ function buildLobbyActionTextPreview(text: string, limit = 48) {
     return trimmed;
   }
   return `${trimmed.slice(0, limit)}...`;
+}
+
+function buildApprovalPayloadActorId(approval: ApprovalRecord): string | null {
+  const payloadActorId =
+    approval.payload && typeof approval.payload.agentId === "string"
+      ? approval.payload.agentId.trim()
+      : "";
+  return payloadActorId || approval.targetActorId || null;
 }
 
 export function buildLobbyGroupChatRoute(input: {
@@ -115,6 +146,7 @@ export function useLobbyPageCommands(input: {
   const [updateRoleSubmitting, setUpdateRoleSubmitting] = useState(false);
   const [quickTaskSubmitting, setQuickTaskSubmitting] = useState(false);
   const [groupChatSubmitting, setGroupChatSubmitting] = useState(false);
+  const [approvalSubmittingId, setApprovalSubmittingId] = useState<string | null>(null);
   const { recoveringCommunication, recoverCommunication } = useLobbyCommunicationSyncState({
     activeCompany: input.activeCompany,
     surface: "lobby",
@@ -238,9 +270,24 @@ export function useLobbyPageCommands(input: {
   }, [input.activeCompany.id]);
 
   const fireEmployee = useCallback(
-    async (agentId: string) => {
+    async (agentId: string, options?: { skipApproval?: boolean }) => {
       try {
-        await fireLobbyEmployee(agentId);
+        const result = await fireLobbyEmployee(agentId, options);
+        if (result.mode === "approval_requested") {
+          await appendOperatorActionAuditEvent({
+            companyId: input.activeCompany.id,
+            action: "approval_request",
+            surface: "lobby",
+            outcome: "succeeded",
+            details: {
+              approvalId: result.approval.id,
+              approvalActionType: result.approval.actionType,
+              targetActorId: result.approval.targetActorId ?? null,
+              targetLabel: result.approval.targetLabel ?? null,
+            },
+          });
+          return result;
+        }
         await appendOperatorActionAuditEvent({
           companyId: input.activeCompany.id,
           action: "employee_fire",
@@ -250,10 +297,11 @@ export function useLobbyPageCommands(input: {
             targetActorId: agentId,
           },
         });
+        return result;
       } catch (error) {
         await appendOperatorActionAuditEvent({
           companyId: input.activeCompany.id,
-          action: "employee_fire",
+          action: options?.skipApproval ? "employee_fire" : "approval_request",
           surface: "lobby",
           outcome: "failed",
           error: error instanceof Error ? error.message : String(error),
@@ -266,6 +314,69 @@ export function useLobbyPageCommands(input: {
     },
     [input.activeCompany.id],
   );
+
+  const resolveApproval = useCallback(async (approval: ApprovalRecord, decision: "approved" | "rejected") => {
+    setApprovalSubmittingId(approval.id);
+    try {
+      const resolved = await resolveLobbyApproval({
+        companyId: input.activeCompany.id,
+        approvalId: approval.id,
+        decision,
+        resolution:
+          decision === "approved"
+            ? `已批准：${approval.summary}`
+            : `已拒绝：${approval.summary}`,
+      });
+      await appendOperatorActionAuditEvent({
+        companyId: input.activeCompany.id,
+        action: decision === "approved" ? "approval_approve" : "approval_reject",
+        surface: "lobby",
+        outcome: "succeeded",
+        details: {
+          approvalId: resolved.id,
+          approvalActionType: resolved.actionType,
+          targetActorId: resolved.targetActorId ?? null,
+          targetLabel: resolved.targetLabel ?? null,
+        },
+      });
+
+      if (decision === "approved" && resolved.actionType === "employee_fire") {
+        const targetActorId = buildApprovalPayloadActorId(resolved);
+        if (targetActorId) {
+          await fireEmployee(targetActorId, { skipApproval: true });
+        }
+      }
+      if (decision === "approved" && resolved.actionType === "department_change") {
+        await applyApprovedDirectoryDepartmentChange({
+          company: input.activeCompany,
+          approval: resolved,
+          updateCompany: input.updateCompany,
+        });
+      }
+      if (decision === "approved" && resolved.actionType === "automation_enable") {
+        await applyApprovedAutomationEnable(resolved);
+      }
+
+      return resolved;
+    } catch (error) {
+      await appendOperatorActionAuditEvent({
+        companyId: input.activeCompany.id,
+        action: decision === "approved" ? "approval_approve" : "approval_reject",
+        surface: "lobby",
+        outcome: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        details: {
+          approvalId: approval.id,
+          approvalActionType: approval.actionType,
+          targetActorId: approval.targetActorId ?? null,
+          targetLabel: approval.targetLabel ?? null,
+        },
+      });
+      throw error;
+    } finally {
+      setApprovalSubmittingId(null);
+    }
+  }, [fireEmployee, input.activeCompany.id]);
 
   const assignQuickTask = useCallback(async (agentId: string, text: string) => {
     const nextText = text.trim();
@@ -340,12 +451,14 @@ export function useLobbyPageCommands(input: {
     hireEmployee,
     updateRole,
     fireEmployee,
+    resolveApproval,
     assignQuickTask,
     buildGroupChatRoute,
     hireSubmitting,
     updateRoleSubmitting,
     quickTaskSubmitting,
     groupChatSubmitting,
+    approvalSubmittingId,
     recoveringCommunication,
     recoverCommunication,
   };

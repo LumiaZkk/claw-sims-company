@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBoardPageViewModel } from "../../application/mission/board-view-model";
+import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { buildRequirementRoomHrefFromRecord } from "../../application/delegation/room-routing";
 import {
   buildPrimaryRequirementProjection,
@@ -12,27 +13,25 @@ import {
   resolveBoardPreRequirementDraft,
   shouldShowBoardPreRequirementDraft,
 } from "../../application/mission/board-pre-requirement";
-import { gateway, useGatewayStore } from "../../application/gateway";
+import { useGatewayStore } from "../../application/gateway";
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 import { trackChatRequirementMetric } from "../../application/telemetry/chat-requirement-metrics";
-import { toast } from "../../components/system/toast-store";
 import { resolveConversationPresentation } from "../../lib/chat-routes";
 import {
   resolveSessionActorId,
-  resolveSessionUpdatedAt,
 } from "../../lib/sessions";
 import { usePageVisibility } from "../../lib/use-page-visibility";
 import {
   BoardAlertStrip,
-  BoardDialogs,
   BoardHeroSection,
   BoardRequirementCard,
   BoardRoomPanel,
-  BoardSessionMonitor,
   BoardTaskBoardSection,
 } from "./components/BoardSections";
 import { useBoardCommunicationSync } from "./hooks/useBoardCommunicationSync";
 import { useBoardRuntimeState } from "./hooks/useBoardRuntimeState";
 import { useBoardTaskBackfill } from "./hooks/useBoardTaskBackfill";
+import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 
 type BoardPageContentProps = Omit<
   ReturnType<typeof useBoardPageViewModel>,
@@ -61,22 +60,19 @@ function BoardPageContent({
   ensureRequirementRoomForAggregate,
 }: BoardPageContentProps) {
   const navigate = useNavigate();
+  const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
   const connected = useGatewayStore((state) => state.connected);
   const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
   const isPageVisible = usePageVisibility();
   const {
-    setSessions,
     setCompanySessionSnapshots,
     sessions,
     currentTime,
-    sessionMeta,
     sessionStates,
     sessionTakeoverPacks,
     fileTasks,
     companySessionSnapshots,
     companySessions,
-    activeSessions,
-    archivedSessions,
   } = useBoardRuntimeState({
     activeCompany,
     activeAgentSessions,
@@ -87,19 +83,8 @@ function BoardPageContent({
     isPageVisible,
     supportsAgentFiles,
   });
-  const [showSessions, setShowSessions] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const lastTrackedBoardFallbackRef = useRef<string | null>(null);
-  const [dialogConfig, setDialogConfig] = useState<{
-    open: boolean;
-    type: "nudge" | "delete" | null;
-    sessionKey: string | null;
-  }>({ open: false, type: null, sessionKey: null });
-  const [dialogSubmitting, setDialogSubmitting] = useState(false);
-  const getEmpName = (agentId: string) => {
-    const emp = activeCompany.employees.find((e) => e.agentId === agentId);
-    return emp ? emp.nickname : agentId;
-  };
   const ceo = activeCompany.employees.find((employee) => employee.metaRole === "ceo") ?? null;
   const primaryRequirementSurface = useMemo(
     () =>
@@ -260,36 +245,6 @@ function BoardPageContent({
     isPageVisible,
   });
 
-  const handleNudge = (sessionKey: string) =>
-    setDialogConfig({ open: true, type: "nudge", sessionKey });
-  const handleDelete = (sessionKey: string) =>
-    setDialogConfig({ open: true, type: "delete", sessionKey });
-
-  const onDialogSubmit = async (values: Record<string, string>) => {
-    const { type, sessionKey } = dialogConfig;
-    if (!type || !sessionKey) {
-      return;
-    }
-    setDialogSubmitting(true);
-    try {
-      if (type === "nudge") {
-        const msg = values.nudgeText || "请报告当前进度并加快处理";
-        await gateway.sendChatMessage(sessionKey, msg);
-        toast.success("指令已下发", "已将催促指令强制插入任务流");
-      } else if (type === "delete") {
-        await gateway.deleteSession(sessionKey);
-        toast.success("销毁成功", "任务进程及日志已从底层剥离");
-        setSessions((s) => s.filter((x) => x.key !== sessionKey));
-      }
-      setDialogConfig({ open: false, type: null, sessionKey: null });
-    } catch (e: unknown) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      toast.error("操作失败", errMsg);
-    } finally {
-      setDialogSubmitting(false);
-    }
-  };
-
   const currentOwnerAgentId =
     currentWorkItem?.ownerActorId ?? requirementOverview?.currentOwnerAgentId ?? null;
   const preRequirementDraft = useMemo(
@@ -350,7 +305,7 @@ function BoardPageContent({
               ? "CEO 已经形成当前目标草案，但系统还没有正式 requirement/work item。先回 CEO 会话确认草案或继续推进，这里会在主线落地后自动切换。"
             : isBoardFallbackView
               ? "当前展示 CEO 任务板视图。系统还没有正式 requirement，但已根据 TASK-BOARD.md 还原当前步骤和执行顺序。"
-              : "这里只看任务顺序、当前步骤和子任务进度。成员状态和异常监控请去运营大厅。"
+              : "这里只看任务顺序、当前步骤和子任务进度。成员状态和异常监控统一去 `/runtime`。"
         }
         trackedTasks={trackedTasks.length}
         wipSteps={wipSteps}
@@ -360,7 +315,7 @@ function BoardPageContent({
         canOpenCeo={Boolean(ceo)}
         canOpenRequirementCenter={Boolean(primaryRequirementSurface.aggregateId || requirementOverview || currentWorkItem)}
         onOpenRequirementCenter={() => navigate("/requirement")}
-        onOpenOps={() => navigate("/ops")}
+        onOpenRuntime={() => navigate("/runtime")}
         onOpenCeo={() => ceo && navigate(`/chat/${ceo.agentId}`)}
       />
 
@@ -379,6 +334,13 @@ function BoardPageContent({
         }
         onOpenCeo={ceo ? () => navigate(`/chat/${ceo.agentId}`) : undefined}
         onOpenRequirementCenter={() => navigate("/requirement")}
+      />
+
+      <CanonicalRuntimeSummaryCard
+        summary={runtimeSummary}
+        title="运行态总控摘要"
+        description="看板保留任务推进和通信恢复；成员运行态、等待链和排障总览统一交给 `/runtime`。"
+        compact
       />
 
       <BoardRoomPanel
@@ -454,15 +416,37 @@ function BoardPageContent({
           const firstSessionKey = sessionTakeoverPacks.keys().next().value;
           if (typeof firstSessionKey === "string") {
             const session = sessions.find((item) => item.key === firstSessionKey) ?? null;
-            navigate(
-              resolveConversationPresentation({
+            const route = resolveConversationPresentation({
+              sessionKey: firstSessionKey,
+              actorId: session ? resolveSessionActorId(session) : null,
+              rooms: activeRoomRecords,
+              employees: activeCompany.employees,
+            }).route;
+            void appendOperatorActionAuditEvent({
+              companyId: activeCompany.id,
+              action: "takeover_route_open",
+              surface: "board",
+              outcome: "succeeded",
+              details: {
                 sessionKey: firstSessionKey,
-                actorId: session ? resolveSessionActorId(session) : null,
-                rooms: activeRoomRecords,
-                employees: activeCompany.employees,
-              }).route,
-            );
+                targetActorId: session ? resolveSessionActorId(session) : null,
+                route,
+                visibleTakeoverCount,
+              },
+            });
+            navigate(route);
+            return;
           }
+          void appendOperatorActionAuditEvent({
+            companyId: activeCompany.id,
+            action: "takeover_route_open",
+            surface: "board",
+            outcome: "failed",
+            error: "没有找到可打开的人工接管会话。",
+            details: {
+              visibleTakeoverCount,
+            },
+          });
         }}
       />
 
@@ -522,37 +506,6 @@ function BoardPageContent({
         preRequirementDraft={showPreRequirementDraft ? preRequirementDraft : null}
         onOpenCeo={ceo ? () => navigate(`/chat/${ceo.agentId}`) : undefined}
         onOpenRoute={(route) => navigate(route)}
-      />
-
-      <BoardSessionMonitor
-        showSessions={showSessions}
-        setShowSessions={setShowSessions}
-        activeSessions={activeSessions}
-        archivedSessions={archivedSessions}
-        sessionMeta={sessionMeta}
-        sessionStates={sessionStates}
-        sessionTakeoverPacks={sessionTakeoverPacks}
-        getEmpName={getEmpName}
-        resolveUpdatedAt={resolveSessionUpdatedAt}
-        onOpenSession={(sessionKey, actorId) =>
-          navigate(
-            resolveConversationPresentation({
-              sessionKey,
-              actorId,
-              rooms: activeRoomRecords,
-              employees: activeCompany.employees,
-            }).route,
-          )
-        }
-        onNudge={handleNudge}
-        onDelete={handleDelete}
-      />
-
-      <BoardDialogs
-        dialogConfig={dialogConfig}
-        dialogSubmitting={dialogSubmitting}
-        setDialogOpen={(open) => setDialogConfig((prev) => ({ ...prev, open }))}
-        onSubmit={onDialogSubmit}
       />
     </div>
   );

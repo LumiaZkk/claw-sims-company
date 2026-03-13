@@ -18,8 +18,9 @@ export function useCompanyShellQuery() {
 }
 
 export function useCompanyShellCommands() {
-  const { loadConfig, saveConfig, switchCompany, deleteCompany } = useCompanyRuntimeCommands();
-  return { loadConfig, saveConfig, switchCompany, deleteCompany };
+  const { loadConfig, saveConfig, switchCompany, deleteCompany, retryCompanyProvisioning } =
+    useCompanyRuntimeCommands();
+  return { loadConfig, saveConfig, switchCompany, deleteCompany, retryCompanyProvisioning };
 }
 
 export function readCompanyShellState(): CompanyShellState {

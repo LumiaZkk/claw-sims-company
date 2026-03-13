@@ -6,6 +6,10 @@ import {
   resolveDepartmentManager,
 } from "../../../src/application/org/department-autonomy";
 import {
+  normalizeEscalationRecord,
+  normalizeEscalationRevision,
+} from "../../../src/domain/delegation/escalation";
+import {
   isSupportRequestActive,
   normalizeSupportRequestRecord,
 } from "../../../src/domain/delegation/support-request";
@@ -132,6 +136,7 @@ export function buildCompanyOpsAuditEvents(input: {
         createdAt: request.updatedAt,
         payload: {
           requestId: request.id,
+          revision: normalizeRevision(request.revision),
           requesterDepartmentId: request.requesterDepartmentId,
           targetDepartmentId: request.targetDepartmentId,
           requestedByActorId: request.requestedByActorId,
@@ -161,6 +166,7 @@ export function buildCompanyOpsAuditEvents(input: {
         createdAt: createdAt,
         payload: {
           requestId: request.id,
+          revision: normalizeRevision(request.revision),
           requesterDepartmentId: request.requesterDepartmentId,
           targetDepartmentId: request.targetDepartmentId,
           requestedByActorId: request.requestedByActorId,
@@ -190,6 +196,7 @@ export function buildCompanyOpsAuditEvents(input: {
         createdAt: escalation.updatedAt,
         payload: {
           escalationId: escalation.id,
+          revision: normalizeEscalationRevision(escalation.revision),
           sourceType: escalation.sourceType,
           sourceId: escalation.sourceId,
           requesterDepartmentId: escalation.requesterDepartmentId ?? null,
@@ -217,6 +224,7 @@ export function buildCompanyOpsAuditEvents(input: {
         createdAt,
         payload: {
           escalationId: escalation.id,
+          revision: normalizeEscalationRevision(escalation.revision),
           sourceType: escalation.sourceType,
           sourceId: escalation.sourceId,
           requesterDepartmentId: escalation.requesterDepartmentId ?? null,
@@ -361,6 +369,7 @@ function buildSupportRequestSummary(
 }
 
 function createSupportRequest(input: {
+  existing?: SupportRequestRecord | null;
   now: number;
   workItemId: string;
   requesterDepartmentId: string;
@@ -373,8 +382,15 @@ function createSupportRequest(input: {
   detail?: string;
   supportSlaHours: number;
 }): SupportRequestRecord {
-  return {
-    id: buildSupportRequestId(input.workItemId, input.targetDepartmentId),
+  const existingIsActive = input.existing ? isSupportRequestActive(input.existing) : false;
+  const nextStatus = existingIsActive ? input.existing!.status : "open";
+  const nextSlaDueAt =
+    existingIsActive && input.existing?.slaDueAt != null
+      ? input.existing.slaDueAt
+      : input.now + input.supportSlaHours * 60 * 60 * 1000;
+  const nextRecord = normalizeSupportRequestRecord({
+    id: input.existing?.id ?? buildSupportRequestId(input.workItemId, input.targetDepartmentId),
+    revision: input.existing?.revision ?? 1,
     workItemId: input.workItemId,
     requesterDepartmentId: input.requesterDepartmentId,
     targetDepartmentId: input.targetDepartmentId,
@@ -382,10 +398,31 @@ function createSupportRequest(input: {
     ownerActorId: input.ownerActorId,
     summary: input.summary,
     detail: input.detail,
-    status: "open",
-    slaDueAt: input.now + input.supportSlaHours * 60 * 60 * 1000,
-    createdAt: input.now,
+    status: nextStatus,
+    slaDueAt: nextSlaDueAt,
+    createdAt: input.existing?.createdAt ?? input.now,
     updatedAt: input.now,
+  });
+  if (
+    input.existing
+    && input.existing.workItemId === nextRecord.workItemId
+    && (input.existing.parentWorkItemId ?? null) === (nextRecord.parentWorkItemId ?? null)
+    && input.existing.requesterDepartmentId === nextRecord.requesterDepartmentId
+    && input.existing.targetDepartmentId === nextRecord.targetDepartmentId
+    && input.existing.requestedByActorId === nextRecord.requestedByActorId
+    && (input.existing.ownerActorId ?? null) === (nextRecord.ownerActorId ?? null)
+    && (input.existing.roomId ?? null) === (nextRecord.roomId ?? null)
+    && input.existing.summary === nextRecord.summary
+    && (input.existing.detail ?? null) === (nextRecord.detail ?? null)
+    && input.existing.status === nextRecord.status
+    && (input.existing.slaDueAt ?? null) === (nextRecord.slaDueAt ?? null)
+    && (input.existing.escalationId ?? null) === (nextRecord.escalationId ?? null)
+  ) {
+    return normalizeSupportRequestRecord(input.existing);
+  }
+  return {
+    ...nextRecord,
+    revision: input.existing ? normalizeRevision(input.existing.revision) + 1 : normalizeRevision(nextRecord.revision),
   };
 }
 
@@ -411,6 +448,7 @@ function openEscalation(input: {
 }): EscalationRecord {
   const nextRecord: EscalationRecord = {
     id: input.existing?.id ?? buildEscalationId(input.sourceType, input.sourceId),
+    revision: input.existing?.revision ?? 1,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
     companyId: input.companyId,
@@ -441,17 +479,23 @@ function openEscalation(input: {
     && (input.existing.roomId ?? null) === nextRecord.roomId
     && (input.existing.decisionTicketId ?? null) === nextRecord.decisionTicketId
   ) {
-    return input.existing;
+    return normalizeEscalationRecord(input.existing);
   }
-  return nextRecord;
+  return {
+    ...normalizeEscalationRecord(nextRecord),
+    revision: input.existing
+      ? normalizeEscalationRevision(input.existing.revision) + 1
+      : normalizeEscalationRevision(nextRecord.revision),
+  };
 }
 
 function resolveEscalation(input: EscalationRecord, now: number): EscalationRecord {
   if (input.status === "resolved" || input.status === "dismissed") {
-    return input;
+    return normalizeEscalationRecord(input);
   }
   return {
-    ...input,
+    ...normalizeEscalationRecord(input),
+    revision: normalizeEscalationRevision(input.revision) + 1,
     status: "resolved",
     updatedAt: now,
   };
@@ -590,19 +634,31 @@ export function runCompanyOpsCycle(input: {
   now?: number;
 }): CompanyOpsRunResult {
   const now = input.now ?? Date.now();
-  let company = normalizeCompany(input.company);
-  let runtime: AuthorityCompanyRuntimeSnapshot = {
+  const seedCompany = normalizeCompany(input.company);
+  const normalizedInputRuntime: AuthorityCompanyRuntimeSnapshot = {
     ...input.runtime,
     activeWorkItems: input.runtime.activeWorkItems.map((workItem) =>
       normalizeWorkItemDepartmentOwnership({
-        company,
+        company: seedCompany,
         workItem,
       }),
     ),
     activeSupportRequests: dedupeById(input.runtime.activeSupportRequests.map(normalizeSupportRequestRecord)),
-    activeEscalations: dedupeById(input.runtime.activeEscalations),
+    activeEscalations: dedupeById(input.runtime.activeEscalations.map(normalizeEscalationRecord)),
     activeDecisionTickets: dedupeById(input.runtime.activeDecisionTickets),
   };
+  const normalizedInputCompany = normalizeCompany({
+    ...seedCompany,
+    supportRequests: normalizedInputRuntime.activeSupportRequests.filter(isSupportRequestActive),
+    escalations: normalizedInputRuntime.activeEscalations.filter(
+      (item) => item.status === "open" || item.status === "acknowledged",
+    ),
+    decisionTickets: normalizedInputRuntime.activeDecisionTickets.filter(
+      (item) => item.status === "open" || item.status === "pending_human",
+    ),
+  });
+  let company = normalizedInputCompany;
+  let runtime: AuthorityCompanyRuntimeSnapshot = normalizedInputRuntime;
   const actions: string[] = [];
 
   if (company.orgSettings?.autoCalibrate) {
@@ -675,26 +731,25 @@ export function runCompanyOpsCycle(input: {
       continue;
     }
     const requestId = buildSupportRequestId(workItem.id, targetDepartment.id);
-    if (supportRequestMap.has(requestId)) {
-      continue;
+    const existingRequest = supportRequestMap.get(requestId) ?? null;
+    const nextRequest = createSupportRequest({
+      existing: existingRequest,
+      now,
+      workItemId: workItem.id,
+      requesterDepartmentId: owningDepartment.id,
+      requesterDepartmentName: owningDepartment.name,
+      requestedByActorId: workItem.ownerActorId,
+      targetDepartmentId: targetDepartment.id,
+      targetDepartmentName: targetDepartment.name,
+      ownerActorId: targetManager.agentId,
+      summary: buildSupportRequestSummary(owningDepartment.name, targetDepartment.name, workItem.title),
+      detail: workItem.nextAction,
+      supportSlaHours: policy.supportSlaHours,
+    });
+    supportRequestMap.set(requestId, nextRequest);
+    if (!existingRequest) {
+      actions.push(`自动创建支持请求：${owningDepartment.name} -> ${targetDepartment.name}`);
     }
-    supportRequestMap.set(
-      requestId,
-      createSupportRequest({
-        now,
-        workItemId: workItem.id,
-        requesterDepartmentId: owningDepartment.id,
-        requesterDepartmentName: owningDepartment.name,
-        requestedByActorId: workItem.ownerActorId,
-        targetDepartmentId: targetDepartment.id,
-        targetDepartmentName: targetDepartment.name,
-        ownerActorId: targetManager.agentId,
-        summary: buildSupportRequestSummary(owningDepartment.name, targetDepartment.name, workItem.title),
-        detail: workItem.nextAction,
-        supportSlaHours: policy.supportSlaHours,
-      }),
-    );
-    actions.push(`自动创建支持请求：${owningDepartment.name} -> ${targetDepartment.name}`);
   }
 
   const nextSupportRequests = sortByUpdatedAt([...supportRequestMap.values()]);
@@ -822,25 +877,27 @@ export function runCompanyOpsCycle(input: {
 
       if (hrDepartment && department.leadAgentId && policy.autoApproveSupportRequests) {
         const supportId = buildSupportRequestId(`org-policy:hire:${department.id}`, hrDepartment.id);
-        if (!supportRequestMap.has(supportId)) {
-          const hrManager = resolveDepartmentManager(company, hrDepartment.id);
-          if (hrManager) {
-            supportRequestMap.set(
-              supportId,
-              createSupportRequest({
-                now,
-                workItemId: `org-policy:hire:${department.id}`,
-                requesterDepartmentId: department.id,
-                requesterDepartmentName: department.name,
-                requestedByActorId: department.leadAgentId,
-                targetDepartmentId: hrDepartment.id,
-                targetDepartmentName: hrDepartment.name,
-                ownerActorId: hrManager.agentId,
-                summary: `${department.name} 负载连续偏高，请 HR 评估补充 1 个岗位`,
-                detail: `当前自治引擎评估负载分数为 ${loadScore}，连续 ${counter.overloadStreak} 个周期超阈值。`,
-                supportSlaHours: policy.supportSlaHours,
-              }),
-            );
+        const existingSupportRequest = supportRequestMap.get(supportId) ?? null;
+        const hrManager = resolveDepartmentManager(company, hrDepartment.id);
+        if (hrManager) {
+          supportRequestMap.set(
+            supportId,
+            createSupportRequest({
+              existing: existingSupportRequest,
+              now,
+              workItemId: `org-policy:hire:${department.id}`,
+              requesterDepartmentId: department.id,
+              requesterDepartmentName: department.name,
+              requestedByActorId: department.leadAgentId,
+              targetDepartmentId: hrDepartment.id,
+              targetDepartmentName: hrDepartment.name,
+              ownerActorId: hrManager.agentId,
+              summary: `${department.name} 负载连续偏高，请 HR 评估补充 1 个岗位`,
+              detail: `当前自治引擎评估负载分数为 ${loadScore}，连续 ${counter.overloadStreak} 个周期超阈值。`,
+              supportSlaHours: policy.supportSlaHours,
+            }),
+          );
+          if (!existingSupportRequest) {
             actions.push(`自动向 HR 发起扩编支持请求：${department.name}`);
           }
         }
@@ -983,8 +1040,8 @@ export function runCompanyOpsCycle(input: {
     },
   });
 
-  const companyChanged = JSON.stringify(company) !== JSON.stringify(input.company);
-  const runtimeChanged = JSON.stringify(runtime) !== JSON.stringify(input.runtime);
+  const companyChanged = JSON.stringify(company) !== JSON.stringify(normalizedInputCompany);
+  const runtimeChanged = JSON.stringify(runtime) !== JSON.stringify(normalizedInputRuntime);
 
   return {
     company,

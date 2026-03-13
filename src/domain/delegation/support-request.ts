@@ -27,6 +27,10 @@ export function normalizeSupportRequestRecord(
   return {
     ...request,
     status: normalizeSupportRequestStatus(request.status),
+    revision:
+      Number.isFinite(request.revision) && Number(request.revision) > 0
+        ? Math.floor(Number(request.revision))
+        : 1,
   };
 }
 

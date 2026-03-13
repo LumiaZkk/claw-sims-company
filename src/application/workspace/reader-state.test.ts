@@ -30,6 +30,7 @@ function makeFile(overrides?: Partial<WorkspaceFileRow>): WorkspaceFileRow {
     kind: "chapter",
     resourceType: "document",
     tags: ["story.chapter", "company.resource"],
+    resourceOrigin: "declared",
     updatedAtMs: 100,
     ...overrides,
   };

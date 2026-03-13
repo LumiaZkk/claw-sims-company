@@ -55,6 +55,11 @@ function readString(value: unknown): string | null {
 
 const LOW_SIGNAL_REQUIREMENT_TITLES = new Set([
   "当前需求",
+  "当前战略任务",
+  "当前任务",
+  "本次需求",
+  "当前产品任务",
+  "当前规划任务",
   "当前主线",
   "当前主线正在推进。",
   "当前主线正在推进",
@@ -106,6 +111,26 @@ function findRequirementTitleHintFromRoom(room: RequirementRoomRecord | null): s
     }
   }
   return null;
+}
+
+function pickPreferredRequirementTitle(
+  candidates: Array<string | null | undefined>,
+  options: { allowLowSignalFallback?: boolean } = {},
+): string | null {
+  const normalized = candidates
+    .map((candidate) => readString(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate));
+  const preferred = normalized.find((candidate) => !isLowSignalRequirementTitle(candidate));
+  if (preferred) {
+    return preferred;
+  }
+  return options.allowLowSignalFallback ? normalized[0] ?? null : null;
+}
+
+function collectDescriptiveRequirementHints(candidates: Array<string | null | undefined>): string[] {
+  return candidates
+    .map((candidate) => readString(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate) && !isLowSignalRequirementTitle(candidate));
 }
 
 function findRoomForRequirement(input: {
@@ -334,32 +359,44 @@ export function buildPrimaryRequirementSurface(input: {
   const instructionDerivedTitle = buildRequirementTitleFromInstruction(
     requirementState.ceoInstructionHint?.text,
   ) ?? roomDerivedTitle;
-  const fallbackTitle = buildRequirementOverviewTitle(
-    workItem?.topicKey ?? aggregate?.topicKey ?? requirementOverview?.topicKey ?? "mission:",
-    [
-      instructionDerivedTitle,
-      roomDerivedTitle,
-      requirementState.ceoInstructionHint?.text,
-      workItem?.title,
-      workItem?.displaySummary,
-      workItem?.summary,
-      requirementOverview?.title,
-      requirementOverview?.summary,
-      aggregate?.summary,
-      room?.headline,
-      room?.title,
-      latestReportSummary,
-    ].filter((value): value is string => typeof value === "string" && value.trim().length > 0),
-  );
-  const titleCandidate =
-    instructionDerivedTitle ??
-    readString(workItem?.title) ??
-    readString(requirementOverview?.title) ??
-    readString(room?.title) ??
-    readString(room?.headline) ??
-    readString(aggregate?.summary) ??
-    null;
-  const title = isLowSignalRequirementTitle(titleCandidate) ? fallbackTitle : titleCandidate ?? fallbackTitle;
+  const structuredTitle = pickPreferredRequirementTitle([
+    workItem?.title,
+    requirementOverview?.title,
+    room?.title,
+    room?.headline,
+    aggregate?.summary,
+  ]);
+  const descriptiveTitleHints = collectDescriptiveRequirementHints([
+    structuredTitle,
+    instructionDerivedTitle,
+    roomDerivedTitle,
+    requirementState.ceoInstructionHint?.text,
+    workItem?.title,
+    workItem?.displaySummary,
+    workItem?.summary,
+    requirementOverview?.title,
+    requirementOverview?.summary,
+    aggregate?.summary,
+    room?.headline,
+    room?.title,
+    latestReportSummary,
+  ]);
+  const fallbackTitleCandidate = descriptiveTitleHints.length
+    ? buildRequirementOverviewTitle(
+        workItem?.topicKey ?? aggregate?.topicKey ?? requirementOverview?.topicKey ?? "mission:",
+        descriptiveTitleHints,
+      )
+    : null;
+  const fallbackTitle =
+    fallbackTitleCandidate && !isLowSignalRequirementTitle(fallbackTitleCandidate)
+      ? fallbackTitleCandidate
+      : descriptiveTitleHints[0]
+        ? summarizeRequirementText(descriptiveTitleHints[0], 28)
+        : buildRequirementOverviewTitle(
+            workItem?.topicKey ?? aggregate?.topicKey ?? requirementOverview?.topicKey ?? "mission:",
+            [],
+          );
+  const title = structuredTitle ?? instructionDerivedTitle ?? fallbackTitle;
   const summary =
     readString(summarizeRequirementText(requirementState.ceoInstructionHint?.text ?? "", 120)) ??
     readString(workItem?.displaySummary) ??

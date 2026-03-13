@@ -12,7 +12,7 @@ export function useCompanyCreateApp(input: {
   selectedTemplate: string;
 }) {
   const { config } = useCompanyShellQuery();
-  const { loadConfig } = useCompanyShellCommands();
+  const { loadConfig, switchCompany } = useCompanyShellCommands();
   const creationTotalSteps = 4;
   const [isCreating, setIsCreating] = useState(false);
   const [creationError, setCreationError] = useState<string | null>(null);
@@ -31,6 +31,7 @@ export function useCompanyCreateApp(input: {
     [input.blueprintText],
   );
   const isBlueprintTemplate = input.selectedTemplate === BLUEPRINT_TEMPLATE_ID;
+  const selectedTemplateIsKnown = COMPANY_TEMPLATES.some((template) => template.id === input.selectedTemplate);
 
   const updateProgress = (current: number, message: string) => {
     setCreationProgress((state) => ({
@@ -56,7 +57,11 @@ export function useCompanyCreateApp(input: {
     updateProgress(1, `正在创建公司「${finalCompanyName}」...`);
 
     try {
-      const templateId = blueprint?.template || input.selectedTemplate || config?.companies[0]?.template || "blank";
+      const templateId =
+        blueprint?.template
+        || (selectedTemplateIsKnown ? input.selectedTemplate : null)
+        || config?.companies[0]?.template
+        || "blank";
       updateProgress(2, blueprint ? "正在解析蓝图并在 authority 中建库..." : "正在在 authority 中初始化组织...");
       const created = await createAuthorityCompany({
         companyName: finalCompanyName,
@@ -64,11 +69,22 @@ export function useCompanyCreateApp(input: {
         blueprintText: blueprint ? input.blueprintText : undefined,
       });
 
-      updateProgress(3, `已创建 ${created.company.employees.length} 名成员，正在刷新前端上下文...`);
+      updateProgress(
+        3,
+        created.warnings.length > 0
+          ? `公司已创建，执行器仍在补齐（${created.warnings[0]}），正在刷新前端上下文...`
+          : `已创建 ${created.company.employees.length} 名成员，正在刷新前端上下文...`,
+      );
       await loadConfig();
-      updateProgress(4, "公司已注册到本机 authority，准备进入总部大厅...");
+      await switchCompany(created.company.id);
+      updateProgress(
+        4,
+        created.warnings.length > 0
+          ? "公司已注册到本机 authority，执行器补齐中，准备进入总部大厅..."
+          : "公司已注册到本机 authority，准备进入总部大厅...",
+      );
       setIsCreating(false);
-      return { companyName: finalCompanyName };
+      return { companyId: created.company.id, companyName: finalCompanyName, warnings: created.warnings };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setCreationError(message);

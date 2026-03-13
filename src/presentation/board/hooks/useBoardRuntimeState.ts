@@ -18,7 +18,7 @@ import {
   REQUIREMENT_SNAPSHOT_MESSAGE_LIMIT,
   type RequirementSessionSnapshot,
 } from "../../../domain/mission/requirement-snapshot";
-import { isSessionActive, resolveSessionActorId, resolveSessionUpdatedAt } from "../../../lib/sessions";
+import { resolveSessionActorId, resolveSessionUpdatedAt } from "../../../lib/sessions";
 
 export type BoardPageSnapshot = {
   sessions: GatewaySessionRow[];
@@ -83,9 +83,6 @@ export function useBoardRuntimeState(params: {
   const [sessionMeta, setSessionMeta] = useState<Map<string, { topic: string; msgCount: number }>>(
     () => new Map(initialBoardSnapshot?.sessionMetaEntries ?? []),
   );
-  const [sessionStates, setSessionStates] = useState<Map<string, ResolvedExecutionState>>(
-    () => new Map(initialBoardSnapshot?.sessionStateEntries ?? []),
-  );
   const [sessionTakeoverPacks, setSessionTakeoverPacks] = useState<Map<string, ManualTakeoverPack>>(
     () => new Map(initialBoardSnapshot?.sessionTakeoverPackEntries ?? []),
   );
@@ -103,7 +100,6 @@ export function useBoardRuntimeState(params: {
     queueMicrotask(() => {
       setSessions(snapshot.sessions);
       setSessionMeta(new Map(snapshot.sessionMetaEntries));
-      setSessionStates(new Map(snapshot.sessionStateEntries));
       setSessionTakeoverPacks(new Map(snapshot.sessionTakeoverPackEntries));
       setFileTasks(snapshot.fileTasks);
       setCompanySessionSnapshots(snapshot.companySessionSnapshots);
@@ -114,7 +110,8 @@ export function useBoardRuntimeState(params: {
     writePageSnapshot<BoardPageSnapshot>(boardSnapshotKey, {
       sessions,
       sessionMetaEntries: [...sessionMeta.entries()],
-      sessionStateEntries: [...sessionStates.entries()],
+      // Execution state is authority-driven now; keep the field for compatibility only.
+      sessionStateEntries: [],
       sessionTakeoverPackEntries: [...sessionTakeoverPacks.entries()],
       fileTasks,
       companySessionSnapshots,
@@ -124,7 +121,6 @@ export function useBoardRuntimeState(params: {
     companySessionSnapshots,
     fileTasks,
     sessionMeta,
-    sessionStates,
     sessionTakeoverPacks,
     sessions,
   ]);
@@ -215,12 +211,10 @@ export function useBoardRuntimeState(params: {
           const firstHuman = messages.find((message) => message.role === "user");
           const topic = firstHuman ? extractText(firstHuman) : "";
           const truncatedTopic = topic.length > 120 ? `${topic.slice(0, 120)}...` : topic;
-          const evidenceTexts = messages.map(extractText).filter((text): text is string => text.length > 0);
           const execution = resolveExecutionState({
             agentRuntime: sessionActorId ? agentRuntimeByAgentId.get(sessionActorId) ?? null : null,
             canonicalStatus: sessionActorId ? agentStatusByAgentId.get(sessionActorId) ?? null : null,
             session,
-            evidenceTexts,
             now: Date.now(),
           });
           entries.push([key, { topic: truncatedTopic || "(未检测到任务指令)", msgCount: messages.length }]);
@@ -235,11 +229,6 @@ export function useBoardRuntimeState(params: {
               }),
             });
           }
-          setSessionStates((previous) => {
-            const next = new Map(previous);
-            next.set(key, execution);
-            return next;
-          });
           if (execution.state === "manual_takeover_required") {
             const ownerLabel =
               activeCompany.employees.find((employee) => employee.agentId === sessionActorId)?.nickname ??
@@ -258,23 +247,19 @@ export function useBoardRuntimeState(params: {
                 return next;
               });
             }
+          } else {
+            setSessionTakeoverPacks((previous) => {
+              if (!previous.has(key)) {
+                return previous;
+              }
+              const next = new Map(previous);
+              next.delete(key);
+              return next;
+            });
           }
           fetchedKeysRef.current.add(key);
         } catch {
           entries.push([key, { topic: "(加载失败)", msgCount: 0 }]);
-          setSessionStates((previous) => {
-            const next = new Map(previous);
-            next.set(
-              key,
-              resolveExecutionState({
-                agentRuntime: sessionActorId ? agentRuntimeByAgentId.get(sessionActorId) ?? null : null,
-                canonicalStatus: sessionActorId ? agentStatusByAgentId.get(sessionActorId) ?? null : null,
-                session,
-                fallbackState: "unknown",
-              }),
-            );
-            return next;
-          });
           fetchedKeysRef.current.add(key);
         }
       });
@@ -313,10 +298,6 @@ export function useBoardRuntimeState(params: {
         const next = new Map([...previous.entries()].filter(([key]) => activeKeys.has(key)));
         return next.size === previous.size ? previous : next;
       });
-      setSessionStates((previous) => {
-        const next = new Map([...previous.entries()].filter(([key]) => activeKeys.has(key)));
-        return next.size === previous.size ? previous : next;
-      });
       setSessionTakeoverPacks((previous) => {
         const next = new Map([...previous.entries()].filter(([key]) => activeKeys.has(key)));
         return next.size === previous.size ? previous : next;
@@ -335,21 +316,18 @@ export function useBoardRuntimeState(params: {
     return () => clearInterval(timer);
   }, []);
 
-  const resolvedSessionStates = new Map(sessionStates);
-  companySessions.forEach((session) => {
-    if (!resolvedSessionStates.has(session.key)) {
-      resolvedSessionStates.set(
-        session.key,
-        resolveExecutionState({
-          agentRuntime: agentRuntimeByAgentId.get(session.agentId) ?? null,
-          canonicalStatus: agentStatusByAgentId.get(session.agentId) ?? null,
-          session,
-          evidenceTexts: [session.lastMessagePreview, session.derivedTitle],
-          now: currentTime,
-        }),
-      );
-    }
-  });
+  const resolvedSessionStates = new Map(
+    companySessions.map((session) => [
+      session.key,
+      resolveExecutionState({
+        agentRuntime: agentRuntimeByAgentId.get(session.agentId) ?? null,
+        canonicalStatus: agentStatusByAgentId.get(session.agentId) ?? null,
+        session,
+        evidenceTexts: [session.lastMessagePreview, session.derivedTitle],
+        now: currentTime,
+      }),
+    ]),
+  );
 
   const activeSessions = companySessions.filter((session) => {
     const runtime = sessionRuntimeByKey.get(session.key);
@@ -360,7 +338,7 @@ export function useBoardRuntimeState(params: {
     if (canonicalStatus?.coordinationState === "executing" || canonicalStatus?.runtimeState === "busy") {
       return true;
     }
-    return isSessionActive(session, currentTime);
+    return false;
   });
   const archivedSessions = companySessions.filter(
     (session) => !activeSessions.some((candidate) => candidate.key === session.key),

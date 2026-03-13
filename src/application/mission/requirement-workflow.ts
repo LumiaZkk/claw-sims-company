@@ -2,6 +2,7 @@ import type {
   RequirementAggregateRecord,
   RequirementEvidenceEvent,
 } from "../../domain/mission/types";
+import { diffRequirementAggregateMaterialFields } from "./requirement-aggregate-diff";
 
 type RequirementWorkflowChanges = Partial<
   Omit<RequirementAggregateRecord, "id" | "companyId" | "primary" | "revision">
@@ -68,9 +69,12 @@ export function buildRequirementWorkflowEvidencePayload(input: {
   changes?: RequirementWorkflowChanges | null;
 }) {
   const { previousAggregate, nextAggregate } = input;
-  const explicitChangedFields = Object.keys(input.changes ?? {}).filter(
-    (key) => key !== "updatedAt" && key !== "lastEvidenceAt",
-  );
+  const explicitChangedFields =
+    previousAggregate
+      ? diffRequirementAggregateMaterialFields(previousAggregate, nextAggregate)
+      : Object.keys(input.changes ?? {}).filter(
+          (key) => key !== "updatedAt" && key !== "lastEvidenceAt",
+        );
   const changedFields = [...new Set([
     ...explicitChangedFields,
     ...(previousAggregate?.id !== nextAggregate.id ? ["primaryRequirementId"] : []),

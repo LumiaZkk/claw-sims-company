@@ -6,13 +6,17 @@ import {
   readAuthorityRestorePlan,
   readAuthorityPreflightSnapshot,
   readAuthorityDoctorSnapshot,
+  rehearseAuthorityRestore,
   renderAuthorityBackupsReport,
+  renderAuthorityGuidanceReport,
   renderAuthorityMigrateReport,
   renderAuthorityPreflightReport,
   renderAuthorityDoctorReport,
+  renderAuthorityRestoreRehearsalReport,
   renderAuthorityRestorePlanReport,
   restoreAuthorityBackup,
 } from "./ops";
+import { buildAuthorityHealthGuidance } from "../../../src/infrastructure/authority/health-guidance";
 
 function readFlag(name: string, args: string[]) {
   const index = args.indexOf(name);
@@ -39,7 +43,13 @@ async function main() {
 
   if (command === "doctor") {
     const snapshot = readAuthorityDoctorSnapshot();
-    console.log(renderAuthorityDoctorReport(snapshot));
+    const preflight = readAuthorityPreflightSnapshot();
+    const guidance = buildAuthorityHealthGuidance({
+      doctor: snapshot,
+      preflight,
+    });
+    const guidanceReport = renderAuthorityGuidanceReport(guidance);
+    console.log([renderAuthorityDoctorReport(snapshot), guidanceReport].filter(Boolean).join("\n"));
     process.exitCode = snapshot.status === "blocked" ? 1 : 0;
     return;
   }
@@ -63,7 +73,8 @@ async function main() {
   }
 
   if (command === "migrate") {
-    const result = migrateAuthoritySchemaVersion();
+    const planOnly = args.includes("--plan");
+    const result = migrateAuthoritySchemaVersion({ planOnly });
     console.log(renderAuthorityMigrateReport(result));
     process.exitCode = result.status === "blocked" ? 1 : 0;
     return;
@@ -111,15 +122,47 @@ async function main() {
     return;
   }
 
+  if (command === "rehearse") {
+    const from = readFlag("--from", args);
+    const useLatest = args.includes("--latest");
+    const out = readFlag("--out", args) ?? undefined;
+    if ((from ? 1 : 0) + (useLatest ? 1 : 0) !== 1) {
+      console.error(
+        "Usage: tsx packages/authority-daemon/src/ops-cli.ts rehearse --from BACKUP.sqlite | --latest [--out DIR]",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const backupPath = from ?? getLatestAuthorityBackup()?.path;
+    if (!backupPath) {
+      console.error("Authority 备份目录里还没有可演练的标准备份。");
+      process.exitCode = 1;
+      return;
+    }
+    const result = rehearseAuthorityRestore({
+      backupPath,
+      rehearsalRootDir: out,
+    });
+    console.log(renderAuthorityRestoreRehearsalReport(result));
+    process.exitCode = result.status === "blocked" ? 1 : 0;
+    return;
+  }
+
   if (command === "preflight") {
     const snapshot = readAuthorityPreflightSnapshot();
-    console.log(renderAuthorityPreflightReport(snapshot));
+    const doctor = readAuthorityDoctorSnapshot();
+    const guidance = buildAuthorityHealthGuidance({
+      doctor,
+      preflight: snapshot,
+    });
+    const guidanceReport = renderAuthorityGuidanceReport(guidance);
+    console.log([renderAuthorityPreflightReport(snapshot), guidanceReport].filter(Boolean).join("\n"));
     process.exitCode = snapshot.status === "blocked" ? 1 : 0;
     return;
   }
 
   console.error(
-    "Usage: tsx packages/authority-daemon/src/ops-cli.ts <doctor|backup|backups|migrate|restore|preflight> [--out DIR] [--file NAME] [--retain N] [--from BACKUP.sqlite|--latest] [--plan] [--force] [--allow-safety-backup]",
+    "Usage: tsx packages/authority-daemon/src/ops-cli.ts <doctor|backup|backups|migrate|restore|rehearse|preflight> [--out DIR] [--file NAME] [--retain N] [--from BACKUP.sqlite|--latest] [--plan] [--force] [--allow-safety-backup]",
   );
   process.exitCode = 1;
 }

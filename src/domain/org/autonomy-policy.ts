@@ -11,6 +11,7 @@ export const DEFAULT_AUTONOMY_POLICY: Required<CompanyAutonomyPolicy> = {
   autoApproveSupportRequests: true,
   humanApprovalRequiredForLayoffs: true,
   humanApprovalRequiredForDepartmentCreateRemove: true,
+  humanApprovalRequiredForAutomationEnable: true,
   maxAutoHeadcountDelta: 1,
   maxAutoBudgetDelta: 1,
   supportSlaHours: 6,

@@ -1,5 +1,6 @@
 import type { ArtifactRecord, ArtifactResourceType } from "../../domain/artifact/types";
 import type { CompanyWorkspaceApp } from "../../domain/org/types";
+import type { WorkspaceResourceOrigin } from "./index";
 
 type AppManifestWorkspaceFile = {
   artifactId?: string;
@@ -9,6 +10,7 @@ type AppManifestWorkspaceFile = {
   previewText?: string;
   resourceType: ArtifactResourceType;
   tags: string[];
+  resourceOrigin?: WorkspaceResourceOrigin;
 };
 
 export type WorkspaceAppManifestSelector = {
@@ -40,7 +42,7 @@ export type WorkspaceAppManifestResource = {
 export type WorkspaceAppManifestAction = {
   id: string;
   label: string;
-  actionType: "workbench_request" | "open_chat" | "refresh_manifest" | "trigger_skill";
+  actionType: "workbench_request" | "open_chat" | "refresh_manifest" | "trigger_skill" | "report_issue";
   target: string;
   input?: Record<string, unknown>;
 };
@@ -87,52 +89,62 @@ const MANAGED_WORKSPACE_CONTROL_FILE_NAMES = new Set([
   "department-operations.md",
 ]);
 
+const PRIMARY_CONTENT_TAGS = ["content.primary", "story.chapter"] as const;
+const REFERENCE_TAGS = ["domain.reference", "story.canon", "company.knowledge"] as const;
+const REPORT_TAGS = ["ops.report", "qa.report"] as const;
+
+function looksLikeNovelApp(app: Pick<CompanyWorkspaceApp, "template" | "title" | "slug">) {
+  const haystack = `${app.title} ${app.slug}`.trim();
+  return /小说|章节|正文|设定|审校|伏笔|novel|chapter|canon/i.test(haystack);
+}
+
 function buildDefaultSections(
-  template: CompanyWorkspaceApp["template"],
+  app: Pick<CompanyWorkspaceApp, "template" | "title" | "slug">,
 ): WorkspaceAppManifestSection[] {
-  switch (template) {
+  const novelLike = looksLikeNovelApp(app);
+  switch (app.template) {
     case "reader":
       return [
         {
           id: "reader-content",
-          label: "正文",
+          label: novelLike ? "正文" : "内容",
           slot: "content",
           order: 0,
-          selectors: [{ tags: ["story.chapter"] }],
-          emptyState: "当前还没有可阅读的正文。",
+          selectors: [{ tags: [...PRIMARY_CONTENT_TAGS] }],
+          emptyState: novelLike ? "当前还没有可阅读的正文。" : "当前还没有可阅读的主体内容。",
         },
         {
           id: "reader-reference",
-          label: "设定",
+          label: novelLike ? "设定" : "参考",
           slot: "reference",
           order: 1,
-          selectors: [{ tags: ["story.canon"] }],
-          emptyState: "当前还没有可对照的设定文件。",
+          selectors: [{ tags: [...REFERENCE_TAGS] }],
+          emptyState: novelLike ? "当前还没有可对照的设定文件。" : "当前还没有可对照的参考资料。",
         },
         {
           id: "reader-reports",
           label: "报告",
           slot: "reports",
           order: 2,
-          selectors: [{ tags: ["qa.report"] }],
-          emptyState: "当前还没有审校或验收报告。",
+          selectors: [{ tags: [...REPORT_TAGS] }, { resourceTypes: ["report"] }],
+          emptyState: novelLike ? "当前还没有审校或验收报告。" : "当前还没有可回看的检查或验收报告。",
         },
       ];
     case "consistency":
       return [
         {
           id: "consistency-truth",
-          label: "真相源",
+          label: novelLike ? "真相源" : "规则参考",
           slot: "truth",
           order: 0,
-          selectors: [{ tags: ["story.canon"] }],
+          selectors: [{ tags: [...REFERENCE_TAGS] }, { resourceTypes: ["document", "dataset"] }],
         },
         {
           id: "consistency-reports",
-          label: "过程报告",
+          label: novelLike ? "过程报告" : "检查报告",
           slot: "reports",
           order: 1,
-          selectors: [{ tags: ["qa.report"] }],
+          selectors: [{ tags: [...REPORT_TAGS] }, { resourceTypes: ["report"] }],
         },
         {
           id: "consistency-tools",
@@ -146,10 +158,10 @@ function buildDefaultSections(
       return [
         {
           id: "knowledge-sources",
-          label: "来源文件",
+          label: "来源与依据",
           slot: "sources",
           order: 0,
-          selectors: [{ tags: ["company.knowledge"] }, { tags: ["qa.report"] }],
+          selectors: [{ tags: ["company.knowledge", "domain.reference"] }, { tags: [...REPORT_TAGS] }],
         },
       ];
     case "workbench":
@@ -161,7 +173,7 @@ function buildDefaultSections(
           label: "审阅报告",
           slot: "reports",
           order: 0,
-          selectors: [{ tags: ["qa.report"] }],
+          selectors: [{ tags: [...REPORT_TAGS] }, { resourceTypes: ["report"] }],
         },
       ];
     case "dashboard":
@@ -180,14 +192,15 @@ function buildDefaultSections(
 }
 
 function buildDefaultActions(
-  template: CompanyWorkspaceApp["template"],
+  app: Pick<CompanyWorkspaceApp, "template" | "title" | "slug">,
 ): WorkspaceAppManifestAction[] {
-  switch (template) {
+  const novelLike = looksLikeNovelApp(app);
+  switch (app.template) {
     case "reader":
       return [
         {
           id: "trigger-reader-index",
-          label: "重建阅读索引",
+          label: novelLike ? "重建阅读索引" : "重建内容索引",
           actionType: "trigger_skill",
           target: "reader.build-index",
         },
@@ -196,6 +209,13 @@ function buildDefaultActions(
           label: "刷新 AppManifest",
           actionType: "refresh_manifest",
           target: "reader",
+        },
+        {
+          id: "report-reader-issue",
+          label: novelLike ? "反馈阅读器问题" : "反馈查看器问题",
+          actionType: "report_issue",
+          target: "reader.build-index",
+          input: { type: "bad_result" },
         },
       ];
     case "consistency":
@@ -208,9 +228,16 @@ function buildDefaultActions(
         },
         {
           id: "request-consistency-checker",
-          label: "让 CTO 开发一致性工具",
+          label: novelLike ? "让 CTO 开发一致性工具" : "让 CTO 开发校验工具",
           actionType: "workbench_request",
           target: "consistency-checker",
+        },
+        {
+          id: "report-consistency-issue",
+          label: "反馈检查结果异常",
+          actionType: "report_issue",
+          target: "consistency.check",
+          input: { type: "bad_result" },
         },
       ];
     case "review-console":
@@ -220,6 +247,29 @@ function buildDefaultActions(
           label: "执行发布前检查",
           actionType: "trigger_skill",
           target: "review.precheck",
+        },
+        {
+          id: "request-review-console",
+          label: novelLike ? "让 CTO 补审阅工具" : "让 CTO 补审阅控制台",
+          actionType: "workbench_request",
+          target: "chapter-review-console",
+        },
+        {
+          id: "report-review-precheck-issue",
+          label: "反馈预检结果异常",
+          actionType: "report_issue",
+          target: "review.precheck",
+          input: { type: "bad_result" },
+        },
+      ];
+    case "dashboard":
+      return [
+        {
+          id: "report-dashboard-issue",
+          label: "反馈仪表盘问题",
+          actionType: "report_issue",
+          target: "dashboard",
+          input: { type: "runtime_error" },
         },
       ];
     case "workbench":
@@ -231,14 +281,47 @@ function buildDefaultActions(
   }
 }
 
+function mergeManifestActions(
+  baseActions: WorkspaceAppManifestAction[] | undefined,
+  parsedActions: WorkspaceAppManifestAction[] | undefined,
+) {
+  if (!baseActions?.length) {
+    return parsedActions;
+  }
+  if (!parsedActions?.length) {
+    return baseActions;
+  }
+
+  const merged: WorkspaceAppManifestAction[] = [];
+  const seen = new Set<string>();
+
+  for (const action of parsedActions) {
+    if (seen.has(action.id)) {
+      continue;
+    }
+    merged.push(action);
+    seen.add(action.id);
+  }
+
+  for (const action of baseActions) {
+    if (seen.has(action.id)) {
+      continue;
+    }
+    merged.push(action);
+    seen.add(action.id);
+  }
+
+  return merged;
+}
+
 function buildDefaultManifest(app: Pick<CompanyWorkspaceApp, "id" | "slug" | "title" | "template">) {
   return {
     version: 1,
     appId: app.id,
     appSlug: app.slug,
     title: app.title,
-    sections: buildDefaultSections(app.template),
-    actions: buildDefaultActions(app.template),
+    sections: buildDefaultSections(app),
+    actions: buildDefaultActions(app),
   } satisfies WorkspaceAppManifest;
 }
 
@@ -255,14 +338,48 @@ function isManifestArtifactCandidate(input: {
   );
 }
 
+function isFormalManifestArtifactSource(artifact: Pick<ArtifactRecord, "id">) {
+  return !artifact.id.startsWith("workspace:");
+}
+
+function isManifestArtifactCandidateForApp(
+  input: {
+    name?: string | null;
+    path?: string | null;
+    kind?: string | null;
+  },
+  app: Pick<CompanyWorkspaceApp, "slug" | "template">,
+) {
+  if (!isManifestArtifactCandidate(input)) {
+    return false;
+  }
+  const haystack = `${input.name ?? ""} ${input.path ?? ""}`.toLowerCase();
+  if (app.slug && haystack.includes(app.slug.toLowerCase())) {
+    return true;
+  }
+  if (app.template === "reader" && READER_MANIFEST_FILE_PATTERN.test(haystack)) {
+    return true;
+  }
+  return false;
+}
+
 function tagsForLegacyKind(kind: LegacyReaderManifestResourceKind) {
   switch (kind) {
     case "chapter":
-      return { resourceType: "document" as const, tags: ["story.chapter", "company.resource"] };
+      return {
+        resourceType: "document" as const,
+        tags: ["content.primary", "story.chapter", "company.resource"],
+      };
     case "canon":
-      return { resourceType: "document" as const, tags: ["story.canon", "company.resource"] };
+      return {
+        resourceType: "document" as const,
+        tags: ["domain.reference", "story.canon", "company.resource"],
+      };
     case "review":
-      return { resourceType: "report" as const, tags: ["qa.report", "company.resource"] };
+      return {
+        resourceType: "report" as const,
+        tags: ["ops.report", "qa.report", "company.resource"],
+      };
   }
 }
 
@@ -278,21 +395,50 @@ function isManagedWorkspaceControlFile(file: Pick<AppManifestWorkspaceFile, "nam
   return normalizedPath.split("/").some((segment) => MANAGED_WORKSPACE_CONTROL_FILE_NAMES.has(segment));
 }
 
+function isFormalManifestSourceFile(file: Pick<AppManifestWorkspaceFile, "resourceOrigin">) {
+  return file.resourceOrigin === "declared" || file.resourceOrigin === "manifest";
+}
+
 function inferDraftSlot(file: AppManifestWorkspaceFile): { slot: string; resourceType: ArtifactResourceType; tags: string[] } | null {
   if (isManagedWorkspaceControlFile(file)) {
     return null;
   }
 
   const haystack = `${file.name} ${file.path} ${file.previewText ?? ""}`.toLowerCase();
+  if (file.tags.some((tag) => PRIMARY_CONTENT_TAGS.includes(tag as (typeof PRIMARY_CONTENT_TAGS)[number]))) {
+    return {
+      slot: "content",
+      resourceType: file.resourceType === "other" ? "document" : file.resourceType,
+      tags: [...new Set(["content.primary", "company.resource", ...file.tags])],
+    };
+  }
+  if (file.tags.some((tag) => REFERENCE_TAGS.includes(tag as (typeof REFERENCE_TAGS)[number]))) {
+    return {
+      slot: "reference",
+      resourceType: file.resourceType === "other" ? "document" : file.resourceType,
+      tags: [...new Set(["domain.reference", "company.resource", ...file.tags])],
+    };
+  }
+  if (file.tags.some((tag) => REPORT_TAGS.includes(tag as (typeof REPORT_TAGS)[number])) || file.resourceType === "report") {
+    return {
+      slot: "reports",
+      resourceType: "report",
+      tags: [...new Set(["ops.report", "qa.report", "company.resource", ...file.tags])],
+    };
+  }
   if (/(第?\s*\d+\s*章|chapter|chapters\/|正文|剧情|段落)/i.test(haystack)) {
-    return { slot: "content", resourceType: "document", tags: ["story.chapter", "company.resource"] };
+    return {
+      slot: "content",
+      resourceType: "document",
+      tags: ["content.primary", "story.chapter", "company.resource"],
+    };
   }
   if (
-    /(设定|人物|时间线|伏笔|世界观|canon|timeline|character|world|architecture|system-architecture|blueprint|技术架构|技术底座|架构)/i.test(
+    /(设定|人物|时间线|伏笔|世界观|canon|timeline|character|world|reference|guide|manual|architecture|system-architecture|blueprint|技术架构|技术底座|架构|说明书|手册|规格)/i.test(
       haystack,
     )
   ) {
-    const tags = new Set<string>(["story.canon", "company.resource"]);
+    const tags = new Set<string>(["domain.reference", "story.canon", "company.resource"]);
     if (/(时间线|timeline)/i.test(haystack)) {
       tags.add("story.timeline");
     }
@@ -302,14 +448,22 @@ function inferDraftSlot(file: AppManifestWorkspaceFile): { slot: string; resourc
     return { slot: "reference", resourceType: "document", tags: [...tags] };
   }
   if (
-    /(审校|review|报告|验收|检查|check|summary|总结|precheck|assessment|guide|plan|playbook|manual|ops|operations|运营|流程|注册|登录|发布)/i.test(
+    /(审校|review|报告|验收|检查|check|summary|总结|precheck|assessment|plan|playbook|ops|operations|运营|流程|注册|登录|发布|复盘|incident)/i.test(
       haystack,
     )
   ) {
-    return { slot: "reports", resourceType: "report", tags: ["qa.report", "company.resource"] };
+    return {
+      slot: "reports",
+      resourceType: "report",
+      tags: ["ops.report", "qa.report", "company.resource"],
+    };
   }
   if (/(^|\/)docs\//i.test(file.path) && /\.(md|mdx|txt)$/i.test(file.path)) {
-    return { slot: "reports", resourceType: "report", tags: ["qa.report", "company.resource"] };
+    return {
+      slot: "reference",
+      resourceType: "document",
+      tags: ["domain.reference", "company.knowledge", "company.resource"],
+    };
   }
   return null;
 }
@@ -472,7 +626,7 @@ function parseWorkspaceAppManifestContent(
       draft: parsed.draft === true || parsed.sourceLabel === "系统草案",
       sections,
       resources: resources.length > 0 ? resources : undefined,
-      actions: actions.length > 0 ? actions : base.actions,
+      actions: mergeManifestActions(base.actions, actions),
     };
   } catch {
     return parseLegacyReaderManifest(content, app, sourceLabel);
@@ -560,7 +714,9 @@ export function resolveWorkspaceAppManifest(input: {
 }): WorkspaceAppManifest {
   const directArtifact =
     input.app.manifestArtifactId
-      ? input.artifacts.find((artifact) => artifact.id === input.app.manifestArtifactId) ?? null
+      ? input.artifacts.find(
+          (artifact) => artifact.id === input.app.manifestArtifactId && isFormalManifestArtifactSource(artifact),
+        ) ?? null
       : null;
   if (directArtifact) {
     const manifest = parseWorkspaceAppManifestContent(
@@ -574,12 +730,16 @@ export function resolveWorkspaceAppManifest(input: {
   }
 
   const artifactCandidates = input.artifacts
+    .filter((artifact) => isFormalManifestArtifactSource(artifact))
     .filter((artifact) =>
-      isManifestArtifactCandidate({
-        name: artifact.sourceName ?? artifact.title,
-        path: artifact.sourcePath ?? artifact.sourceUrl,
-        kind: artifact.kind,
-      }),
+      isManifestArtifactCandidateForApp(
+        {
+          name: artifact.sourceName ?? artifact.title,
+          path: artifact.sourcePath ?? artifact.sourceUrl,
+          kind: artifact.kind,
+        },
+        input.app,
+      ),
     )
     .sort((left, right) => right.updatedAt - left.updatedAt);
   for (const artifact of artifactCandidates) {
@@ -594,7 +754,10 @@ export function resolveWorkspaceAppManifest(input: {
   }
 
   const fileCandidates = input.files
-    .filter((file) => isManifestArtifactCandidate({ name: file.name, path: file.path }))
+    .filter((file) =>
+      isFormalManifestSourceFile(file)
+      && isManifestArtifactCandidateForApp({ name: file.name, path: file.path }, input.app),
+    )
     .sort((left, right) => right.path.localeCompare(left.path));
   for (const file of fileCandidates) {
     const manifest = parseWorkspaceAppManifestContent(file.previewText ?? "", input.app, file.name);
@@ -622,6 +785,7 @@ export function applyWorkspaceAppManifest<T extends AppManifestWorkspaceFile>(
       previewText: resource.summary ?? file.previewText,
       resourceType: resource.resourceType ?? file.resourceType,
       tags: [...nextTags],
+      resourceOrigin: "manifest",
     };
   });
 }

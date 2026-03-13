@@ -13,6 +13,7 @@ import {
   isSupportRequestActive,
   normalizeSupportRequestRecord,
 } from "../../../domain/delegation/support-request";
+import { normalizeEscalationRecord } from "../../../domain/delegation/escalation";
 
 type RuntimeSet = (partial: Partial<CompanyRuntimeState>) => void;
 type RuntimeGet = () => CompanyRuntimeState;
@@ -94,7 +95,8 @@ export function buildAutonomyActions(
 
     upsertEscalationRecord: (escalation) => {
       const { activeEscalations, activeCompany } = get();
-      const next = upsertRecord(activeEscalations, escalation);
+      const normalizedEscalation = normalizeEscalationRecord(escalation);
+      const next = upsertRecord(activeEscalations, normalizedEscalation);
       if (!next) {
         return;
       }
@@ -110,7 +112,7 @@ export function buildAutonomyActions(
     },
 
     replaceEscalationRecords: (escalations) => {
-      const sorted = sortByUpdatedAt(escalations);
+      const sorted = sortByUpdatedAt(escalations.map(normalizeEscalationRecord));
       const activeCompany = get().activeCompany;
       set({
         activeEscalations: sorted,

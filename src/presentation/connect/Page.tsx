@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Zap, HardDrive, Terminal, RotateCw } from "lucide-react";
 import {
-  collectAuthorityGuidance,
+  buildAuthorityGuidanceItems,
+  collectAuthorityRepairSteps,
   resolveAuthorityControlState,
   resolveAuthorityStorageState,
 } from "../../application/gateway/authority-health";
@@ -124,12 +125,14 @@ function ConnectForm({
     authorityProbe.status === "ready" ? resolveAuthorityStorageState(authorityProbe.health) : null;
   const authorityProbeSteps =
     authorityProbe.status === "ready"
-      ? collectAuthorityGuidance(authorityProbe.health)
+      ? collectAuthorityRepairSteps(authorityProbe.health)
       : [
           "确认 `npm run dev` 或 `npm run authority:start` 已启动",
           `检查控制面地址是否正确（当前 ${url || currentProvider?.defaultUrl || "http://127.0.0.1:18790"}）`,
           "如果 authority 已开启鉴权，确认 Token 输入无误",
         ];
+  const authorityProbeGuidance =
+    authorityProbe.status === "ready" ? buildAuthorityGuidanceItems(authorityProbe.health, 3) : [];
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -276,7 +279,8 @@ function ConnectForm({
                   authorityProbe.status === "ready"
                     ? authorityStorageState === "ready" && authorityProbe.health.executor.state === "ready"
                       ? "控制面已经响应，数据库、备份目录和执行器状态都已通过当前检查。"
-                      : authorityProbe.health.authority.doctor.issues[0] ??
+                      : authorityProbeGuidance[0]?.summary ??
+                        authorityProbe.health.authority.doctor.issues[0] ??
                         authorityProbe.health.authority.preflight.warnings[0] ??
                         authorityProbe.health.authority.preflight.issues[0] ??
                         authorityProbe.health.executor.note
@@ -284,13 +288,17 @@ function ConnectForm({
                 }
                 detail={
                   authorityProbe.status === "ready"
-                    ? `${authorityProbe.health.authority.dbPath} · schema v${
-                        authorityProbe.health.authority.doctor.schemaVersion ?? "?"
-                      } · 备份 ${authorityProbe.health.authority.doctor.backupCount} 份 · 最新备份 ${
-                        authorityProbe.health.authority.doctor.latestBackupAt
-                          ? formatTime(authorityProbe.health.authority.doctor.latestBackupAt)
-                          : "尚无"
-                      }`
+                    ? authorityProbeGuidance[0]?.command
+                      ? `${authorityProbe.health.authority.dbPath} · ${
+                          authorityProbeGuidance[0].title
+                        } · 推荐动作 ${authorityProbeGuidance[0].command}`
+                      : `${authorityProbe.health.authority.dbPath} · schema v${
+                          authorityProbe.health.authority.doctor.schemaVersion ?? "?"
+                        } · integrity ${authorityProbe.health.authority.doctor.integrityStatus} · 备份 ${authorityProbe.health.authority.doctor.backupCount} 份 · 最新备份 ${
+                          authorityProbe.health.authority.doctor.latestBackupAt
+                            ? formatTime(authorityProbe.health.authority.doctor.latestBackupAt)
+                            : "尚无"
+                        }`
                     : authorityProbe.error
                 }
                 steps={authorityProbeSteps}
@@ -303,7 +311,9 @@ function ConnectForm({
                           state: authorityStorageState ?? "degraded",
                           summary:
                             authorityProbe.health.authority.preflight.warnings[0] ??
+                            authorityProbe.health.authority.preflight.issues[0] ??
                             `schema v${authorityProbe.health.authority.preflight.schemaVersion ?? "?"} · ` +
+                            `integrity ${authorityProbe.health.authority.preflight.integrityStatus} · ` +
                             (authorityProbe.health.authority.preflight.dbExists
                               ? "本地 authority SQLite 已存在。"
                               : "首次启动将自动初始化 authority SQLite。"),

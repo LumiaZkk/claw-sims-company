@@ -9,13 +9,13 @@ import {
   MessageSquare,
   RefreshCcw,
   Send,
-  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useCeoCockpitViewModel } from "../../application/governance/ceo-cockpit-view-model";
-import { buildCeoHomeSnapshot, type ManagerStatusCard } from "../../application/governance/ceo-home-state";
+import { buildCeoHomeSnapshot } from "../../application/governance/ceo-home-state";
+import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { Avatar, AvatarFallback, AvatarImage } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -32,9 +32,11 @@ import {
 import { useGatewayStore } from "../../application/gateway";
 import { toast } from "../../components/system/toast-store";
 import { useCeoRuntimeState } from "./hooks/useCeoRuntimeState";
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 import { usePageVisibility } from "../../lib/use-page-visibility";
 import { formatTime, getAvatarUrl } from "../../lib/utils";
 import { ExecutiveSummaryStrip } from "../shared/ExecutiveSummaryStrip";
+import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 
 export function CEOHomePageScreen() {
   const navigate = useNavigate();
@@ -56,6 +58,7 @@ export function CEOHomePageScreen() {
   const connected = useGatewayStore((state) => state.connected);
   const manifest = useGatewayStore((state) => state.manifest);
   const isPageVisible = usePageVisibility();
+  const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
 
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
@@ -112,34 +115,8 @@ export function CEOHomePageScreen() {
   if (!activeCompany || !ceo || !homeState) {
     return <div className="p-8 text-center text-muted-foreground">未选择正在运营的公司组织</div>;
   }
-  const { ceoSurface, orgAdvisor, outcomeReport, retrospective, ceoMemo, managerCards, activityItems } =
+  const { ceoSurface, orgAdvisor, outcomeReport, retrospective, ceoMemo, activityItems } =
     homeState;
-
-  const managementStateLabel = (state: ManagerStatusCard["state"]) => {
-    if (state === "running") {
-      return "执行中";
-    }
-    if (state === "idle") {
-      return "待命";
-    }
-    if (state === "no_signal") {
-      return "无信号";
-    }
-    return "离线";
-  };
-
-  const managementStateClass = (state: ManagerStatusCard["state"]) => {
-    if (state === "running") {
-      return "border-sky-200 bg-sky-50 text-sky-700";
-    }
-    if (state === "idle") {
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    }
-    if (state === "no_signal") {
-      return "border-violet-200 bg-violet-50 text-violet-700";
-    }
-    return "border-slate-200 bg-slate-50 text-slate-500";
-  };
 
   const quickPrompts = [
     "先别展开太多，直接给我一个最小可执行推进方案。",
@@ -300,37 +277,12 @@ export function CEOHomePageScreen() {
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200 bg-white shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldAlert className="h-4 w-4 text-violet-600" />
-              部门负责人状态
-            </CardTitle>
-            <CardDescription>CEO 默认先对部门经理派单，再由部门内部自治拆解和收口。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {managerCards.map((manager) => (
-              <div key={manager.agentId} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      {manager.label} · {manager.departmentName}
-                    </div>
-                    <div className="mt-1 text-xs leading-5 text-slate-500">
-                      {manager.role} [{manager.departmentKind}] · {manager.subtitle}
-                    </div>
-                  </div>
-                  <Badge variant="outline" className={managementStateClass(manager.state)}>
-                    {managementStateLabel(manager.state)}
-                  </Badge>
-                </div>
-              </div>
-            ))}
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs leading-6 text-slate-500">
-              {"默认路径是 CEO -> 部门负责人 -> 部门成员。只有 CEO 明确 override 时，才直接绕过部门经理派给个人。"}
-            </div>
-          </CardContent>
-        </Card>
+        <CanonicalRuntimeSummaryCard
+          summary={runtimeSummary}
+          title="运行态总览"
+          description="负责人运行状态、等待链和当前瓶颈统一从 `/runtime` 复用，不再在 CEO 首页单独解释。"
+          compact
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr,1fr]">
@@ -457,7 +409,27 @@ export function CEOHomePageScreen() {
                   <ArrowRight className="mr-2 h-4 w-4" />
                   进入工作看板
                 </Button>
-                <Button variant="outline" onClick={() => navigate("/ops")} className="sm:col-span-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    void appendOperatorActionAuditEvent({
+                      companyId: activeCompany.id,
+                      action: "ops_route_open",
+                      surface: "ceo",
+                      outcome: "succeeded",
+                      details: {
+                        route: "/ops",
+                        activeBlockers: ceoSurface.activeBlockers,
+                        openRequests: ceoSurface.openRequests,
+                        openEscalations: ceoSurface.openEscalations,
+                        pendingHumanDecisions: ceoSurface.pendingHumanDecisions,
+                        manualTakeovers: ceoSurface.manualTakeovers,
+                      },
+                    });
+                    navigate("/ops");
+                  }}
+                  className="sm:col-span-2"
+                >
                   <Layers3 className="mr-2 h-4 w-4" />
                   查看运营异常
                 </Button>

@@ -82,4 +82,42 @@ describe("buildBoardTaskSurface", () => {
     expect(surface.doneSteps).toBe(1);
     expect(surface.wipSteps).toBe(1);
   });
+
+  it("prefers canonical session execution over local task fallback states", () => {
+    const fileTask = createFileTask({
+      summary: "旧历史里还写着等待交接，但权威状态已经恢复。",
+      state: "running",
+    });
+
+    const surface = buildBoardTaskSurface({
+      activeCompany: createCompany(),
+      companySessions: [],
+      currentTime: 3_000,
+      fileTasks: [fileTask],
+      sessionStates: new Map([
+        [
+          fileTask.sessionKey,
+          {
+            state: "completed",
+            label: "已完成",
+            summary: "当前链路最近一次交付已经完成。",
+            actionable: false,
+            tone: "emerald",
+            evidence: [],
+          },
+        ],
+      ]),
+      sessionTakeoverPacks: new Map(),
+      requirementScope: null,
+      currentWorkItem: null,
+      activeWorkItem: null,
+      requirementOverview: null,
+      strategicRequirementOverview: null,
+      isStrategicRequirement: false,
+      requirementSyntheticTask: null,
+    });
+
+    expect(surface.taskSequence[0]?.execution.state).toBe("completed");
+    expect(surface.taskSequence[0]?.execution.label).toBe("已完成");
+  });
 });

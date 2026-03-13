@@ -6,9 +6,9 @@ import { toast } from "../../components/system/toast-store";
 
 export function CompanyCreatePresentationPage() {
   const navigate = useNavigate();
-  
+
   const [step, setStep] = useState(1);
-  const [selectedTemplate, setSelectedTemplate] = useState("novel-studio");
+  const [selectedTemplate, setSelectedTemplate] = useState("content-factory");
   const [companyName, setCompanyName] = useState("");
   const [blueprintText, setBlueprintText] = useState("");
   const {
@@ -160,9 +160,14 @@ export function CompanyCreatePresentationPage() {
                             if (!result) {
                               return;
                             }
-                            toast.success("公司创建完成", `「${result.companyName}」已上线。`);
+                            toast.success(
+                              result.warnings?.length ? "公司已创建，执行器补齐中" : "公司创建完成",
+                              result.warnings?.length
+                                ? `「${result.companyName}」已经创建成功，但执行器仍在补齐。你现在就可以先进入工作目录。`
+                                : `「${result.companyName}」已上线。`,
+                            );
                             window.setTimeout(() => {
-                              navigate("/");
+                              navigate("/runtime");
                             }, 1500);
                           })
                           .catch((error) => {

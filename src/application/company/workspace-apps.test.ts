@@ -72,6 +72,27 @@ describe("workspace-apps", () => {
     expect(resolveWorkspaceAppSurface(apps[0]!)).toBe("template");
   });
 
+  it("provides generic recommended apps for non-novel companies", () => {
+    const company = makeCompany({
+      name: "游戏工作室",
+      description: "围绕关卡设计、模拟验证和上线验收协作",
+      template: "generic",
+      employees: [
+        { agentId: "ceo", nickname: "CEO", role: "Chief Executive Officer", isMeta: true, metaRole: "ceo" },
+        { agentId: "cto", nickname: "CTO", role: "Chief Technology Officer", isMeta: true, metaRole: "cto" },
+        { agentId: "designer", nickname: "设计", role: "游戏设计师", isMeta: false },
+      ],
+    });
+
+    expect(isNovelCompany(company)).toBe(false);
+    expect(getCompanyWorkspaceApps(company).map((app) => app.title)).toEqual([
+      "内容查看器",
+      "规则与校验",
+      "知识与验收",
+      "CTO 工具工坊",
+    ]);
+  });
+
   it("publishes a single template app while preserving the rest of the workspace entry set", () => {
     const seededApps = buildRecommendedWorkspaceApps(makeCompany()).map((app) =>
       resolveWorkspaceAppTemplate(app) === "reader"
@@ -119,5 +140,22 @@ describe("workspace-apps", () => {
     expect(request.title).toBe("开发小说阅读器");
     expect(request.prompt).toContain("当前公司");
     expect(request.prompt).toContain("小说阅读器");
+  });
+
+  it("builds generic CTO prompts for non-novel companies", () => {
+    const company = makeCompany({
+      name: "游戏工作室",
+      description: "围绕关卡设计、模拟验证和上线验收协作",
+      template: "generic",
+      employees: [
+        { agentId: "ceo", nickname: "CEO", role: "Chief Executive Officer", isMeta: true, metaRole: "ceo" },
+        { agentId: "cto", nickname: "CTO", role: "Chief Technology Officer", isMeta: true, metaRole: "cto" },
+      ],
+    });
+
+    const request = buildWorkspaceToolRequest(company, "novel-reader");
+    expect(request.title).toBe("开发内容查看器");
+    expect(request.prompt).toContain("主体内容");
+    expect(request.prompt).toContain("workspace-app-manifest.reader.json");
   });
 });

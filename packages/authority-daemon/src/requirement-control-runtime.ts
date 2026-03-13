@@ -14,6 +14,8 @@ import type {
 } from "../../../src/domain";
 import { readAssistantControlEnvelope } from "../../../src/domain";
 import type { AuthorityCompanyRuntimeSnapshot } from "../../../src/infrastructure/authority/contract";
+import { applyAuthorityOwnedRuntimeSlices } from "../../../src/infrastructure/authority/runtime-slice-ownership";
+import { hasCompatibilityRuntimeSlices } from "../../../src/infrastructure/authority/runtime-slice-ownership";
 import type { ChatMessage } from "../../../src/infrastructure/gateway/openclaw/sessions";
 
 type AssistantControlUpdate = {
@@ -431,6 +433,12 @@ export function mergeAuthorityControlledRuntimeSlices(input: {
   currentRuntime: AuthorityCompanyRuntimeSnapshot;
   incomingRuntime: AuthorityCompanyRuntimeSnapshot;
 }): AuthorityCompanyRuntimeSnapshot {
+  if (!hasCompatibilityRuntimeSlices()) {
+    return applyAuthorityOwnedRuntimeSlices({
+      snapshot: input.incomingRuntime,
+      authorityRuntime: input.currentRuntime,
+    });
+  }
   const conversationStateMap = new Map(
     input.currentRuntime.activeConversationStates.map((record) => [record.conversationId, record] as const),
   );
@@ -462,21 +470,25 @@ export function mergeAuthorityControlledRuntimeSlices(input: {
     });
   });
 
-  const decisionTicketMap = new Map(
-    input.currentRuntime.activeDecisionTickets.map((ticket) => [ticket.id, ticket] as const),
-  );
-  input.incomingRuntime.activeDecisionTickets.forEach((ticket) => {
-    const existing = decisionTicketMap.get(ticket.id);
-    if (!existing || ticket.updatedAt >= existing.updatedAt) {
-      decisionTicketMap.set(ticket.id, ticket);
-    }
+  const mergedRuntime = applyAuthorityOwnedRuntimeSlices({
+    snapshot: input.incomingRuntime,
+    authorityRuntime: input.currentRuntime,
   });
 
-  return {
-    ...input.incomingRuntime,
-    activeConversationStates: [...conversationStateMap.values()].sort((left, right) => right.updatedAt - left.updatedAt),
-    activeDecisionTickets: [...decisionTicketMap.values()].sort((left, right) => right.updatedAt - left.updatedAt),
-  };
+  const reconciled = reconcileAuthorityRequirementRuntime({
+    company: null,
+    runtime: {
+      ...mergedRuntime,
+      activeConversationStates: [...conversationStateMap.values()].sort(
+        (left, right) => right.updatedAt - left.updatedAt,
+      ),
+    },
+  }).runtime;
+
+  return applyAuthorityOwnedRuntimeSlices({
+    snapshot: reconciled,
+    authorityRuntime: input.currentRuntime,
+  });
 }
 
 export function runtimeRequirementControlChanged(

@@ -7,6 +7,14 @@ import {
   reconcileActiveRequirementState,
 } from "./requirements";
 import type { CompanyRuntimeState, ConversationStateRecord, RuntimeGet, RuntimeSet } from "./types";
+import {
+  deleteAuthorityConversationState,
+  upsertAuthorityConversationState,
+} from "../../../application/gateway/authority-control";
+import {
+  applyAuthorityRuntimeCommandError,
+  applyAuthorityRuntimeSnapshotToStore,
+} from "../../authority/runtime-command";
 
 export function persistActiveConversationStates(
   companyId: string | null | undefined,
@@ -42,6 +50,7 @@ export function buildConversationStateActions(
   ) {
     const {
       activeCompany,
+      authorityBackedState,
       activeConversationStates,
       activeRequirementAggregates,
       activeRequirementEvidence,
@@ -51,6 +60,61 @@ export function buildConversationStateActions(
     } = get();
     if (!activeCompany || !conversationId) {
       return false;
+    }
+
+    if (authorityBackedState) {
+      const next = [...activeConversationStates];
+      const index = next.findIndex((record) => record.conversationId === conversationId);
+      if (index >= 0) {
+        const existing = next[index]!;
+        const merged: ConversationStateRecord = {
+          ...existing,
+          companyId: activeCompany.id,
+          updatedAt: Date.now(),
+          ...nextRecordPartial,
+        };
+        if (areConversationStateRecordsEquivalent(existing, merged)) {
+          return false;
+        }
+        next[index] = merged;
+      } else {
+        next.push({
+          companyId: activeCompany.id,
+          conversationId,
+          updatedAt: Date.now(),
+          currentWorkKey: null,
+          currentWorkItemId: null,
+          currentRoundId: null,
+          draftRequirement: null,
+          ...nextRecordPartial,
+        });
+      }
+      const sorted = next.sort((left, right) => right.updatedAt - left.updatedAt);
+      set({ activeConversationStates: sorted });
+      persistActiveConversationStates(activeCompany.id, sorted);
+      void upsertAuthorityConversationState({
+        companyId: activeCompany.id,
+        conversationId,
+        changes: nextRecordPartial,
+        timestamp: Date.now(),
+      })
+        .then((snapshot) => {
+          applyAuthorityRuntimeSnapshotToStore({
+            operation: "command",
+            snapshot,
+            route: "conversation-state.upsert",
+            set,
+            get,
+          });
+        })
+        .catch((error) => {
+          applyAuthorityRuntimeCommandError({
+            error,
+            set,
+            fallbackMessage: "Failed to update conversation state through authority",
+          });
+        });
+      return true;
     }
 
     const nextRecord: ConversationStateRecord = {
@@ -156,6 +220,7 @@ export function buildConversationStateActions(
     clearConversationState: (conversationId) => {
       const {
         activeCompany,
+        authorityBackedState,
         activeConversationStates,
         activeRequirementAggregates,
         activeRequirementEvidence,
@@ -168,6 +233,31 @@ export function buildConversationStateActions(
       }
       const next = activeConversationStates.filter((record) => record.conversationId !== conversationId);
       if (next.length === activeConversationStates.length) {
+        return;
+      }
+      if (authorityBackedState) {
+        set({ activeConversationStates: next });
+        persistActiveConversationStates(activeCompany.id, next);
+        void deleteAuthorityConversationState({
+          companyId: activeCompany.id,
+          conversationId,
+        })
+          .then((snapshot) => {
+            applyAuthorityRuntimeSnapshotToStore({
+              operation: "command",
+              snapshot,
+              route: "conversation-state.delete",
+              set,
+              get,
+            });
+          })
+          .catch((error) => {
+            applyAuthorityRuntimeCommandError({
+              error,
+              set,
+              fallbackMessage: "Failed to clear conversation state through authority",
+            });
+          });
         return;
       }
       const reconciledRequirements = reconcileActiveRequirementState({

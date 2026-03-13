@@ -9,29 +9,41 @@ import {
   ScrollText,
   Wrench,
 } from "lucide-react";
+import { useMemo } from "react";
+import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatKnowledgeKindLabel } from "../../../application/artifact/shared-knowledge";
-import {
-  resolveWorkspaceAppSurface,
-  resolveWorkspaceAppTemplate,
-} from "../../../application/company/workspace-apps";
+import { resolveWorkspaceAppSurface, resolveWorkspaceAppTemplate } from "../../../application/company/workspace-apps";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import {
+  CAPABILITY_ISSUE_STATUS_LABEL,
+  CAPABILITY_ISSUE_ACTION_LABEL,
+  CAPABILITY_REQUEST_STATUS_LABEL,
+  CAPABILITY_REQUEST_ACTION_LABEL,
+  NEXT_CAPABILITY_ISSUE_STATUS,
+  NEXT_CAPABILITY_REQUEST_STATUS,
+  buildSkillReleaseReadiness,
+  buildCapabilityVerificationQueue,
   type WorkspaceAppManifest,
   type WorkspaceAppManifestAction,
+  type WorkspaceEmbeddedAppRuntime,
   RESOURCE_KIND_LABEL,
+  buildCapabilityIssueBoard,
+  buildCapabilityRequestBoard,
   isWorkspaceReaderManifestDraft,
   type WorkspaceReaderManifest,
   WORKBENCH_TOOL_CARDS,
   formatWorkspaceBytes,
+  type ResolvedWorkflowCapabilityBinding,
   type WorkspaceReaderIndex,
   type WorkspaceFileRow,
   type WorkspaceWorkbenchTool,
+  type CapabilityBoardLane,
 } from "../../../application/workspace";
-import type { SharedKnowledgeItem } from "../../../domain/artifact/types";
+import type { ArtifactResourceType, SharedKnowledgeItem } from "../../../domain/artifact/types";
 import type {
   CapabilityIssueRecord,
   CapabilityIssueStatus,
@@ -45,6 +57,7 @@ import type {
   SkillDefinitionStatus,
   SkillRunRecord,
   SkillRunStatus,
+  WorkflowCapabilityBinding,
 } from "../../../domain/org/types";
 import { cn, formatTime } from "../../../lib/utils";
 
@@ -67,6 +80,22 @@ type WorkspaceAppSummary = {
   } | null;
 };
 
+const artifactResourceTypeLabel: Record<ArtifactResourceType, string> = {
+  document: "文档",
+  report: "报告",
+  dataset: "数据",
+  media: "媒体",
+  state: "状态",
+  tool: "工具",
+  other: "其他",
+};
+
+const resourceOriginLabel: Record<WorkspaceFileRow["resourceOrigin"], string> = {
+  declared: "正式资源",
+  manifest: "Manifest",
+  inferred: "推断",
+};
+
 type WorkspaceAnchor = {
   id: string;
   label: string;
@@ -83,6 +112,7 @@ type WorkspacePageContentProps = {
   selectedFileKey: string | null;
   selectedFileContent: string;
   loadingFileKey: string | null;
+  embeddedRuntime: WorkspaceEmbeddedAppRuntime<WorkspaceFileRow> | null;
   activeWorkspaceWorkItem: {
     id: string;
     title: string;
@@ -109,6 +139,9 @@ type WorkspacePageContentProps = {
   supplementaryFiles: WorkspaceFileRow[];
   workspaceFiles: WorkspaceFileRow[];
   anchors: WorkspaceAnchor[];
+  workflowCapabilityBindingCatalog: WorkflowCapabilityBinding[];
+  workflowCapabilityBindingsAreExplicit: boolean;
+  workflowCapabilityBindings: ResolvedWorkflowCapabilityBinding[];
   ctoLabel: string | null;
   businessLeadLabel: string | null;
   skillDefinitions: SkillDefinition[];
@@ -117,10 +150,19 @@ type WorkspacePageContentProps = {
   capabilityIssues: CapabilityIssueRecord[];
   publishedAppTemplates: CompanyWorkspaceAppTemplate[];
   loadingIndex: boolean;
+  executorProvisioning: {
+    state: "ready" | "degraded" | "blocked";
+    pendingAgentIds?: string[];
+    lastError?: string | null;
+    updatedAt: number;
+  } | null;
   onRefreshIndex: () => void;
+  onRetryCompanyProvisioning: () => void | Promise<void>;
   onRunAppManifestAction: (action: WorkspaceAppManifestAction) => void | Promise<void>;
   onSelectApp: (appId: string) => void;
   onSelectFile: (fileKey: string) => void;
+  onSelectEmbeddedSection: (slot: string) => void;
+  onSelectEmbeddedFile: (fileKey: string) => void;
   onSelectKnowledge: (knowledgeId: string) => void;
   onOpenCtoWorkbench: (tool: WorkspaceWorkbenchTool) => void;
   onPublishTemplateApp: (template: "reader" | "consistency" | "review-console") => void | Promise<void>;
@@ -133,8 +175,18 @@ type WorkspacePageContentProps = {
     detail?: string;
     appId?: string | null;
     skillId?: string | null;
+    contextActionId?: string | null;
+    contextAppSection?: string | null;
+    contextFileKey?: string | null;
+    contextFileName?: string | null;
+    contextRunId?: string | null;
   }) => void | Promise<void>;
   onUpdateSkillStatus: (skillId: string, status: SkillDefinitionStatus) => void | Promise<void>;
+  onRunSkillSmokeTest: (skillId: string) => void | Promise<void>;
+  onTriggerSkill: (skillId: string, appId?: string | null) => void | Promise<void>;
+  onPublishWorkflowCapabilityBindings: () => void | Promise<void>;
+  onRestoreWorkflowCapabilityBindings: () => void | Promise<void>;
+  onToggleWorkflowCapabilityBindingRequired: (bindingId: string) => void | Promise<void>;
   onUpdateCapabilityRequestStatus: (
     requestId: string,
     status: CapabilityRequestStatus,
@@ -164,6 +216,321 @@ function renderWorkspaceAppIcon(template: CompanyWorkspaceAppTemplate) {
     case "dashboard":
       return <RefreshCcw className="h-5 w-5" />;
   }
+}
+
+const SKILL_STATUS_LABEL: Record<SkillDefinitionStatus, string> = {
+  draft: "草稿",
+  ready: "可用",
+  degraded: "降级",
+  retired: "停用",
+};
+
+function formatBindingMatchLabel(matchedBy: ResolvedWorkflowCapabilityBinding["matchedBy"]) {
+  return matchedBy
+    .map((item) =>
+      item === "stage" ? "阶段命中" : item === "nextAction" ? "下一步命中" : "标题命中",
+    )
+    .join(" / ");
+}
+
+function WorkflowCapabilitySection({
+  workflowCapabilityBindings: bindings,
+  onSelectApp,
+  onPublishTemplateApp,
+  onTriggerSkill,
+}: Pick<
+  WorkspacePageContentProps,
+  "workflowCapabilityBindings" | "onSelectApp" | "onPublishTemplateApp" | "onTriggerSkill"
+>) {
+  if (bindings.length === 0) {
+    return null;
+  }
+
+  const publishableTemplates = new Set<"reader" | "consistency" | "review-console">([
+    "reader",
+    "consistency",
+    "review-console",
+  ]);
+
+  return (
+    <Card className="border-slate-200/80 shadow-sm">
+      <CardHeader>
+        <CardTitle className="text-base">当前阶段建议能力</CardTitle>
+        <CardDescription>这些 App / 能力是根据当前工作项的阶段和下一步动作自动匹配出来的，帮助团队知道现在该用什么。</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {bindings.map((binding) => (
+          <div key={binding.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-950">{binding.label}</div>
+                {binding.guidance ? (
+                  <div className="mt-1 text-xs leading-5 text-slate-500">{binding.guidance}</div>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={binding.required ? "default" : "secondary"}>
+                  {binding.required ? "必用" : "建议"}
+                </Badge>
+                <Badge variant="outline">{formatBindingMatchLabel(binding.matchedBy)}</Badge>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {binding.apps.map((app) => (
+                <Button key={app.id} type="button" size="sm" variant="outline" onClick={() => onSelectApp(app.id)}>
+                  打开 {app.title}
+                </Button>
+              ))}
+              {binding.skills.map((skill) => (
+                <Button
+                  key={skill.id}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={skill.status !== "ready"}
+                  onClick={() => void onTriggerSkill(skill.id, binding.apps[0]?.id ?? null)}
+                >
+                  {skill.status === "ready"
+                    ? `运行 ${skill.title}`
+                    : `${skill.title} · ${SKILL_STATUS_LABEL[skill.status]}`}
+                </Button>
+              ))}
+              {binding.missingAppTemplates
+                .filter((template): template is "reader" | "consistency" | "review-console" =>
+                  publishableTemplates.has(template as "reader" | "consistency" | "review-console"),
+                )
+                .map((template) => (
+                  <Button
+                    key={`publish:${template}`}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void onPublishTemplateApp(template)}
+                  >
+                    发布 {template === "reader" ? "阅读器" : template === "consistency" ? "一致性中心" : "审阅控制台"}
+                  </Button>
+                ))}
+            </div>
+            {binding.missingSkillIds.length > 0 ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+                缺少能力：{binding.missingSkillIds.join("、")}。当前阶段已经命中这条能力绑定，建议 CTO 继续补齐对应能力实现。
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SelectedAppGovernanceSection({
+  selectedApp,
+  capabilityRequests,
+  capabilityIssues,
+  onOpenCtoChat,
+  onUpdateCapabilityRequestStatus,
+  onUpdateCapabilityIssueStatus,
+}: Pick<
+  WorkspacePageContentProps,
+  | "selectedApp"
+  | "capabilityRequests"
+  | "capabilityIssues"
+  | "onOpenCtoChat"
+  | "onUpdateCapabilityRequestStatus"
+  | "onUpdateCapabilityIssueStatus"
+>) {
+  const relatedRequests = useMemo(
+    () =>
+      [...capabilityRequests]
+        .filter((request) => request.appId === selectedApp.id)
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 3),
+    [capabilityRequests, selectedApp.id],
+  );
+  const relatedIssues = useMemo(
+    () =>
+      [...capabilityIssues]
+        .filter((issue) => issue.appId === selectedApp.id)
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 3),
+    [capabilityIssues, selectedApp.id],
+  );
+  const activeRequestCount = capabilityRequests.filter(
+    (request) => request.appId === selectedApp.id && request.status !== "closed",
+  ).length;
+  const activeIssueCount = capabilityIssues.filter(
+    (issue) => issue.appId === selectedApp.id && issue.status !== "closed",
+  ).length;
+  const verifyRequestCount = relatedRequests.filter(
+    (request) => request.status === "ready" || request.status === "verified",
+  ).length;
+  const verifyIssueCount = relatedIssues.filter(
+    (issue) => issue.status === "ready_for_verify" || issue.status === "verified",
+  ).length;
+
+  return (
+    <Card className="border-slate-200/80 shadow-sm">
+      <CardHeader className="pb-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">当前 App 的反馈回路</CardTitle>
+            <CardDescription className="mt-2 max-w-3xl leading-6">
+              这张 App 上报过的能力需求和问题，会在这里直接显示状态，不需要先跳回 CTO 工坊再确认有没有进入 backlog。
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">需求 {activeRequestCount}</Badge>
+            <Badge variant="outline">问题 {activeIssueCount}</Badge>
+            {verifyRequestCount + verifyIssueCount > 0 ? (
+              <Badge variant="secondary">待验证 {verifyRequestCount + verifyIssueCount}</Badge>
+            ) : null}
+            <Button type="button" size="sm" variant="outline" onClick={onOpenCtoChat}>
+              打开 CTO 会话
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-950">能力需求</div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">缺少页面、工具或检查器时，这里会显示已登记的需求。</div>
+            </div>
+            <Badge variant="outline">{activeRequestCount}</Badge>
+          </div>
+          <div className="mt-4 space-y-3">
+            {relatedRequests.length > 0 ? (
+              relatedRequests.map((request) => (
+                <div key={request.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-950">{request.summary}</div>
+                      <div className="mt-1 text-xs leading-5 text-slate-500">
+                        {request.requesterLabel ?? "业务负责人"} · {formatTime(request.updatedAt)}
+                      </div>
+                      {request.detail ? (
+                        <div className="mt-2 text-xs leading-5 text-slate-600">{request.detail}</div>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] leading-5 text-slate-500">
+                        {request.skillId ? <Badge variant="outline">能力 · {request.skillId}</Badge> : null}
+                        {request.contextFileName ? (
+                          <Badge variant="outline">资源 · {request.contextFileName}</Badge>
+                        ) : null}
+                        {request.contextRunId ? <Badge variant="outline">Run · {request.contextRunId}</Badge> : null}
+                      </div>
+                    </div>
+                    <Badge variant={request.status === "closed" ? "secondary" : "outline"}>
+                      {CAPABILITY_REQUEST_STATUS_LABEL[request.status]}
+                    </Badge>
+                  </div>
+                  {NEXT_CAPABILITY_REQUEST_STATUS[request.status] ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                      <div className="text-xs text-slate-500">
+                        下一步：
+                        {request.status === "ready" || request.status === "verified"
+                          ? "业务负责人验收"
+                          : request.status === "building"
+                            ? "CTO 建设"
+                            : request.status === "triaged"
+                              ? "CTO 评估"
+                              : "业务负责人分流"}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={request.status === "ready" || request.status === "verified" ? "default" : "outline"}
+                        onClick={() =>
+                          void onUpdateCapabilityRequestStatus(
+                            request.id,
+                            NEXT_CAPABILITY_REQUEST_STATUS[request.status]!,
+                          )
+                        }
+                      >
+                        {CAPABILITY_REQUEST_ACTION_LABEL[request.status]}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm leading-6 text-slate-500">
+                这张 App 还没有登记过能力需求。需要补工具或页面时，直接使用上方动作入口即可。
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-950">能力问题</div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">结果不对、脚本异常或页面不可用时，这里会直接看到跟进状态。</div>
+            </div>
+            <Badge variant="outline">{activeIssueCount}</Badge>
+          </div>
+          <div className="mt-4 space-y-3">
+            {relatedIssues.length > 0 ? (
+              relatedIssues.map((issue) => (
+                <div key={issue.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-950">{issue.summary}</div>
+                      <div className="mt-1 text-xs leading-5 text-slate-500">
+                        {issue.reporterLabel ?? "业务负责人"} · {formatTime(issue.updatedAt)}
+                      </div>
+                      {issue.detail ? (
+                        <div className="mt-2 text-xs leading-5 text-slate-600">{issue.detail}</div>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] leading-5 text-slate-500">
+                        {issue.skillId ? <Badge variant="outline">能力 · {issue.skillId}</Badge> : null}
+                        {issue.contextFileName ? (
+                          <Badge variant="outline">资源 · {issue.contextFileName}</Badge>
+                        ) : null}
+                        {issue.contextRunId ? <Badge variant="outline">Run · {issue.contextRunId}</Badge> : null}
+                      </div>
+                    </div>
+                    <Badge variant={issue.status === "closed" ? "secondary" : "outline"}>
+                      {CAPABILITY_ISSUE_STATUS_LABEL[issue.status]}
+                    </Badge>
+                  </div>
+                  {NEXT_CAPABILITY_ISSUE_STATUS[issue.status] ? (
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                      <div className="text-xs text-slate-500">
+                        下一步：
+                        {issue.status === "ready_for_verify" || issue.status === "verified"
+                          ? "业务负责人回访"
+                          : issue.status === "fixing" || issue.status === "acknowledged"
+                            ? "CTO 修复"
+                            : "业务负责人补事实"}
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={issue.status === "ready_for_verify" || issue.status === "verified" ? "default" : "outline"}
+                        onClick={() =>
+                          void onUpdateCapabilityIssueStatus(
+                            issue.id,
+                            NEXT_CAPABILITY_ISSUE_STATUS[issue.status]!,
+                          )
+                        }
+                      >
+                        {CAPABILITY_ISSUE_ACTION_LABEL[issue.status]}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm leading-6 text-slate-500">
+                这张 App 还没有登记过能力问题。等工具开始被真实使用后，这里会成为你确认修复进展的第一入口。
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function WorkspaceReaderSection({
@@ -648,8 +1015,8 @@ function WorkspaceConsistencyHub({
         </Card>
         <Card className="border-slate-200/80 shadow-sm">
           <CardHeader className="pb-3">
-            <CardDescription>章节正文</CardDescription>
-            <CardTitle>{chapterFiles.length} 份可读正文</CardTitle>
+            <CardDescription>主体内容</CardDescription>
+            <CardTitle>{chapterFiles.length} 份可读内容</CardTitle>
           </CardHeader>
         </Card>
         <Card className="border-slate-200/80 shadow-sm">
@@ -700,17 +1067,17 @@ function WorkspaceConsistencyHub({
         <Card className="border-slate-200/80 shadow-sm">
           <CardHeader>
             <CardTitle className="text-base">下一步建议</CardTitle>
-            <CardDescription>如果你要把这家公司做成真正可运营的创作系统，下一步优先级应该这样排。</CardDescription>
+            <CardDescription>如果你要把这家公司做成真正可运营的工作平台，下一步优先级应该这样排。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
-              先把共享设定库、时间线、伏笔追踪做成可检索的唯一真相源，再让 CTO 基于这些文件开发一致性工具。
+              先把关键参考资料、状态流转和交接依据做成可检索的唯一真相源，再让 CTO 基于这些文件开发校验工具。
             </div>
             <Button type="button" className="w-full" onClick={() => onOpenCtoWorkbench("consistency-checker")}>
-              让 CTO 开发一致性工具
+              让 CTO 开发校验工具
             </Button>
             <Button type="button" variant="outline" className="w-full" onClick={onOpenNovelReader}>
-              先去小说阅读器查看关键文件
+              先去内容查看器查看关键文件
             </Button>
           </CardContent>
         </Card>
@@ -719,19 +1086,205 @@ function WorkspaceConsistencyHub({
   );
 }
 
+function CapabilityBoardSummary({ lanes }: { lanes: CapabilityBoardLane[] }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {lanes.map((lane) => (
+        <Badge key={lane.id} variant={lane.count > 0 ? "secondary" : "outline"}>
+          {lane.label} {lane.count}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function CapabilityBoardLaneSection({
+  lane,
+  emptyText,
+  renderActions,
+}: {
+  lane: CapabilityBoardLane;
+  emptyText: string;
+  renderActions: (item: CapabilityBoardLane["items"][number]) => ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-950">{lane.label}</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">{lane.description}</div>
+        </div>
+        <Badge variant={lane.count > 0 ? "secondary" : "outline"}>{lane.count}</Badge>
+      </div>
+      <div className="mt-3 space-y-3">
+        {lane.items.length > 0 ? (
+          lane.items.map((item) => (
+            <div key={item.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-950">{item.summary}</div>
+                  {item.detail ? (
+                    <div className="mt-1 text-xs leading-5 text-slate-500">{item.detail}</div>
+                  ) : null}
+                </div>
+                <ArrowUpRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="secondary">{item.statusLabel}</Badge>
+                <Badge variant="outline">下一步 {item.nextActorLabel}</Badge>
+                {item.requesterOrReporterLabel ? (
+                  <Badge variant="outline">来自 {item.requesterOrReporterLabel}</Badge>
+                ) : null}
+                {item.relatedLabels.map((label) => (
+                  <Badge key={`${item.id}:${label}`} variant="outline">
+                    {label}
+                  </Badge>
+                ))}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-slate-500">最近更新 {formatTime(item.updatedAt)}</div>
+                <div className="flex flex-wrap gap-2">{renderActions(item)}</div>
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-white px-4 py-4 text-xs leading-5 text-slate-500">
+            {emptyText}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const CapabilityVerificationQueueSection = ({
+  queue,
+  onSelectApp,
+  onUpdateCapabilityRequestStatus,
+  onUpdateCapabilityIssueStatus,
+}: {
+  queue: ReturnType<typeof buildCapabilityVerificationQueue>;
+  onSelectApp: (appId: string) => void;
+  onUpdateCapabilityRequestStatus: WorkspacePageContentProps["onUpdateCapabilityRequestStatus"];
+  onUpdateCapabilityIssueStatus: WorkspacePageContentProps["onUpdateCapabilityIssueStatus"];
+}) => {
+  return (
+    <Card className="border-slate-200/80 shadow-sm">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">待验证优先</CardTitle>
+            <CardDescription className="mt-2 leading-6">
+              这里会优先拉出已经交付、正等业务负责人验收或回访的项，减少在多个泳道之间来回翻找。
+            </CardDescription>
+          </div>
+          <Badge variant={queue.length > 0 ? "secondary" : "outline"}>{queue.length}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {queue.length > 0 ? (
+          queue.map((item) => {
+            return (
+              <div key={`${item.kind}:${item.id}`} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-950">{item.summary}</div>
+                    {item.detail ? <div className="mt-1 text-xs leading-5 text-slate-500">{item.detail}</div> : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant={item.kind === "issue" ? "destructive" : "secondary"}>
+                      {item.kind === "issue" ? "问题" : "需求"}
+                    </Badge>
+                    <Badge variant="outline">{item.statusLabel}</Badge>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {item.appLabel ? <Badge variant="outline">App · {item.appLabel}</Badge> : null}
+                        {item.skillLabel ? <Badge variant="outline">工具能力 · {item.skillLabel}</Badge> : null}
+                  {item.contextFileName ? <Badge variant="outline">资源 · {item.contextFileName}</Badge> : null}
+                  {item.contextRunId ? (
+                    <Badge variant="outline" className="max-w-full truncate">
+                      Run · {item.contextRunId}
+                    </Badge>
+                  ) : null}
+                  {item.requesterOrReporterLabel ? (
+                    <Badge variant="outline">来自 {item.requesterOrReporterLabel}</Badge>
+                  ) : null}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs text-slate-500">最近更新 {formatTime(item.updatedAt)}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {item.appId ? (
+                      <Button type="button" size="sm" variant="outline" onClick={() => onSelectApp(item.appId!)}>
+                        打开相关 App
+                      </Button>
+                    ) : null}
+                    {item.kind === "request" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void onUpdateCapabilityRequestStatus(
+                            item.id,
+                            item.status === "verified" ? "closed" : "verified",
+                          )
+                        }
+                      >
+                        {item.nextActionLabel ?? (item.status === "verified" ? "归档关闭" : "标记已验证")}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void onUpdateCapabilityIssueStatus(
+                            item.id,
+                            item.status === "verified" ? "closed" : "verified",
+                          )
+                        }
+                      >
+                        {item.nextActionLabel ?? (item.status === "verified" ? "归档关闭" : "标记已验证")}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm leading-6 text-slate-500">
+            当前还没有等待业务负责人验收的项。后续当需求进入“待验证”或问题进入“待回访”时，这里会优先冒出来。
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
 function WorkspaceWorkbench({
   ctoLabel,
   businessLeadLabel,
+  workflowCapabilityBindingCatalog,
+  workflowCapabilityBindingsAreExplicit,
   skillDefinitions,
   skillRuns,
+  workspaceApps,
+  workspaceFiles,
   capabilityRequests,
   capabilityIssues,
+  onSelectApp,
   onOpenCtoWorkbench,
   onPublishTemplateApp,
   onCreateSkillDraft,
   onCreateCapabilityRequest,
   onCreateCapabilityIssue,
   onUpdateSkillStatus,
+  onRunSkillSmokeTest,
+  onPublishWorkflowCapabilityBindings,
+  onRestoreWorkflowCapabilityBindings,
+  onToggleWorkflowCapabilityBindingRequired,
   onUpdateCapabilityRequestStatus,
   onUpdateCapabilityIssueStatus,
   publishedAppTemplates,
@@ -739,16 +1292,25 @@ function WorkspaceWorkbench({
   WorkspacePageContentProps,
   | "ctoLabel"
   | "businessLeadLabel"
+  | "workflowCapabilityBindingCatalog"
+  | "workflowCapabilityBindingsAreExplicit"
   | "skillDefinitions"
   | "skillRuns"
+  | "workspaceApps"
+  | "workspaceFiles"
   | "capabilityRequests"
   | "capabilityIssues"
+  | "onSelectApp"
   | "onOpenCtoWorkbench"
   | "onPublishTemplateApp"
   | "onCreateSkillDraft"
   | "onCreateCapabilityRequest"
   | "onCreateCapabilityIssue"
   | "onUpdateSkillStatus"
+  | "onRunSkillSmokeTest"
+  | "onPublishWorkflowCapabilityBindings"
+  | "onRestoreWorkflowCapabilityBindings"
+  | "onToggleWorkflowCapabilityBindingRequired"
   | "onUpdateCapabilityRequestStatus"
   | "onUpdateCapabilityIssueStatus"
   | "publishedAppTemplates"
@@ -760,20 +1322,6 @@ function WorkspaceWorkbench({
     "consistency-checker": "consistency",
     "chapter-review-console": "review-console",
   };
-  const nextRequestStatusByCurrent: Partial<Record<CapabilityRequestStatus, CapabilityRequestStatus>> = {
-    open: "triaged",
-    triaged: "building",
-    building: "ready",
-    ready: "verified",
-    verified: "closed",
-  };
-  const nextIssueStatusByCurrent: Partial<Record<CapabilityIssueStatus, CapabilityIssueStatus>> = {
-    open: "acknowledged",
-    acknowledged: "fixing",
-    fixing: "ready_for_verify",
-    ready_for_verify: "verified",
-    verified: "closed",
-  };
   const nextSkillStatusByCurrent: Partial<Record<SkillDefinitionStatus, SkillDefinitionStatus>> = {
     draft: "ready",
     ready: "degraded",
@@ -781,26 +1329,10 @@ function WorkspaceWorkbench({
     retired: "draft",
   };
   const skillStatusActionLabel: Record<SkillDefinitionStatus, string> = {
-    draft: "发布为 ready",
+    draft: "发布为可用",
     ready: "标记降级",
-    degraded: "恢复 ready",
+    degraded: "恢复可用",
     retired: "恢复草稿",
-  };
-  const requestStatusActionLabel: Record<CapabilityRequestStatus, string> = {
-    open: "转 CTO 评估",
-    triaged: "标记建设中",
-    building: "标记 ready",
-    ready: "标记已验证",
-    verified: "归档关闭",
-    closed: "已关闭",
-  };
-  const issueStatusActionLabel: Record<CapabilityIssueStatus, string> = {
-    open: "先确认问题",
-    acknowledged: "开始修复",
-    fixing: "转待验证",
-    ready_for_verify: "标记已验证",
-    verified: "归档关闭",
-    closed: "已关闭",
   };
   const skillRunStatusLabel: Record<SkillRunStatus, string> = {
     pending: "排队中",
@@ -809,11 +1341,38 @@ function WorkspaceWorkbench({
     failed: "已失败",
     cancelled: "已取消",
   };
+  const skillRunExecutionModeLabel = {
+    builtin_bridge: "平台桥接",
+    workspace_script: "工作区脚本",
+  } as const;
   const recentSkillRuns = [...skillRuns].sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 6);
   const skillLabelById = new Map(skillDefinitions.map((skill) => [skill.id, skill.title]));
+  const appLabelById = new Map(workspaceApps.map((app) => [app.id, app.title]));
+  const workspaceFileByArtifactId = new Map(
+    workspaceFiles.filter((file) => file.artifactId).map((file) => [file.artifactId!, file]),
+  );
+  const capabilityRequestBoard = buildCapabilityRequestBoard(capabilityRequests, {
+    appLabelById,
+    skillLabelById,
+  });
+  const capabilityIssueBoard = buildCapabilityIssueBoard(capabilityIssues, {
+    appLabelById,
+    skillLabelById,
+  });
+  const verificationQueue = buildCapabilityVerificationQueue(capabilityRequests, capabilityIssues, {
+    appLabelById,
+    skillLabelById,
+  });
 
   return (
     <div className="space-y-5">
+      <CapabilityVerificationQueueSection
+        queue={verificationQueue}
+        onSelectApp={onSelectApp}
+        onUpdateCapabilityRequestStatus={onUpdateCapabilityRequestStatus}
+        onUpdateCapabilityIssueStatus={onUpdateCapabilityIssueStatus}
+      />
+
       <div className="grid gap-5 lg:grid-cols-3">
         {WORKBENCH_TOOL_CARDS.map((card) => {
           const publishableTemplate = publishableTemplateByCard[card.id];
@@ -833,7 +1392,7 @@ function WorkspaceWorkbench({
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
-                  这条线会先由 {businessLeadLabel ?? "业务负责人"} 提需求，再交给 {ctoLabel ?? "CTO"} 做成 Skill、App 或资源契约。
+                  这条线会先由 {businessLeadLabel ?? "业务负责人"} 提需求，再交给 {ctoLabel ?? "CTO"} 做成工具能力、App 或资源契约。
                 </div>
                 {publishableTemplate ? (
                   <Button
@@ -847,7 +1406,7 @@ function WorkspaceWorkbench({
                   </Button>
                 ) : null}
                 <Button type="button" variant="outline" className="w-full" onClick={() => void onCreateSkillDraft(card.id)}>
-                  登记 Skill 草稿
+                  登记能力草稿
                 </Button>
                 <Button type="button" variant="outline" className="w-full" onClick={() => void onCreateCapabilityRequest(card.id)}>
                   登记能力需求
@@ -864,13 +1423,88 @@ function WorkspaceWorkbench({
       <div className="grid gap-5 xl:grid-cols-2 2xl:grid-cols-4">
         <Card className="border-slate-200/80 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">Skill 草稿</CardTitle>
-            <CardDescription>技术中台把可执行能力收成显式 Skill，避免它们只停留在会话里。</CardDescription>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base">流程绑定</CardTitle>
+                <CardDescription>让“哪个阶段该用哪个 App / 工具能力”变成组织配置，而不是靠大家记忆。</CardDescription>
+              </div>
+              <Badge variant={workflowCapabilityBindingsAreExplicit ? "default" : "secondary"}>
+                {workflowCapabilityBindingsAreExplicit ? "显式配置" : "系统默认"}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {workflowCapabilityBindingsAreExplicit ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => void onRestoreWorkflowCapabilityBindings()}>
+                  恢复默认绑定
+                </Button>
+              ) : (
+                <Button type="button" size="sm" variant="outline" onClick={() => void onPublishWorkflowCapabilityBindings()}>
+                  固化当前默认绑定
+                </Button>
+              )}
+            </div>
+            {workflowCapabilityBindingCatalog.length > 0 ? (
+              workflowCapabilityBindingCatalog.map((binding) => (
+                <div key={binding.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-950">{binding.label}</div>
+                      {binding.guidance ? (
+                        <div className="mt-1 text-xs leading-5 text-slate-500">{binding.guidance}</div>
+                      ) : null}
+                    </div>
+                    <Badge variant={binding.required ? "default" : "secondary"}>
+                      {binding.required ? "必用" : "建议"}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {binding.appTemplates?.map((template) => (
+                      <Badge key={`${binding.id}:app:${template}`} variant="outline">
+                        App · {template}
+                      </Badge>
+                    ))}
+                    {binding.skillIds?.map((skillId) => (
+                      <Badge key={`${binding.id}:skill:${skillId}`} variant="outline">
+                        能力 · {skillId}
+                      </Badge>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void onToggleWorkflowCapabilityBindingRequired(binding.id)}
+                    >
+                      {binding.required ? "改成建议" : "改成必用"}
+                    </Button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                当前还没有流程绑定。等系统命中默认规则或后续补自定义绑定后，这里会成为 CTO 的正式配置入口。
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200/80 shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base">能力草稿</CardTitle>
+            <CardDescription>技术中台把可执行工具收成显式能力定义，避免它们只停留在会话里。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {skillDefinitions.length > 0 ? (
               skillDefinitions.map((skill) => {
                 const nextStatus = nextSkillStatusByCurrent[skill.status];
+                const releaseReadiness = buildSkillReleaseReadiness({
+                  skill,
+                  skillRuns,
+                  workspaceApps,
+                });
                 return (
                   <div key={skill.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
                     <div className="flex items-start justify-between gap-3">
@@ -878,10 +1512,32 @@ function WorkspaceWorkbench({
                         <div className="text-sm font-semibold text-slate-950">{skill.title}</div>
                         <div className="mt-1 text-xs leading-5 text-slate-500">{skill.summary}</div>
                         <div className="mt-2 flex flex-wrap gap-2">
-                          <Badge variant="secondary">{skill.status}</Badge>
+                          <Badge variant="secondary">{SKILL_STATUS_LABEL[skill.status]}</Badge>
                           <Badge variant="outline">{skill.entryPath}</Badge>
+                          <Badge variant={releaseReadiness.publishable ? "default" : "secondary"}>
+                            {releaseReadiness.publishable ? "可发布" : "待补齐"}
+                          </Badge>
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                      <div className="text-xs font-semibold text-slate-700">发布检查</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {releaseReadiness.checks.map((check) => (
+                          <Badge key={check.id} variant={check.ok ? "default" : "outline"}>
+                            {check.ok ? "已满足" : "待补齐"} · {check.label}
+                          </Badge>
+                        ))}
+                      </div>
+                      {releaseReadiness.latestSuccessfulSmokeTestRun ? (
+                        <div className="mt-2 text-xs leading-5 text-slate-600">
+                          最近一次 smoke test：{formatTime(releaseReadiness.latestSuccessfulSmokeTestRun.updatedAt)}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-xs leading-5 text-slate-500">
+                          当前还没有成功 smoke test，发布为可用前至少需要先跑通一次能力验证。
+                        </div>
+                      )}
                     </div>
                     {nextStatus ? (
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -889,6 +1545,16 @@ function WorkspaceWorkbench({
                           type="button"
                           size="sm"
                           variant="outline"
+                          disabled={skill.status === "retired"}
+                          onClick={() => void onRunSkillSmokeTest(skill.id)}
+                        >
+                          运行 smoke test
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={nextStatus === "ready" && !releaseReadiness.publishable}
                           onClick={() => void onUpdateSkillStatus(skill.id, nextStatus)}
                         >
                           {skillStatusActionLabel[skill.status]}
@@ -914,7 +1580,7 @@ function WorkspaceWorkbench({
               })
             ) : (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                当前还没有登记过 Skill 草稿。先从阅读器、一致性检查或审阅台里挑一项登记进去。
+                当前还没有登记过能力草稿。先从阅读器、一致性检查或审阅台里挑一项登记进去。
               </div>
             )}
           </CardContent>
@@ -922,7 +1588,7 @@ function WorkspaceWorkbench({
 
         <Card className="border-slate-200/80 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base">Skill 运行台账</CardTitle>
+            <CardTitle className="text-base">能力运行台账</CardTitle>
             <CardDescription>每次触发都先留下正式 run 记录，后续真实执行引擎会继续复用这条台账。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -944,12 +1610,56 @@ function WorkspaceWorkbench({
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant="outline">{run.triggerType}</Badge>
+                    {run.executionMode ? (
+                      <Badge variant="outline">{skillRunExecutionModeLabel[run.executionMode]}</Badge>
+                    ) : null}
+                    {run.executionEntryPath ? (
+                      <Badge variant="outline" className="max-w-full truncate">
+                        {run.executionEntryPath}
+                      </Badge>
+                    ) : null}
+                    {typeof run.inputResourceCount === "number" ? (
+                      <Badge variant="outline">输入 {run.inputResourceCount} 份资源</Badge>
+                    ) : null}
+                    {run.inputSchemaVersion ? <Badge variant="outline">Input v{run.inputSchemaVersion}</Badge> : null}
+                    {run.executionNote ? <Badge variant="secondary">已自动回退</Badge> : null}
                     {run.outputArtifactIds?.length ? (
                       <Badge variant="outline">回写 {run.outputArtifactIds.length} 份产物</Badge>
                     ) : null}
                   </div>
+                  {run.inputResourceTypes && run.inputResourceTypes.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {run.inputResourceTypes.map((resourceType) => (
+                        <Badge key={resourceType} variant="outline">
+                          输入 · {artifactResourceTypeLabel[resourceType] ?? resourceType}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : null}
+                  {run.outputArtifactIds && run.outputArtifactIds.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {run.outputArtifactIds.map((artifactId) => {
+                        const file = workspaceFileByArtifactId.get(artifactId);
+                        return (
+                          <Badge key={artifactId} variant="outline">
+                            {file?.name ?? artifactId}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   {run.inputSummary ? (
                     <div className="mt-3 text-xs leading-5 text-slate-600">{run.inputSummary}</div>
+                  ) : null}
+                  {run.resultSummary ? (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
+                      {run.resultSummary}
+                    </div>
+                  ) : null}
+                  {run.executionNote ? (
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                      {run.executionNote}
+                    </div>
                   ) : null}
                   {run.errorMessage ? (
                     <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
@@ -960,7 +1670,7 @@ function WorkspaceWorkbench({
               ))
             ) : (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                当前还没有 Skill 运行记录。等阅读器或一致性中心真正触发一次 skill 后，这里会开始积累正式台账。
+                当前还没有能力运行记录。等阅读器或一致性中心真正触发一次能力后，这里会开始积累正式台账。
               </div>
             )}
           </CardContent>
@@ -972,32 +1682,32 @@ function WorkspaceWorkbench({
             <CardDescription>业务负责人先筛选，再把明确需求流给 CTO，避免技术中台被零散想法打散。</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <CapabilityBoardSummary lanes={capabilityRequestBoard.lanes} />
             {capabilityRequests.length > 0 ? (
-              capabilityRequests.map((request) => {
-                const nextStatus = nextRequestStatusByCurrent[request.status];
-                return (
-                  <div key={request.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                    <div className="text-sm font-semibold text-slate-950">{request.summary}</div>
-                    {request.detail ? <div className="mt-1 text-xs leading-5 text-slate-500">{request.detail}</div> : null}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge variant="secondary">{request.status}</Badge>
-                      {request.requesterLabel ? <Badge variant="outline">提出方 {request.requesterLabel}</Badge> : null}
-                    </div>
-                    {nextStatus ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void onUpdateCapabilityRequestStatus(request.id, nextStatus)}
-                        >
-                          {requestStatusActionLabel[request.status]}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })
+              capabilityRequestBoard.lanes.map((lane) => (
+                <CapabilityBoardLaneSection
+                  key={lane.id}
+                  lane={lane}
+                  emptyText="当前这一栏还没有请求。"
+                  renderActions={(item) => {
+                    const request = capabilityRequests.find((entry) => entry.id === item.id);
+                    const nextStatus = request ? NEXT_CAPABILITY_REQUEST_STATUS[request.status] : undefined;
+                    if (!request || !nextStatus) {
+                      return null;
+                    }
+                    return (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void onUpdateCapabilityRequestStatus(request.id, nextStatus)}
+                      >
+                        {CAPABILITY_REQUEST_ACTION_LABEL[request.status]}
+                      </Button>
+                    );
+                  }}
+                />
+              ))
             ) : (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
                 当前还没有能力需求。可以先把阅读器或一致性检查登记成第一条请求。
@@ -1030,32 +1740,32 @@ function WorkspaceWorkbench({
             >
               记录一个新问题
             </Button>
+            <CapabilityBoardSummary lanes={capabilityIssueBoard.lanes} />
             {capabilityIssues.length > 0 ? (
-              capabilityIssues.map((issue) => {
-                const nextStatus = nextIssueStatusByCurrent[issue.status];
-                return (
-                  <div key={issue.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
-                    <div className="text-sm font-semibold text-slate-950">{issue.summary}</div>
-                    {issue.detail ? <div className="mt-1 text-xs leading-5 text-slate-500">{issue.detail}</div> : null}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge variant="secondary">{issue.status}</Badge>
-                      <Badge variant="outline">{issue.type}</Badge>
-                    </div>
-                    {nextStatus ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void onUpdateCapabilityIssueStatus(issue.id, nextStatus)}
-                        >
-                          {issueStatusActionLabel[issue.status]}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })
+              capabilityIssueBoard.lanes.map((lane) => (
+                <CapabilityBoardLaneSection
+                  key={lane.id}
+                  lane={lane}
+                  emptyText="当前这一栏还没有问题。"
+                  renderActions={(item) => {
+                    const issue = capabilityIssues.find((entry) => entry.id === item.id);
+                    const nextStatus = issue ? NEXT_CAPABILITY_ISSUE_STATUS[issue.status] : undefined;
+                    if (!issue || !nextStatus) {
+                      return null;
+                    }
+                    return (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void onUpdateCapabilityIssueStatus(issue.id, nextStatus)}
+                      >
+                        {CAPABILITY_ISSUE_ACTION_LABEL[issue.status]}
+                      </Button>
+                    );
+                  }}
+                />
+              ))
             ) : (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
                 当前还没有登记过能力问题。等工具开始被使用后，这里会成为 CTO 的修复回路。
@@ -1070,31 +1780,227 @@ function WorkspaceWorkbench({
 
 function WorkspaceEmbeddedAppSection({
   app,
+  manifest,
+  runtime,
+  selectedFileContent,
+  loadingFileKey,
+  onSelectEmbeddedSection,
+  onSelectEmbeddedFile,
+  onRunAppManifestAction,
   onOpenCtoChat,
 }: {
   app: WorkspaceAppSummary;
+  manifest: WorkspaceAppManifest | null;
+  runtime: WorkspaceEmbeddedAppRuntime<WorkspaceFileRow> | null;
+  selectedFileContent: string;
+  loadingFileKey: string | null;
+  onSelectEmbeddedSection: (slot: string) => void;
+  onSelectEmbeddedFile: (fileKey: string) => void;
+  onRunAppManifestAction: (action: WorkspaceAppManifestAction) => void | Promise<void>;
   onOpenCtoChat: () => void;
 }) {
+  const sections = runtime?.sections ?? [];
+  const activeSection = runtime?.activeSection ?? null;
+  const activeSectionFiles = runtime?.visibleFiles ?? [];
+  const totalScopedResources = runtime?.totalScopedResources ?? 0;
+  const latestScopedFile = runtime?.latestFile ?? null;
+  const lastAction = runtime?.lastAction ?? null;
+  const selectedFile = runtime?.selectedFile ?? null;
+  const hostMeta = runtime
+    ? {
+        title: runtime.hostTitle,
+        description: runtime.hostDescription,
+      }
+    : {
+        title: "嵌入式 App 宿主",
+        description: "这个公司内 App 运行在受控宿主中，只能读取 manifest 范围内资源、保存轻量状态，并触发白名单动作。",
+      };
   return (
     <Card className="border-slate-200/80 shadow-sm">
       <CardHeader>
-        <CardTitle className="text-base">嵌入式 App 预留位</CardTitle>
-        <CardDescription>
-          {app.title} 已经以嵌入式公司应用的形式挂载。第一版宿主会让它直接读取公司产物、保存轻量状态，并只在显式动作时调用脚本。
-        </CardDescription>
+        <CardTitle className="text-base">{hostMeta.title}</CardTitle>
+        <CardDescription>{hostMeta.description}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-700">
-          这类 App 适合小说阅读器、游戏模拟器这类需要交互状态的页面。当前壳子已经预留入口，但具体运行时还需要 CTO 把页面 bundle 和数据契约补齐。
-        </div>
+      <CardContent className="space-y-4">
         <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-          {app.manifestArtifactId ? <Badge variant="outline">manifest 已绑定</Badge> : <Badge variant="secondary">manifest 待绑定</Badge>}
-          {app.embeddedHostKey ? <Badge variant="outline">host {app.embeddedHostKey}</Badge> : <Badge variant="outline">host 待配置</Badge>}
-          {app.embeddedPermissions ? <Badge variant="outline">动作 {app.embeddedPermissions.actions}</Badge> : null}
+          {!runtime || runtime.manifestStatus === "missing" ? <Badge variant="secondary">manifest 待接入</Badge> : null}
+          {runtime?.manifestStatus === "bound" ? <Badge variant="outline">显式 manifest</Badge> : null}
+          {runtime?.manifestStatus === "default" ? <Badge variant="secondary">默认 manifest</Badge> : null}
+          {runtime ? <Badge variant="outline">host {runtime.hostKey}</Badge> : <Badge variant="outline">host 待配置</Badge>}
+          {runtime ? <Badge variant="outline">动作 {runtime.permissions.actions}</Badge> : null}
+          {runtime ? <Badge variant="outline">状态 {runtime.permissions.appState}</Badge> : null}
         </div>
-        <Button type="button" variant="outline" onClick={onOpenCtoChat}>
-          打开 CTO 会话继续补齐
-        </Button>
+        <div className="grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">分区</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950">{sections.length}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">manifest 当前为 {app.title} 定义的交互区域。</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">可读资源</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-950">{totalScopedResources}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">宿主只读取 manifest 范围内的资源，不直接扫全公司数据。</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">最近动作</div>
+            <div className="mt-2 text-sm font-semibold text-slate-950">{lastAction?.label ?? "尚未触发"}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">动作仍然走白名单桥接，不允许直接写公司主数据。</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">最近更新</div>
+            <div className="mt-2 text-sm font-semibold text-slate-950">{latestScopedFile?.name ?? "暂无"}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">
+              {latestScopedFile ? `${latestScopedFile.agentLabel} · ${formatTime(latestScopedFile.updatedAtMs ?? 0)}` : "等资源进入这张 App 再展示。"}
+            </div>
+          </div>
+        </div>
+
+        {runtime ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {runtime.apis.map((api) => (
+              <div key={api.id} className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+                <div className="text-sm font-semibold text-slate-950">{api.label}</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">{api.description}</div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          {manifest?.actions?.map((action) => (
+            <Button key={action.id} type="button" size="sm" variant="outline" onClick={() => void onRunAppManifestAction(action)}>
+              {action.label}
+            </Button>
+          ))}
+          <Button type="button" size="sm" variant="secondary" onClick={onOpenCtoChat}>
+            打开 CTO 会话继续补齐
+          </Button>
+        </div>
+
+        {sections.length > 0 ? (
+          <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+            <div className="space-y-3">
+              {sections.map((section) => {
+                const files = section.files;
+                const active = activeSection?.slot === section.slot;
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    onClick={() => onSelectEmbeddedSection(section.slot)}
+                    className={cn(
+                      "w-full rounded-2xl border px-4 py-4 text-left transition-colors",
+                      active ? "border-indigo-200 bg-indigo-50 text-indigo-950" : "border-slate-200 bg-white hover:bg-slate-50",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">{section.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500">
+                          {files.length > 0 ? `当前有 ${files.length} 份资源进入这一区。` : section.emptyState ?? "当前还没有资源进入这一分区。"}
+                        </div>
+                      </div>
+                      <Badge variant={active ? "default" : "outline"}>{files.length}</Badge>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-950">{activeSection?.label ?? "资源列表"}</div>
+                    <div className="mt-1 text-xs leading-5 text-slate-500">
+                      {activeSectionFiles.length > 0
+                        ? "切换资源后，右侧会直接显示当前内容，不需要离开工作目录。"
+                        : activeSection?.emptyState ?? "当前还没有资源进入这个区域。"}
+                    </div>
+                  </div>
+                  <Badge variant="outline">{activeSectionFiles.length}</Badge>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {activeSectionFiles.length > 0 ? (
+                    activeSectionFiles.map((file) => (
+                      <button
+                        key={file.key}
+                        type="button"
+                        onClick={() => onSelectEmbeddedFile(file.key)}
+                        className={cn(
+                          "w-full rounded-xl border px-3 py-3 text-left transition-colors",
+                          selectedFile?.key === file.key
+                            ? "border-indigo-200 bg-indigo-50 text-indigo-950"
+                            : "border-slate-200 bg-slate-50 hover:bg-slate-100",
+                        )}
+                      >
+                        <div className="text-sm font-medium">{file.name}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span>{RESOURCE_KIND_LABEL[file.kind]} · {file.agentLabel} · {formatTime(file.updatedAtMs ?? 0)}</span>
+                          {file.resourceOrigin === "inferred" ? (
+                            <Badge variant="outline">{resourceOriginLabel[file.resourceOrigin]}</Badge>
+                          ) : null}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                      当前没有可读资源。等能力执行或业务团队把结果写回后，这里会直接出现。
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                {selectedFile ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-base font-semibold text-slate-950">{selectedFile.name}</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-500">
+                          {selectedFile.path} · {selectedFile.agentLabel}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="secondary">{RESOURCE_KIND_LABEL[selectedFile.kind]}</Badge>
+                        <Badge variant="outline">{selectedFile.resourceType}</Badge>
+                        <Badge variant={selectedFile.resourceOrigin === "inferred" ? "outline" : "secondary"}>
+                          {resourceOriginLabel[selectedFile.resourceOrigin]}
+                        </Badge>
+                      </div>
+                    </div>
+                    {selectedFile.resourceOrigin === "inferred" ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-950">
+                        这份资源目前来自系统推断，只适合展示和草案生成；如果要用于正式检查、预检或流程判断，请先补显式标签或接入 AppManifest。
+                      </div>
+                    ) : null}
+                    <div className="max-h-[560px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                      {loadingFileKey === selectedFile.key ? (
+                        <div className="text-sm text-slate-500">正在读取这份资源的正文...</div>
+                      ) : selectedFileContent.trim().length > 0 ? (
+                        <div className="prose prose-slate max-w-none prose-headings:scroll-mt-24 prose-pre:overflow-x-auto">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedFileContent}</ReactMarkdown>
+                        </div>
+                      ) : selectedFile.previewText ? (
+                        <div className="text-sm leading-7 text-slate-700">{selectedFile.previewText}</div>
+                      ) : (
+                        <div className="text-sm text-slate-500">这份资源当前还没有正文镜像，可先去来源文件或等待能力补全文本。</div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm leading-6 text-slate-500">
+                    当前还没有选中的资源。先从左侧分区挑一份报告、状态文件或数据结果。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm leading-6 text-slate-500">
+            这张 App 还没有定义 manifest sections。先给它生成或校准 AppManifest，宿主才能知道该展示哪些资源。
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -1110,6 +2016,9 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
     artifactBackedWorkspaceCount,
     mirroredOnlyWorkspaceCount,
     shouldSyncProviderWorkspace,
+    workflowCapabilityBindingCatalog,
+    workflowCapabilityBindingsAreExplicit,
+    workflowCapabilityBindings,
     chapterFiles,
     canonFiles,
     capabilityIssues,
@@ -1121,9 +2030,12 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
     skillRuns,
     skillDefinitions,
     loadingIndex,
+    executorProvisioning,
     onRefreshIndex,
+    onRetryCompanyProvisioning,
     onRunAppManifestAction,
     onSelectApp,
+    onTriggerSkill,
     onOpenCtoWorkbench,
     onPublishRecommendedApps,
     onOpenCtoChat,
@@ -1137,6 +2049,29 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
   return (
     <div className="min-h-full bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.08),_transparent_34%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.08),_transparent_28%)] p-6 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
+        {executorProvisioning && executorProvisioning.state !== "ready" ? (
+          <Card className="border-amber-200 bg-amber-50/80 shadow-sm">
+            <CardContent className="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-950">
+                  <AlertTriangle className="h-4 w-4" />
+                  执行器仍在补齐
+                </div>
+                <div className="text-sm leading-6 text-amber-950/90">
+                  这家公司已经创建成功，工作目录和公司应用可以继续使用；只是 OpenClaw agent 还在补齐，所以部分能力暂时可能回退或不可用。
+                </div>
+                {executorProvisioning.lastError ? (
+                  <div className="text-xs leading-5 text-amber-900/80">
+                    最近原因：{executorProvisioning.lastError}
+                  </div>
+                ) : null}
+              </div>
+              <Button type="button" variant="outline" onClick={() => void onRetryCompanyProvisioning()}>
+                重试补齐执行器
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
         <Card className="overflow-hidden border-slate-200/80 shadow-sm">
           <CardContent className="grid gap-5 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_340px]">
             <div className="space-y-4">
@@ -1147,11 +2082,11 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight text-slate-950">工作目录</h2>
                 <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                  把当前公司的专属工具、产品产物和 CTO 工具需求收进一个页面里。对小说公司来说，这里就是阅读器、一致性中心和工具开发工坊的统一入口；底层工作区文件只作为补充镜像，不再是主真相源。
+                  把当前公司的专属工具、产品产物和 CTO 工具需求收进一个页面里。这里会承载查看器、规则与校验、知识与验收和工具工坊等正式入口；底层工作区文件只作为补充镜像，不再是主真相源。
                 </p>
                 {!workspaceAppsAreExplicit ? (
                   <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
-                    当前这些入口还是系统补位推荐，方便你先验证方向。点一下“固化推荐应用”后，它们才会正式挂到这家公司里，后续 CTO 产出的阅读器或新页面也会继续沿着这条显式链路发布。
+                    当前这些入口还是系统补位推荐，方便你先验证方向。点一下“固化推荐应用”后，它们才会正式挂到这家公司里，后续 CTO 产出的查看器、新页面或校验工具也会继续沿着这条显式链路发布。
                   </div>
                 ) : null}
               </div>
@@ -1163,10 +2098,10 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                   </Button>
                 ) : null}
                 <Button type="button" onClick={() => onOpenCtoWorkbench("consistency-checker")}>
-                  让 CTO 开发一致性工具
+                  让 CTO 开发校验工具
                 </Button>
                 <Button type="button" variant="outline" onClick={() => onOpenCtoWorkbench("novel-reader")}>
-                  让 CTO 开发小说阅读器
+                  让 CTO 开发内容查看器
                 </Button>
                 {onPublishRecommendedApps ? (
                   <Button type="button" variant="secondary" onClick={() => void onPublishRecommendedApps()}>
@@ -1214,7 +2149,7 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
                 <div className="mt-2 text-lg font-semibold text-slate-950">
                   {skillDefinitions.length}/{skillRuns.length}/{capabilityRequests.length}/{capabilityIssues.length}
                 </div>
-                <div className="mt-1 text-sm text-slate-600">Skill / 运行 / 需求 / 问题 已经都能在工作目录里被追踪。</div>
+                <div className="mt-1 text-sm text-slate-600">能力 / 运行 / 需求 / 问题 已经都能在工作目录里被追踪。</div>
               </div>
             </div>
           </CardContent>
@@ -1321,8 +2256,34 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
               </CardContent>
             </Card>
 
-            {selectedAppSurface === "embedded" ? (
-              <WorkspaceEmbeddedAppSection app={selectedApp} onOpenCtoChat={onOpenCtoChat} />
+            <WorkflowCapabilitySection
+              workflowCapabilityBindings={workflowCapabilityBindings}
+              onSelectApp={onSelectApp}
+              onPublishTemplateApp={props.onPublishTemplateApp}
+              onTriggerSkill={onTriggerSkill}
+            />
+
+            <SelectedAppGovernanceSection
+              selectedApp={selectedApp}
+              capabilityRequests={capabilityRequests}
+              capabilityIssues={capabilityIssues}
+              onOpenCtoChat={onOpenCtoChat}
+              onUpdateCapabilityRequestStatus={props.onUpdateCapabilityRequestStatus}
+              onUpdateCapabilityIssueStatus={props.onUpdateCapabilityIssueStatus}
+            />
+
+            {selectedAppSurface === "embedded" || selectedAppTemplate === "review-console" || selectedAppTemplate === "dashboard" ? (
+              <WorkspaceEmbeddedAppSection
+                app={selectedApp}
+                manifest={selectedAppManifest}
+                runtime={props.embeddedRuntime}
+                selectedFileContent={props.selectedFileContent}
+                loadingFileKey={props.loadingFileKey}
+                onSelectEmbeddedSection={props.onSelectEmbeddedSection}
+                onSelectEmbeddedFile={props.onSelectEmbeddedFile}
+                onRunAppManifestAction={props.onRunAppManifestAction}
+                onOpenCtoChat={onOpenCtoChat}
+              />
             ) : null}
             {selectedAppSurface === "template" && selectedAppTemplate === "reader" ? (
               <WorkspaceReaderSection {...props} />
@@ -1344,16 +2305,25 @@ export function WorkspacePageContent(props: WorkspacePageContentProps) {
               <WorkspaceWorkbench
                 ctoLabel={ctoLabel}
                 businessLeadLabel={businessLeadLabel}
+                workflowCapabilityBindingCatalog={workflowCapabilityBindingCatalog}
+                workflowCapabilityBindingsAreExplicit={workflowCapabilityBindingsAreExplicit}
                 skillDefinitions={skillDefinitions}
                 skillRuns={skillRuns}
+                workspaceApps={workspaceApps}
+                workspaceFiles={props.workspaceFiles}
                 capabilityRequests={capabilityRequests}
                 capabilityIssues={capabilityIssues}
+                onSelectApp={props.onSelectApp}
                 onOpenCtoWorkbench={props.onOpenCtoWorkbench}
                 onPublishTemplateApp={props.onPublishTemplateApp}
                 onCreateSkillDraft={props.onCreateSkillDraft}
                 onCreateCapabilityRequest={props.onCreateCapabilityRequest}
                 onCreateCapabilityIssue={props.onCreateCapabilityIssue}
                 onUpdateSkillStatus={props.onUpdateSkillStatus}
+                onRunSkillSmokeTest={props.onRunSkillSmokeTest}
+                onPublishWorkflowCapabilityBindings={props.onPublishWorkflowCapabilityBindings}
+                onRestoreWorkflowCapabilityBindings={props.onRestoreWorkflowCapabilityBindings}
+                onToggleWorkflowCapabilityBindingRequired={props.onToggleWorkflowCapabilityBindingRequired}
                 onUpdateCapabilityRequestStatus={props.onUpdateCapabilityRequestStatus}
                 onUpdateCapabilityIssueStatus={props.onUpdateCapabilityIssueStatus}
                 publishedAppTemplates={publishedAppTemplates}

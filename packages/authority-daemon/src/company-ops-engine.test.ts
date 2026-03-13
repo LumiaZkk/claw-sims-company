@@ -99,11 +99,47 @@ describe("runCompanyOpsCycle", () => {
 
     expect(result.runtime.activeSupportRequests).toHaveLength(1);
     expect(result.runtime.activeSupportRequests[0]).toMatchObject({
+      revision: 1,
       requesterDepartmentId: "dep-writing",
       targetDepartmentId: "dep-cto",
       requestedByActorId: "writer-lead",
       ownerActorId: "co-cto",
       status: "open",
+    });
+  });
+
+  it("refreshes support request context with a new revision when the generated summary changes", () => {
+    const runtime = createRuntime([createWorkItem()]);
+    runtime.activeSupportRequests = [
+      {
+        id: "support:work-1:dep-cto",
+        revision: 1,
+        workItemId: "work-1",
+        requesterDepartmentId: "dep-writing",
+        targetDepartmentId: "dep-cto",
+        requestedByActorId: "writer-lead",
+        ownerActorId: "co-cto",
+        summary: "旧的支持请求摘要",
+        detail: "旧的支持请求细节",
+        status: "open",
+        slaDueAt: 40_000,
+        createdAt: 5_000,
+        updatedAt: 5_000,
+      },
+    ];
+
+    const result = runCompanyOpsCycle({
+      company: createCompany(),
+      runtime,
+      now: 10_000,
+    });
+
+    expect(result.runtime.activeSupportRequests[0]).toMatchObject({
+      id: "support:work-1:dep-cto",
+      revision: 2,
+      summary: "小说创作部 需要 技术部 支持：写作部门需要一致性工具支持",
+      detail: "请技术部提供章节一致性工具。",
+      updatedAt: 10_000,
     });
   });
 
@@ -135,12 +171,67 @@ describe("runCompanyOpsCycle", () => {
     });
 
     expect(result.runtime.activeEscalations[0]).toMatchObject({
+      revision: 1,
       sourceType: "support_request",
       sourceId: "support:work-1:dep-cto",
       targetActorId: "co-ceo",
       status: "open",
     });
     expect(result.runtime.activeWorkItems[0]?.ownerActorId).toBe("writer-lead");
+  });
+
+  it("bumps escalation revision when the escalation reason materially changes", () => {
+    const runtime = createRuntime([
+      createWorkItem({
+        updatedAt: 1_000,
+      }),
+    ]);
+    runtime.activeSupportRequests = [
+      {
+        id: "support:work-1:dep-cto",
+        revision: 1,
+        workItemId: "work-1",
+        requesterDepartmentId: "dep-writing",
+        targetDepartmentId: "dep-cto",
+        requestedByActorId: "writer-lead",
+        ownerActorId: "co-cto",
+        summary: "需要技术支持",
+        status: "blocked",
+        createdAt: 5_000,
+        updatedAt: 9_000,
+      },
+    ];
+    runtime.activeEscalations = [
+      {
+        id: "escalation:support_request:support:work-1:dep-cto",
+        revision: 1,
+        sourceType: "support_request",
+        sourceId: "support:work-1:dep-cto",
+        companyId: "company-1",
+        workItemId: "work-1",
+        requesterDepartmentId: "dep-writing",
+        targetActorId: "co-ceo",
+        reason: "支持请求超过 SLA，需要 CEO 介入协调：需要技术支持",
+        severity: "critical",
+        status: "open",
+        createdAt: 15_000,
+        updatedAt: 15_000,
+      },
+    ];
+
+    const result = runCompanyOpsCycle({
+      company: createCompany(),
+      runtime,
+      now: 20_000,
+    });
+
+    expect(result.runtime.activeEscalations[0]).toMatchObject({
+      id: "escalation:support_request:support:work-1:dep-cto",
+      revision: 2,
+      reason: "支持请求已阻塞，需要 CEO 介入协调：小说创作部 需要 技术部 支持：写作部门需要一致性工具支持",
+      status: "open",
+      updatedAt: 20_000,
+    });
   });
 
   it("does not escalate waiting_owner work items as blocked until they become explicit blockers", () => {
@@ -227,6 +318,7 @@ describe("runCompanyOpsCycle", () => {
     runtime.activeEscalations = [
       {
         id: "escalation:org_policy:underload:dep-writing",
+        revision: 1,
         sourceType: "org_policy",
         sourceId: "underload:dep-writing",
         companyId: "company-1",
@@ -351,11 +443,13 @@ describe("runCompanyOpsCycle", () => {
     });
     expect(events[1]?.payload).toMatchObject({
       requestId: "support:work-1:dep-cto",
+      revision: 1,
       status: "open",
       targetDepartmentId: "dep-cto",
     });
     expect(events[2]?.payload).toMatchObject({
       escalationId: "escalation:support_request:support:work-1:dep-cto",
+      revision: 1,
       status: "open",
       severity: "critical",
     });
@@ -372,6 +466,7 @@ describe("runCompanyOpsCycle", () => {
     previousRuntime.activeSupportRequests = [
       {
         id: "support:work-1:dep-cto",
+        revision: 2,
         workItemId: "work-1",
         requesterDepartmentId: "dep-writing",
         targetDepartmentId: "dep-cto",
@@ -386,6 +481,7 @@ describe("runCompanyOpsCycle", () => {
     previousRuntime.activeEscalations = [
       {
         id: "escalation:support_request:support:work-1:dep-cto",
+        revision: 2,
         sourceType: "support_request",
         sourceId: "support:work-1:dep-cto",
         companyId: "company-1",
@@ -438,11 +534,13 @@ describe("runCompanyOpsCycle", () => {
     ]);
     expect(events[1]?.payload).toMatchObject({
       requestId: "support:work-1:dep-cto",
+      revision: 2,
       status: "cancelled",
       targetDepartmentId: "dep-cto",
     });
     expect(events[2]?.payload).toMatchObject({
       escalationId: "escalation:support_request:support:work-1:dep-cto",
+      revision: 2,
       status: "resolved",
       decisionTicketId: "decision:escalation:support:work-1:headcount",
     });

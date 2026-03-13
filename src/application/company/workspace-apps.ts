@@ -96,7 +96,7 @@ export function buildRecommendedWorkspaceApps(company: Company): CompanyWorkspac
   if (isNovelCompany(company)) {
     return buildNovelWorkspaceApps(company).map(normalizeWorkspaceApp);
   }
-  return [];
+  return buildGenericWorkspaceApps(company).map(normalizeWorkspaceApp);
 }
 
 function buildWorkspaceAppSeed(template: CompanyWorkspaceAppTemplate): WorkspaceAppSeed {
@@ -104,8 +104,8 @@ function buildWorkspaceAppSeed(template: CompanyWorkspaceAppTemplate): Workspace
     case "reader":
       return {
         slug: "reader",
-        title: "公司阅读器",
-        description: "直接阅读正文、设定、报告和关键上下文，不再只靠文件树猜内容。",
+        title: "内容查看器",
+        description: "直接查看主体内容、参考资料、报告和关键上下文，不再只靠文件树猜内容。",
         icon: "📖",
         kind: "custom",
         status: "ready",
@@ -115,8 +115,8 @@ function buildWorkspaceAppSeed(template: CompanyWorkspaceAppTemplate): Workspace
     case "consistency":
       return {
         slug: "consistency-hub",
-        title: "一致性中心",
-        description: "围绕设定、人物、时间线和伏笔，管理这家公司的唯一真相源。",
+        title: "规则与校验",
+        description: "围绕关键参考资料、规则和状态流转，管理这家公司的真相源与校验入口。",
         icon: "🧭",
         kind: "custom",
         status: "recommended",
@@ -303,20 +303,51 @@ function buildNovelWorkspaceApps(company: Company): CompanyWorkspaceApp[] {
   ];
 }
 
+function buildGenericWorkspaceApps(company: Company): CompanyWorkspaceApp[] {
+  const ctoAgentId = company.employees.find((employee) => employee.metaRole === "cto")?.agentId;
+  const templates: CompanyWorkspaceAppTemplate[] = ["reader", "consistency", "knowledge", "workbench"];
+  return templates.map((template) => {
+    const seed = buildWorkspaceAppSeed(template);
+    return {
+      id: buildDefaultWorkspaceAppId(template),
+      slug: seed.slug,
+      title: seed.title,
+      description: seed.description,
+      icon: seed.icon,
+      kind: seed.kind,
+      status: seed.status,
+      ownerAgentId: ctoAgentId,
+      surface: seed.surface,
+      template: seed.template,
+    };
+  });
+}
+
 export function describeWorkspaceResource(name: string, path?: string | null): WorkspaceResourceDescriptor {
   const haystack = `${name} ${path ?? ""}`.trim().toLowerCase();
   const tags = new Set<string>();
   if (/(审校|review|终审|qa|校对|发布结果|publish)/i.test(haystack)) {
+    tags.add("ops.report");
     tags.add("qa.report");
     tags.add("company.resource");
     return { kind: "review", resourceType: "report", tags: [...tags] };
   }
-  if (/(第?\s*\d+\s*章|ch\d+|chapter|chapters\/|正文)/i.test(haystack)) {
+  if (
+    /(第?\s*\d+\s*章|ch\d+|chapter|chapters\/|正文|(?:^|\/)(?:content|drafts|scenes|episodes|quests|missions|levels)\/)/i.test(
+      haystack,
+    )
+  ) {
+    tags.add("content.primary");
     tags.add("story.chapter");
     tags.add("company.resource");
     return { kind: "chapter", resourceType: "document", tags: [...tags] };
   }
-  if (/(设定|人物|时间线|世界观|伏笔|canon|timeline|foreshadow|shared-system)/i.test(haystack)) {
+  if (
+    /(设定|人物|时间线|世界观|伏笔|canon|timeline|foreshadow|shared-system|reference|guide|manual|schema|spec|blueprint|architecture|规则|约束)/i.test(
+      haystack,
+    )
+  ) {
+    tags.add("domain.reference");
     tags.add("story.canon");
     if (/(时间线|timeline)/i.test(haystack)) {
       tags.add("story.timeline");
@@ -327,12 +358,17 @@ export function describeWorkspaceResource(name: string, path?: string | null): W
     tags.add("company.resource");
     return { kind: "canon", resourceType: "document", tags: [...tags] };
   }
-  if (/(团队规划|技术方案|工具方案|运营策略|汇总方案|执行方案|治理件|策略|方案|总结|总览)/i.test(haystack)) {
+  if (
+    /(团队规划|技术方案|工具方案|运营策略|汇总方案|执行方案|治理件|策略|方案|总结|总览|brief|prd|roadmap|analysis|retrospective|postmortem)/i.test(
+      haystack,
+    )
+  ) {
     tags.add("company.knowledge");
+    tags.add("domain.reference");
     tags.add("company.resource");
     return { kind: "knowledge", resourceType: "document", tags: [...tags] };
   }
-  if (/\.(json|ya?ml|ts|js|py|sh)$/i.test(haystack) || /(tool|script|spec)/i.test(haystack)) {
+  if (/\.(json|ya?ml|ts|js|py|sh)$/i.test(haystack) || /(tool|script|spec|simulator|generator|checker)/i.test(haystack)) {
     tags.add("tech.tool");
     return { kind: "tooling", resourceType: "tool", tags: [...tags] };
   }
@@ -361,6 +397,7 @@ export function buildWorkspaceToolRequest(
     | "novel-reader"
     | "chapter-review-console",
 ): { title: string; prompt: string } {
+  const novelCompany = isNovelCompany(company);
   const companyLabel = `${company.icon} ${company.name}`;
   const sharedContext = [
     `当前公司：${companyLabel}`,
@@ -376,18 +413,24 @@ export function buildWorkspaceToolRequest(
   switch (tool) {
     case "consistency-checker":
       return {
-        title: "开发一致性工具",
-        prompt: `${sharedContext}\n\n请先为小说创作团队设计并落地第一版“设定一致性工具”。它至少要覆盖：共享设定库、人物关系、时间线、伏笔与章节引用校验。`,
+        title: novelCompany ? "开发一致性工具" : "开发规则校验工具",
+        prompt: novelCompany
+          ? `${sharedContext}\n\n请先为小说创作团队设计并落地第一版“设定一致性工具”。它至少要覆盖：共享设定库、人物关系、时间线、伏笔与章节引用校验。`
+          : `${sharedContext}\n\n请先为当前公司设计并落地第一版“规则校验工具”。它至少要覆盖：唯一真相源、关键业务规则、状态流转检查，以及交接/验收前的阻塞项提示。`,
       };
     case "novel-reader":
       return {
-        title: "开发小说阅读器",
-        prompt: `${sharedContext}\n\n请先为小说创作团队开发第一版“小说阅读器”。它至少要覆盖：章节目录、正文阅读、审校报告对照、共享设定侧边栏、版本切换。\n\n交付要求：\n1. 除了页面方案，还要显式产出一份 \`workspace-app-manifest.reader.json\`。\n2. 这个 AppManifest 至少要把正文/设定/报告三类内容分到不同 section，不要只靠文件名猜。\n3. 每条资源至少包含：slot、title，以及 artifactId/sourcePath/sourceName 三选一的定位信息。\n4. 如果阅读器会触发动作，请把动作声明到 manifest actions 里，而不是只写在文档里。`,
+        title: novelCompany ? "开发小说阅读器" : "开发内容查看器",
+        prompt: novelCompany
+          ? `${sharedContext}\n\n请先为小说创作团队开发第一版“小说阅读器”。它至少要覆盖：章节目录、正文阅读、审校报告对照、共享设定侧边栏、版本切换。\n\n交付要求：\n1. 除了页面方案，还要显式产出一份 \`workspace-app-manifest.reader.json\`。\n2. 这个 AppManifest 至少要把正文/设定/报告三类内容分到不同 section，不要只靠文件名猜。\n3. 每条资源至少包含：slot、title，以及 artifactId/sourcePath/sourceName 三选一的定位信息。\n4. 如果阅读器会触发动作，请把动作声明到 manifest actions 里，而不是只写在文档里。`
+          : `${sharedContext}\n\n请先为当前公司开发第一版“内容查看器”。它至少要覆盖：主体内容阅读、参考资料对照、报告回看、视图切换。\n\n交付要求：\n1. 除了页面方案，还要显式产出一份 \`workspace-app-manifest.reader.json\`。\n2. 这个 AppManifest 至少要把主体内容/参考资料/报告三类内容分到不同 section，不要只靠文件名猜。\n3. 每条资源至少包含：slot、title，以及 artifactId/sourcePath/sourceName 三选一的定位信息。\n4. 如果查看器会触发动作，请把动作声明到 manifest actions 里，而不是只写在文档里。`,
       };
     default:
       return {
-        title: "开发章节审阅台",
-        prompt: `${sharedContext}\n\n请先为小说创作团队开发第一版“章节审阅台”。它至少要覆盖：章节状态、待办清单、审校意见、终审结论、发布前检查。`,
+        title: novelCompany ? "开发章节审阅台" : "开发审阅控制台",
+        prompt: novelCompany
+          ? `${sharedContext}\n\n请先为小说创作团队开发第一版“章节审阅台”。它至少要覆盖：章节状态、待办清单、审校意见、终审结论、发布前检查。`
+          : `${sharedContext}\n\n请先为当前公司开发第一版“审阅控制台”。它至少要覆盖：对象状态、待办清单、审阅意见、验收结论和交付前检查。`,
       };
   }
 }

@@ -2,6 +2,9 @@ import type {
   AuthorityActorsResponse,
   AuthorityAppendRoomRequest,
   AuthorityAppendCompanyEventRequest,
+  AuthorityApprovalMutationResponse,
+  AuthorityApprovalRequest,
+  AuthorityApprovalResolveRequest,
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
@@ -12,10 +15,13 @@ import type {
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
   AuthorityCollaborationScopeResponse,
+  AuthorityConversationStateDeleteRequest,
+  AuthorityConversationStateUpsertRequest,
   AuthorityCompanyEventsResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityCreateCompanyRequest,
   AuthorityCreateCompanyResponse,
+  AuthorityRetryCompanyProvisioningResponse,
   AuthorityDispatchDeleteRequest,
   AuthorityDispatchUpsertRequest,
   AuthorityDecisionTicketDeleteRequest,
@@ -27,14 +33,20 @@ import type {
   AuthorityHealthSnapshot,
   AuthorityHireEmployeeRequest,
   AuthorityHireEmployeeResponse,
+  AuthorityMissionDeleteRequest,
+  AuthorityMissionUpsertRequest,
   AuthorityRequirementPromoteRequest,
   AuthorityRequirementTransitionRequest,
+  AuthorityRoundDeleteRequest,
+  AuthorityRoundUpsertRequest,
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
   AuthorityRuntimeSyncRequest,
   AuthoritySessionHistoryResponse,
   AuthoritySessionListResponse,
   AuthoritySwitchCompanyRequest,
+  AuthorityWorkItemDeleteRequest,
+  AuthorityWorkItemUpsertRequest,
 } from "./contract";
 import { DEFAULT_AUTHORITY_URL } from "./contract";
 
@@ -170,6 +182,16 @@ export class AuthorityClient {
     });
   }
 
+  async retryCompanyProvisioning(companyId: string) {
+    return requestJson<AuthorityRetryCompanyProvisioningResponse>(
+      this.baseUrl,
+      `/companies/${encodeURIComponent(companyId)}/provisioning/retry`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
   async hireEmployee(body: AuthorityHireEmployeeRequest) {
     return requestJson<AuthorityHireEmployeeResponse>(
       this.baseUrl,
@@ -190,6 +212,20 @@ export class AuthorityClient {
         body: JSON.stringify(body),
       },
     );
+  }
+
+  async requestApproval(body: AuthorityApprovalRequest) {
+    return requestJson<AuthorityApprovalMutationResponse>(this.baseUrl, "/commands/approval.request", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async resolveApproval(body: AuthorityApprovalResolveRequest) {
+    return requestJson<AuthorityApprovalMutationResponse>(this.baseUrl, "/commands/approval.resolve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   async deleteCompany(companyId: string) {
@@ -268,6 +304,62 @@ export class AuthorityClient {
 
   async upsertRoomBindings(body: AuthorityRoomBindingsUpsertRequest) {
     return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/room-bindings.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async upsertRound(body: AuthorityRoundUpsertRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/round.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteRound(body: AuthorityRoundDeleteRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/round.delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async upsertMission(body: AuthorityMissionUpsertRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/mission.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteMission(body: AuthorityMissionDeleteRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/mission.delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async upsertConversationState(body: AuthorityConversationStateUpsertRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/conversation-state.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteConversationState(body: AuthorityConversationStateDeleteRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/conversation-state.delete", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async upsertWorkItem(body: AuthorityWorkItemUpsertRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/work-item.upsert", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteWorkItem(body: AuthorityWorkItemDeleteRequest) {
+    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/work-item.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
@@ -471,6 +563,21 @@ export class AuthorityClient {
       method: "PUT",
       body: JSON.stringify({ content }),
     });
+  }
+
+  async runAgentFile(agentId: string, body: {
+    entryPath: string;
+    payload?: Record<string, unknown>;
+    timeoutMs?: number;
+  }) {
+    return requestJson<import("./contract").AuthorityAgentFileRunResponse>(
+      this.baseUrl,
+      `/agents/${encodeURIComponent(agentId)}/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
   }
 
   connectEvents(handlers: {

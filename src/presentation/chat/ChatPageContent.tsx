@@ -1,3 +1,4 @@
+import * as Dialog from "@radix-ui/react-dialog";
 import { UploadCloud } from "lucide-react";
 import {
   startTransition,
@@ -25,7 +26,6 @@ import { ChatAutoDispatchController } from "./components/ChatAutoDispatchControl
 import { ChatComposerFooter } from "./components/ChatComposerFooter";
 import { ChatConversationWorkItemSync } from "./components/ChatConversationWorkItemSync";
 import { ChatMessageFeed } from "./components/ChatMessageFeed";
-import { ChatMissionStrip } from "./components/ChatMissionStrip";
 import { ChatRequirementDraftCard } from "./components/ChatRequirementDraftCard";
 import { ChatSessionHeader } from "./components/ChatSessionHeader";
 import { ChatSummaryPanel } from "./components/ChatSummaryPanel";
@@ -67,12 +67,18 @@ import {
   buildCompanyChatRoute,
 } from "../../lib/chat-routes";
 import { usePageVisibility } from "../../lib/use-page-visibility";
+import {
+  buildRequirementOverviewTitle,
+  deriveStrategicRequirementTitle,
+} from "../../domain/mission/requirement-topic";
+import { parseDraftRequirementSignals } from "../../application/mission/draft-requirement";
 import { useChatClosedLoop } from "./hooks/useChatClosedLoop";
 import { useChatActionSurface } from "./hooks/useChatActionSurface";
 import { useChatPreviewPersistence } from "./hooks/useChatPreviewPersistence";
 import { useChatRuntimeEffects } from "./hooks/useChatRuntimeEffects";
 import { useChatRouteCompanyState } from "./hooks/useChatRouteCompanyState";
 import { buildRequirementPromotionSystemMessages } from "./view-models/promotion-system-events";
+import type { ChatDisplayItem } from "./view-models/message-types";
 import {
   clearLiveChatSession,
   type LiveChatSessionState,
@@ -82,6 +88,364 @@ import type { EmployeeRef } from "../../domain/org/types";
 
 const CHAT_RENDER_WINDOW_STEP = 80;
 const EMPTY_EMPLOYEES: EmployeeRef[] = [];
+
+function isLowSignalProgressSummary(value: string | null | undefined): boolean {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) {
+    return true;
+  }
+  return /条结论回传|等待\s*[^，。]{1,16}\s*收口|团队成员已经给出结论反馈|当前主线正在推进|需求团队派单|待确认启动|已经给出反馈|^-{3,}$|---/.test(
+    normalized,
+  );
+}
+
+function extractChatMessageText(message: ChatMessage | null | undefined): string {
+  if (!message) {
+    return "";
+  }
+  if (typeof message.text === "string" && message.text.trim().length > 0) {
+    return message.text.trim();
+  }
+  if (typeof message.content === "string" && message.content.trim().length > 0) {
+    return message.content.trim();
+  }
+  if (!Array.isArray(message.content)) {
+    return "";
+  }
+  return message.content
+    .map((block) => {
+      if (typeof block === "string") {
+        return block;
+      }
+      if (block && typeof block === "object") {
+        const record = block as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          return record.text.trim();
+        }
+      }
+      return "";
+    })
+    .filter((entry) => entry.length > 0)
+    .join("\n")
+    .trim();
+}
+
+function normalizeMissionNoteText(text: string): string {
+  return text.replace(
+    /\*\*(当前理解|当前判断|建议下一步|下一步建议|是否可推进|当前负责人|当前阶段|当前状态|唯一阻塞点)\*\*/gu,
+    "$1",
+  );
+}
+
+function extractMissionBlocker(text: string | null | undefined): string | null {
+  const normalized = normalizeMissionNoteText(text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  const labeledBlocker = normalized.match(
+    /(?:唯一阻塞点|当前阻塞)[：:]\s*([\s\S]*?)(?=\s*(?:COO报告明确要求|当前理解|建议下一步|是否可推进|下一步执行计划|交付物清单|$))/u,
+  )?.[1];
+  const blocker = labeledBlocker?.trim().replace(/[。；;，,]+$/u, "") ?? "";
+  if (blocker) {
+    return blocker;
+  }
+  const impliedBlocker = normalized.match(
+    /((?:等待|待)CEO[^。；;，,]*账号信息[^。；;，,]*(?:确认|补充))/u,
+  )?.[1];
+  return impliedBlocker?.trim() ?? null;
+}
+
+function normalizeSingleChatBlocker(
+  blocker: string | null | undefined,
+  actorLabel: string | null | undefined,
+): string | null {
+  const normalized = blocker?.trim().replace(/[。；;，,]+$/u, "") ?? "";
+  if (!normalized) {
+    return null;
+  }
+  const actorPrefix = actorLabel?.trim() ?? "";
+  const withoutActor = actorPrefix
+    ? normalized.replace(new RegExp(`^${actorPrefix}\\s*`, "u"), "")
+    : normalized;
+  const cleaned = withoutActor.replace(/^CEO\s*/u, "").trim();
+  if (!cleaned) {
+    return null;
+  }
+  if (/账号信息待确认/u.test(cleaned)) {
+    return actorPrefix ? `等待 ${actorPrefix} 确认账号信息` : "等待账号信息确认";
+  }
+  if (/结构化选项/u.test(cleaned)) {
+    return actorPrefix ? `等待 ${actorPrefix} 补发结构化选项` : "等待结构化选项";
+  }
+  if (cleaned.startsWith("等待")) {
+    return cleaned;
+  }
+  if (/待确认|待补充|待回复/u.test(cleaned)) {
+    return `等待${cleaned.replace(/^待/u, "")}`;
+  }
+  return cleaned;
+}
+
+function buildSingleChatMissionHeadline(input: {
+  taskTitle: string | null;
+  blocker: string | null;
+  step: string | null;
+  actorLabel: string | null;
+  fallbackHeadline: string;
+}): string {
+  const taskTitle = input.taskTitle?.trim() ?? "";
+  const blocker = normalizeSingleChatBlocker(input.blocker, input.actorLabel);
+  const step = input.step?.trim() ?? "";
+  if (taskTitle) {
+    if (blocker) {
+      return `${taskTitle} · ${blocker}`;
+    }
+    if (step && !isLowSignalProgressSummary(step) && step !== taskTitle) {
+      return `${taskTitle} · ${step}`;
+    }
+    return taskTitle;
+  }
+  if (blocker) {
+    return blocker;
+  }
+  return input.fallbackHeadline;
+}
+
+function parseInlineMissionNote(text: string): {
+  summary: string | null;
+  nextAction: string | null;
+} | null {
+  const normalized = normalizeMissionNoteText(text).trim();
+  if (!normalized) {
+    return null;
+  }
+  const summaryMatch = normalized.match(
+    /当前理解[：:]\s*([\s\S]*?)(?=\s*(?:建议下一步|下一步建议|是否可推进)[：:]|$)/u,
+  );
+  const nextActionMatch = normalized.match(
+    /(?:建议下一步|下一步建议)[：:]\s*([\s\S]*?)(?=\s*是否可推进[：:]|$)/u,
+  );
+  const summary = summaryMatch?.[1]?.trim() ?? null;
+  const nextAction = nextActionMatch?.[1]?.trim() ?? null;
+  if (!summary && !nextAction) {
+    return null;
+  }
+  return {
+    summary,
+    nextAction,
+  };
+}
+
+function findLatestStructuredMissionNote(messages: ChatMessage[]): {
+  summary: string | null;
+  nextAction: string | null;
+  rawText: string;
+} | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const text = extractChatMessageText(message);
+    if (!text) {
+      continue;
+    }
+    const normalizedText = normalizeMissionNoteText(text);
+    const parsed = parseDraftRequirementSignals(normalizedText);
+    if (parsed.summary || parsed.nextAction) {
+      return {
+        summary: parsed.summary,
+        nextAction: parsed.nextAction,
+        rawText: normalizedText,
+      };
+    }
+    const inlineParsed = parseInlineMissionNote(normalizedText);
+    if (inlineParsed?.summary || inlineParsed?.nextAction) {
+      return {
+        summary: inlineParsed.summary,
+        nextAction: inlineParsed.nextAction,
+        rawText: normalizedText,
+      };
+    }
+  }
+  return null;
+}
+
+function findMeaningfulMainlineSummary(
+  candidates: Array<string | null | undefined>,
+): string | null {
+  for (const candidate of candidates) {
+    const normalized = candidate?.trim() ?? "";
+    if (!normalized || isLowSignalProgressSummary(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return null;
+}
+
+function isLowSignalMainlineHeadline(value: string | null | undefined): boolean {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) {
+    return true;
+  }
+  return (
+    isLowSignalProgressSummary(normalized) ||
+    /^(需求团队房间|需求团队|需求团队:|当前需求|当前战略任务|当前任务|本次需求|主线已绑定|等待同事)$/.test(
+      normalized,
+    ) ||
+    /^等待.+(回复|回执)$/.test(normalized) ||
+    /^团队已回复，等待.+收口$/.test(normalized)
+  );
+}
+
+function summarizeHeadline(value: string): string {
+  return value.length > 30 ? `${value.slice(0, 29).trimEnd()}…` : value;
+}
+
+function looksLikeNarrativeHeadline(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.length > 22 ||
+    /[，。；：,.!?！？]/.test(normalized) ||
+    /^(等待|继续|立即|目前|当前|已|正在|收到|请)/.test(normalized)
+  );
+}
+
+function normalizeMainlineHeadlineCandidate(input: {
+  topicKey: string | null;
+  candidate: string;
+  summaryCandidates: Array<string | null | undefined>;
+}): string {
+  const normalized = input.candidate.trim();
+  if (!normalized || isLowSignalMainlineHeadline(normalized)) {
+    return "";
+  }
+  const hintPool = [
+    normalized,
+    ...input.summaryCandidates
+      .map((candidate) => candidate?.trim() ?? "")
+      .filter((candidate) => candidate.length > 0),
+  ];
+  const likelyMissionTopic =
+    /(^|:)mission(?::|$)/.test(input.topicKey ?? "") ||
+    hintPool.some((candidate) =>
+      /小说|创作系统|运营评估|技术评估|执行方案|MVP|账号信息|部署|发布渠道/i.test(candidate),
+    );
+  if (
+    likelyMissionTopic &&
+    looksLikeNarrativeHeadline(normalized)
+  ) {
+    const derivedTitle = deriveStrategicRequirementTitle(hintPool).trim();
+    if (
+      derivedTitle &&
+      derivedTitle !== "当前战略任务" &&
+      !isLowSignalMainlineHeadline(derivedTitle) &&
+      derivedTitle.length <= normalized.length
+    ) {
+      return derivedTitle;
+    }
+  }
+  if (input.topicKey?.startsWith("mission:") && looksLikeNarrativeHeadline(normalized)) {
+    const derivedTitle = buildRequirementOverviewTitle(input.topicKey, hintPool).trim();
+    if (
+      derivedTitle &&
+      !isLowSignalMainlineHeadline(derivedTitle) &&
+      derivedTitle.length <= normalized.length
+    ) {
+      return derivedTitle;
+    }
+  }
+  return normalized;
+}
+
+function deriveRecentMissionConversationTitle(messages: ChatMessage[]): string | null {
+  const recentHints = messages
+    .slice(-40)
+    .map((message) => extractChatMessageText(message))
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0);
+  if (recentHints.length === 0) {
+    return null;
+  }
+  const derivedTitle = deriveStrategicRequirementTitle(recentHints).trim();
+  if (!derivedTitle || derivedTitle === "当前战略任务" || isLowSignalMainlineHeadline(derivedTitle)) {
+    return null;
+  }
+  return derivedTitle;
+}
+
+function extractDisplayItemText(item: ChatDisplayItem): string {
+  if (item.kind === "tool") {
+    return `${item.title}\n${item.detail}`.trim();
+  }
+  return item.detailContent?.trim() || extractChatMessageText(item.message);
+}
+
+function findLatestDisplayMissionNote(displayItems: ChatDisplayItem[]): {
+  summary: string | null;
+  nextAction: string | null;
+  rawText: string;
+} | null {
+  for (let index = displayItems.length - 1; index >= 0; index -= 1) {
+    const text = extractDisplayItemText(displayItems[index]!).trim();
+    if (!text) {
+      continue;
+    }
+    const normalizedText = normalizeMissionNoteText(text);
+    const parsed = parseDraftRequirementSignals(normalizedText);
+    if (parsed.summary || parsed.nextAction) {
+      return {
+        summary: parsed.summary,
+        nextAction: parsed.nextAction,
+        rawText: normalizedText,
+      };
+    }
+    const inlineParsed = parseInlineMissionNote(normalizedText);
+    if (inlineParsed?.summary || inlineParsed?.nextAction) {
+      return {
+        summary: inlineParsed.summary,
+        nextAction: inlineParsed.nextAction,
+        rawText: normalizedText,
+      };
+    }
+  }
+  return null;
+}
+
+function findMeaningfulMainlineHeadline(input: {
+  topicKey: string | null;
+  headlineCandidates: Array<string | null | undefined>;
+  summaryCandidates: Array<string | null | undefined>;
+}): string | null {
+  const summary = findMeaningfulMainlineSummary(input.summaryCandidates);
+  for (const candidate of input.headlineCandidates) {
+    const normalized = candidate?.trim() ?? "";
+    if (!normalized) {
+      continue;
+    }
+    const resolvedHeadline = normalizeMainlineHeadlineCandidate({
+      topicKey: input.topicKey,
+      candidate: normalized,
+      summaryCandidates: [summary, ...input.summaryCandidates],
+    });
+    if (!resolvedHeadline) {
+      continue;
+    }
+    return summarizeHeadline(resolvedHeadline);
+  }
+  if (!summary) {
+    return null;
+  }
+  const derivedHeadline = buildRequirementOverviewTitle(input.topicKey ?? "mission:", [summary]);
+  if (!isLowSignalMainlineHeadline(derivedHeadline)) {
+    return summarizeHeadline(derivedHeadline);
+  }
+  return summarizeHeadline(summary);
+}
 
 export function ChatPageScreen() {
   const navigate = useNavigate();
@@ -561,18 +925,120 @@ export function ChatPageScreen() {
         : null,
     [activeCompany, isGroup, messages, primaryRequirementSurface],
   );
+  const latestStructuredMissionNote = useMemo(
+    () => findLatestStructuredMissionNote(messages),
+    [messages],
+  );
+  const recentConversationMainlineTitle = useMemo(
+    () => deriveRecentMissionConversationTitle(messages),
+    [messages],
+  );
   const showSettledRequirementCard =
     !isArchiveView &&
     !isGroup &&
     isCeoSession &&
     Boolean(settledRequirementAggregate);
+  const latestStructuredMainlineSummary = findMeaningfulMainlineSummary([
+    latestStructuredMissionNote?.summary,
+  ]);
+  const persistedMainlineSummary = findMeaningfulMainlineSummary([
+    requirementOverview?.summary,
+    settledRequirementAggregate?.summary,
+    stableDisplayWorkItem?.goal,
+    primaryRequirementSurface?.workItem?.goal,
+    primaryRequirementSurface?.aggregate?.summary,
+  ]);
+  const groupMainlineSummary = (() => {
+    if (!isGroup) {
+      return null;
+    }
+    if (latestStructuredMainlineSummary) {
+      return latestStructuredMainlineSummary;
+    }
+    if (persistedMainlineSummary) {
+      return persistedMainlineSummary;
+    }
+    const collaborationGoalSummary = requirementCollaborationSurface?.goalSummary?.trim() ?? "";
+    const headline = primaryRequirementSurface?.title?.trim() ?? groupTitle?.trim() ?? "";
+    if (
+      collaborationGoalSummary &&
+      collaborationGoalSummary !== headline &&
+      !isLowSignalProgressSummary(collaborationGoalSummary)
+    ) {
+      return collaborationGoalSummary;
+    }
+    return null;
+  })();
+  const groupMainlineHeadline = findMeaningfulMainlineHeadline({
+    topicKey:
+      primaryRequirementSurface?.workItem?.topicKey ??
+      primaryRequirementSurface?.aggregate?.topicKey ??
+      requirementOverview?.topicKey ??
+      groupTopic,
+    headlineCandidates: [
+      recentConversationMainlineTitle,
+      primaryRequirementSurface?.title,
+      stableDisplayWorkItem?.title,
+      stableDisplayWorkItem?.headline,
+      persistedWorkItem?.title,
+      persistedWorkItem?.headline,
+      requirementOverview?.title,
+      groupTitle,
+    ],
+    summaryCandidates: [
+      groupMainlineSummary,
+      requirementCollaborationSurface?.goalSummary,
+      requirementOverview?.summary,
+      stableDisplayWorkItem?.goal,
+      stableDisplayWorkItem?.summary,
+      primaryRequirementSurface?.summary,
+      settledRequirementAggregate?.summary,
+      latestStructuredMissionNote?.summary,
+      latestStructuredMissionNote?.rawText,
+    ],
+  });
+  const singleChatMainlineTopicKey =
+    preferredConversationTopicKey ??
+    primaryRequirementSurface?.workItem?.topicKey ??
+    primaryRequirementSurface?.aggregate?.topicKey ??
+    requirementOverview?.topicKey ??
+    groupTopic ??
+    null;
+  const singleChatMainlineTitle = !isGroup
+    ? findMeaningfulMainlineHeadline({
+        topicKey: singleChatMainlineTopicKey,
+        headlineCandidates: [
+          recentConversationMainlineTitle,
+          stableDisplayWorkItem?.title,
+          stableDisplayWorkItem?.headline,
+          persistedWorkItem?.title,
+          persistedWorkItem?.headline,
+          requirementOverview?.title,
+          primaryRequirementSurface?.title,
+        ],
+        summaryCandidates: [
+          latestStructuredMissionNote?.summary,
+          stableDisplayWorkItem?.displaySummary,
+          stableDisplayWorkItem?.goal,
+          stableDisplayWorkItem?.summary,
+          requirementOverview?.summary,
+          settledRequirementAggregate?.summary,
+          primaryRequirementSurface?.summary,
+        ],
+      })
+    : null;
   const settledRequirementSummary =
+    (isGroup
+      ? groupMainlineSummary
+      : null) ??
+    latestStructuredMainlineSummary ??
     stableDisplayWorkItem?.displaySummary ??
     stableDisplayWorkItem?.summary ??
     requirementOverview?.summary ??
     settledRequirementAggregate?.summary ??
     "CEO 已经把这件事收敛成一条可推进的主线。";
   const settledRequirementNextAction =
+    (isGroup ? latestStructuredMissionNote?.nextAction : null) ??
     stableDisplayWorkItem?.displayNextAction ??
     stableDisplayWorkItem?.nextAction ??
     settledRequirementAggregate?.nextAction ??
@@ -959,6 +1425,9 @@ export function ChatPageScreen() {
       (/需求房间/.test(primaryOpenAction.label) || /需求团队/.test(primaryOpenAction.label)),
   );
   const displayRequirementHeadline =
+    (isGroup
+      ? groupMainlineHeadline
+      : null) ??
     primaryRequirementSurface?.title ??
     (isGroup ? groupTitle : null) ??
     effectiveHeadline;
@@ -1011,9 +1480,64 @@ export function ChatPageScreen() {
     : isLegacyRequirementDecisionPending
       ? "请让 CEO 补发结构化决策选项后再继续。"
       : settledRequirementNextAction;
+  const displayGroupNextAction = isGroup
+    ? findMeaningfulMainlineSummary([
+        latestStructuredMissionNote?.nextAction,
+        chatSurfaceSettledRequirementNextAction,
+      ])
+    : chatSurfaceSettledRequirementNextAction;
+  const showGroupCollaborationMode = isGroup && Boolean(requirementCollaborationSurface);
   const displayGroupTitle = isGroup
     ? primaryRequirementSurface?.title ?? groupTitle
     : groupTitle;
+  const displayGroupSummaryItems = !isArchiveView
+    ? (
+        isGroup && showGroupCollaborationMode
+          ? [
+              requirementCollaborationSurface?.headerSummary.currentBlocker
+                ? {
+                    label: "当前阻塞",
+                    value: requirementCollaborationSurface.headerSummary.currentBlocker,
+                  }
+                : {
+                    label: "当前阶段",
+                    value:
+                      requirementCollaborationSurface?.headerSummary.phaseLabel ??
+                      chatSurfaceStepLabel ??
+                      "待确认下一步",
+                  },
+              requirementCollaborationSurface?.isSingleOwnerClosure &&
+              requirementCollaborationSurface.closureOwnerLabel
+                ? {
+                    label: "当前收口人",
+                    value: requirementCollaborationSurface.closureOwnerLabel,
+                  }
+                : requirementCollaborationSurface?.headerSummary.activeParticipantsLabel
+                  ? {
+                      label: "协作成员",
+                      value: requirementCollaborationSurface.headerSummary.activeParticipantsLabel,
+                    }
+                : null,
+            ]
+          : chatSurfaceStepLabel
+            ? [
+                {
+                  label: "当前步骤",
+                  value: chatSurfaceStepLabel,
+                },
+              ]
+            : []
+      ).filter((value): value is { label: string; value: string } => Boolean(value))
+    : [];
+  const headerContextTagLabel = !isArchiveView
+    ? isGroup
+      ? null
+      : isRequirementBootstrapPending
+        ? "恢复中"
+        : stableDisplayWorkItem
+          ? "当前主线"
+          : "本轮规划/任务"
+    : null;
   const displayGroupSubtitle = isGroup
     ? [
         requirementCollaborationSurface?.phaseLabel
@@ -1032,6 +1556,7 @@ export function ChatPageScreen() {
         .filter((value): value is string => Boolean(value))
         .join(" · ") || "多人协作需求房"
     : null;
+  const showIntegratedGroupHeader = !isArchiveView;
   const promotionActionLabel =
     !authorityBackedState &&
     conversationDraftRequirement &&
@@ -1309,6 +1834,53 @@ export function ChatPageScreen() {
     isGenerating,
     streamText,
   });
+  const latestDisplayMissionNote = useMemo(
+    () => findLatestDisplayMissionNote(displayItems),
+    [displayItems],
+  );
+  const latestDisplayMissionBlocker = useMemo(
+    () => extractMissionBlocker(latestDisplayMissionNote?.rawText),
+    [latestDisplayMissionNote],
+  );
+  const headerSettledRequirementSummary = findMeaningfulMainlineSummary([
+    latestDisplayMissionNote?.summary,
+    isGroup ? latestStructuredMissionNote?.summary : null,
+    settledRequirementSummary,
+    chatSurfaceSummary,
+  ]) ?? settledRequirementSummary;
+  const headerDisplayGroupNextAction = findMeaningfulMainlineSummary([
+    latestDisplayMissionNote?.nextAction,
+    isGroup ? latestStructuredMissionNote?.nextAction : null,
+    displayGroupNextAction,
+    chatSurfaceSettledRequirementNextAction,
+  ]) ?? displayGroupNextAction;
+  const headerMissionHeadline = isGroup
+    ? recentConversationMainlineTitle ?? chatSurfaceHeadline
+    : buildSingleChatMissionHeadline({
+        taskTitle: singleChatMainlineTitle,
+        blocker: latestDisplayMissionBlocker,
+        step: chatSurfaceStepLabel,
+        actorLabel: emp?.nickname ?? null,
+        fallbackHeadline: chatSurfaceHeadline,
+      });
+  const headerGroupSummaryItems =
+    isGroup
+      ? latestDisplayMissionBlocker
+        ? [
+            { label: "当前阻塞", value: latestDisplayMissionBlocker },
+            ...displayGroupSummaryItems.filter(
+              (item) => item.label !== "当前阻塞" && item.label !== "当前阶段",
+            ),
+          ]
+        : displayGroupSummaryItems
+      : [
+          latestDisplayMissionBlocker
+            ? { label: "当前阻塞", value: latestDisplayMissionBlocker }
+            : null,
+          !latestDisplayMissionBlocker && chatSurfaceStepLabel
+            ? { label: "当前步骤", value: chatSurfaceStepLabel }
+            : null,
+        ].filter((value): value is { label: string; value: string } => Boolean(value));
   const deferredStreamText = useDeferredValue(streamText);
   const companyEmployees = activeCompany?.employees ?? EMPTY_EMPLOYEES;
   const chatSessionRuntime = useMemo(
@@ -1596,6 +2168,99 @@ export function ChatPageScreen() {
     },
     [handleSend, openRequirementDecisionTicket, resolveDecisionTicket],
   );
+  const summaryPanelNode = (
+    <ChatSummaryPanel
+      open={isSummaryOpen}
+      summaryPanelView={summaryPanelView}
+      isGroup={isGroup}
+      hasTechnicalSummary={hasTechnicalSummary}
+      effectiveHeadline={headerMissionHeadline}
+      headerStatusBadgeClass={headerStatusBadgeClass}
+      effectiveStatusLabel={chatSurfaceStatusLabel}
+      effectiveOwnerLabel={chatSurfaceOwnerLabel}
+      requirementTeamBatonLabel={requirementTeam?.batonLabel ?? null}
+      displayNextBatonLabel={chatSurfaceNextBatonLabel}
+      effectiveStage={chatSurfaceStage}
+      effectiveActionHint={chatSurfaceActionHint}
+      onSummaryPanelViewChange={setSummaryPanelView}
+      activeConversationMission={activeConversationMission}
+      isRequirementBootstrapPending={isRequirementBootstrapPending}
+      progressGroupSummary={progressGroupSummary}
+      latestProgressDisplay={latestProgressDisplay}
+      missionIsCompleted={missionIsCompleted}
+      sending={sending}
+      isGenerating={isGenerating}
+      recentProgressEvents={recentProgressEvents}
+      actionWatchCards={actionWatchCards}
+      lifecycleSections={displayRequirementLifecycleSections ?? []}
+      collaborationLifecycle={collaborationLifecycle}
+      detailActions={detailActions}
+      runningFocusActionId={runningFocusActionId}
+      recoveringCommunication={recoveringCommunication}
+      requirementTeam={requirementTeam}
+      teamMemberCards={teamMemberCards}
+      displayNextBatonAgentId={chatSurfaceNextBatonAgentId}
+      targetAgentId={targetAgentId ?? null}
+      teamGroupRoute={
+        showRequirementTeamEntryResolved
+          ? resolvedRequirementRoom
+            ? buildRequirementRoomHrefFromRecord(resolvedRequirementRoom)
+            : "__ensure__"
+          : null
+      }
+      primaryOpenAction={chatSurfacePrimaryOpenAction}
+      summaryRecoveryAction={summaryRecoveryAction}
+      isTechnicalSummaryOpen={isTechnicalSummaryOpen}
+      takeoverPack={
+        takeoverPack
+          ? {
+              failureSummary: takeoverPack.failureSummary,
+              recommendedNextAction: takeoverPack.recommendedNextAction,
+            }
+          : null
+      }
+      structuredTaskPreview={
+        structuredTaskPreview
+          ? {
+              summary: structuredTaskPreview.summary ?? chatSurfaceSummary,
+              state: structuredTaskPreview.state ?? null,
+            }
+          : null
+      }
+      hasRequirementOverview={Boolean(requirementOverview)}
+      effectiveSummary={chatSurfaceSummary}
+      requestPreview={requestPreview}
+      requestHealth={requestHealth}
+      ceoSurface={ceoSurface}
+      collaborationSurface={requirementCollaborationSurface}
+      orgAdvisorSummary={orgAdvisor?.summary ?? null}
+      handoffPreview={handoffPreview}
+      summaryAlertCount={summaryAlertCount}
+      relatedSlaAlertCount={relatedSlaAlerts.length}
+      localSlaFallbackAlertCount={localSlaFallbackAlerts.length}
+      onClearSession={() => void handleClearSession()}
+      onRunAction={(action) => void handleFocusAction(action)}
+      onNavigateToChat={(nextAgentId) => navigate(buildCompanyChatRoute(nextAgentId, activeCompany?.id))}
+      onNavigateToTeamGroup={openRequirementRoom}
+      onToggleTechnicalSummary={() => setIsTechnicalSummaryOpen((open) => !open)}
+      onCopyTakeoverPack={handleCopyTakeoverPack}
+    />
+  );
+  const handleOpenRequirementTeam = useCallback(() => {
+    trackChatRequirementMetric({
+      companyId: activeCompany?.id ?? null,
+      conversationId: conversationStateKey,
+      requirementId: persistedWorkItem?.id ?? conversationMissionRecord?.id ?? null,
+      name: "requirement_room_opened_from_ceo_chat",
+    });
+    openRequirementRoom();
+  }, [
+    activeCompany?.id,
+    conversationMissionRecord?.id,
+    conversationStateKey,
+    openRequirementRoom,
+    persistedWorkItem?.id,
+  ]);
 
   if (loading) {
     return (
@@ -1671,6 +2336,38 @@ export function ChatPageScreen() {
         groupTopic={groupTopic}
         groupTitle={displayGroupTitle}
         groupSubtitle={displayGroupSubtitle}
+        groupSummaryItems={headerGroupSummaryItems}
+        groupMission={
+          showIntegratedGroupHeader
+            ? {
+                contextTagLabel:
+                  activeConversationMission || requirementOverview || isRequirementBootstrapPending
+                  ? headerContextTagLabel
+                  : null,
+                headline: headerMissionHeadline,
+                tone: chatSurfaceTone,
+                statusLabel: chatSurfaceStatusLabel,
+                isCollaborationMode: showGroupCollaborationMode,
+                hasContextSummary,
+                summaryOpen: isSummaryOpen,
+                missionIsCompleted,
+                primaryOpenAction: chatSurfacePrimaryOpenAction,
+                promotionActionLabel,
+                showRequirementTeamEntry: showRequirementTeamEntryResolved,
+                hasTeamGroupRoute: primaryRequirementSurface?.roomStatus === "ready",
+                showSettledRequirementSummary:
+                  (isGroup && Boolean(headerSettledRequirementSummary || headerDisplayGroupNextAction)) ||
+                  showSettledRequirementCard,
+                settledRequirementSummaryLabel: isGroup ? "主线目标" : "当前推进",
+                settledRequirementSummary: headerSettledRequirementSummary,
+                settledRequirementNextAction: headerDisplayGroupNextAction,
+                onOpenRequirementTeam: handleOpenRequirementTeam,
+                onOpenSummaryPanel: () => openSummaryPanel("owner"),
+                onRunPrimaryAction: (action) => void handleFocusAction(action),
+                onRunPromotionAction: () => void handlePromoteRequirementDraft(),
+              }
+            : null
+        }
         emp={emp ?? null}
         isArchiveView={isArchiveView}
         showRequirementStatus={Boolean(requirementOverview || isRequirementBootstrapPending)}
@@ -1724,129 +2421,11 @@ export function ChatPageScreen() {
               onContinueChat={handleContinueDraftChat}
             />
           ) : null}
-          <ChatMissionStrip
-            open={isSummaryOpen}
-            onOpenChange={setIsSummaryOpen}
-            showRequirementContextTag={Boolean(
-              activeConversationMission || requirementOverview || isRequirementBootstrapPending,
-            )}
-            isGroup={isGroup}
-            isRequirementBootstrapPending={isRequirementBootstrapPending}
-            stableDisplayWorkItem={Boolean(stableDisplayWorkItem)}
-            sessionExecution={sessionExecution}
-            effectiveHeadline={chatSurfaceHeadline}
-            effectiveTone={chatSurfaceTone}
-            effectiveStatusLabel={chatSurfaceStatusLabel}
-            effectiveOwnerLabel={chatSurfaceOwnerLabel}
-            effectiveStepLabel={chatSurfaceStepLabel}
-            effectiveStage={chatSurfaceStage}
-            displayNextBatonLabel={chatSurfaceNextBatonLabel}
-            collaborationSurface={requirementCollaborationSurface}
-            missionIsCompleted={missionIsCompleted}
-            sending={sending}
-            isGenerating={isGenerating}
-            primaryOpenAction={chatSurfacePrimaryOpenAction}
-            promotionActionLabel={promotionActionLabel}
-            showRequirementTeamEntry={showRequirementTeamEntryResolved}
-            hasTeamGroupRoute={primaryRequirementSurface?.roomStatus === "ready"}
-            showSettledRequirementSummary={showSettledRequirementCard}
-            settledRequirementSummary={settledRequirementSummary}
-            settledRequirementNextAction={chatSurfaceSettledRequirementNextAction}
-            hasContextSummary={hasContextSummary}
-            onClearSession={() => void handleClearSession()}
-            onRunPrimaryAction={(action) => void handleFocusAction(action)}
-            onRunPromotionAction={() => void handlePromoteRequirementDraft()}
-            onOpenRequirementTeam={() => {
-              trackChatRequirementMetric({
-                companyId: activeCompany?.id ?? null,
-                conversationId: conversationStateKey,
-                requirementId: persistedWorkItem?.id ?? conversationMissionRecord?.id ?? null,
-                name: "requirement_room_opened_from_ceo_chat",
-              });
-              openRequirementRoom();
-            }}
-            onOpenSummaryPanel={() => openSummaryPanel("owner")}
-            summaryPanel={
-              <ChatSummaryPanel
-                open={isSummaryOpen}
-                summaryPanelView={summaryPanelView}
-                isGroup={isGroup}
-                hasTechnicalSummary={hasTechnicalSummary}
-                effectiveHeadline={chatSurfaceHeadline}
-                headerStatusBadgeClass={headerStatusBadgeClass}
-                effectiveStatusLabel={chatSurfaceStatusLabel}
-                effectiveOwnerLabel={chatSurfaceOwnerLabel}
-                requirementTeamBatonLabel={requirementTeam?.batonLabel ?? null}
-                displayNextBatonLabel={chatSurfaceNextBatonLabel}
-                effectiveStage={chatSurfaceStage}
-                effectiveActionHint={chatSurfaceActionHint}
-                onSummaryPanelViewChange={setSummaryPanelView}
-                activeConversationMission={activeConversationMission}
-                isRequirementBootstrapPending={isRequirementBootstrapPending}
-                progressGroupSummary={progressGroupSummary}
-                latestProgressDisplay={latestProgressDisplay}
-                missionIsCompleted={missionIsCompleted}
-                sending={sending}
-                isGenerating={isGenerating}
-                recentProgressEvents={recentProgressEvents}
-                actionWatchCards={actionWatchCards}
-                lifecycleSections={displayRequirementLifecycleSections ?? []}
-                collaborationLifecycle={collaborationLifecycle}
-                detailActions={detailActions}
-                runningFocusActionId={runningFocusActionId}
-                recoveringCommunication={recoveringCommunication}
-                requirementTeam={requirementTeam}
-                teamMemberCards={teamMemberCards}
-                displayNextBatonAgentId={chatSurfaceNextBatonAgentId}
-                targetAgentId={targetAgentId ?? null}
-                teamGroupRoute={
-                  showRequirementTeamEntryResolved
-                    ? resolvedRequirementRoom
-                      ? buildRequirementRoomHrefFromRecord(resolvedRequirementRoom)
-                      : "__ensure__"
-                    : null
-                }
-                primaryOpenAction={chatSurfacePrimaryOpenAction}
-                summaryRecoveryAction={summaryRecoveryAction}
-                isTechnicalSummaryOpen={isTechnicalSummaryOpen}
-                takeoverPack={
-                  takeoverPack
-                    ? {
-                        failureSummary: takeoverPack.failureSummary,
-                        recommendedNextAction: takeoverPack.recommendedNextAction,
-                      }
-                    : null
-                }
-                structuredTaskPreview={
-                  structuredTaskPreview
-                    ? {
-                        summary: structuredTaskPreview.summary ?? chatSurfaceSummary,
-                        state: structuredTaskPreview.state ?? null,
-                      }
-                    : null
-                }
-                hasRequirementOverview={Boolean(requirementOverview)}
-                effectiveSummary={chatSurfaceSummary}
-                requestPreview={requestPreview}
-                requestHealth={requestHealth}
-                ceoSurface={ceoSurface}
-                collaborationSurface={requirementCollaborationSurface}
-                orgAdvisorSummary={orgAdvisor?.summary ?? null}
-                handoffPreview={handoffPreview}
-                summaryAlertCount={summaryAlertCount}
-                relatedSlaAlertCount={relatedSlaAlerts.length}
-                localSlaFallbackAlertCount={localSlaFallbackAlerts.length}
-                onClearSession={() => void handleClearSession()}
-                onRunAction={(action) => void handleFocusAction(action)}
-                onNavigateToChat={(nextAgentId) =>
-                  navigate(buildCompanyChatRoute(nextAgentId, activeCompany?.id))
-                }
-                onNavigateToTeamGroup={openRequirementRoom}
-                onToggleTechnicalSummary={() => setIsTechnicalSummaryOpen((open) => !open)}
-                onCopyTakeoverPack={handleCopyTakeoverPack}
-              />
-            }
-          />
+          {hasContextSummary ? (
+            <Dialog.Root open={isSummaryOpen} onOpenChange={setIsSummaryOpen}>
+              {summaryPanelNode}
+            </Dialog.Root>
+          ) : null}
 
       {!isGroup && latestDirectTurnSummary?.state === "waiting" ? (
         <ChatWaitingBanner

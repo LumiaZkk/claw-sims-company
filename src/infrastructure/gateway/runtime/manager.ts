@@ -340,13 +340,13 @@ export class BackendManager implements AgentBackend {
   listProcesses(sessionKey?: string) {
     return this.currentBackend.listProcesses
       ? this.currentBackend.listProcesses(sessionKey)
-      : Promise.resolve(undefined);
+      : Promise.resolve([]);
   }
 
   pollProcess(id: string) {
     return this.currentBackend.pollProcess
       ? this.currentBackend.pollProcess(id)
-      : Promise.resolve(undefined);
+      : Promise.resolve(null);
   }
 
   getConfigSnapshot() {

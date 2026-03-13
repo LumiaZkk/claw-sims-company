@@ -31,6 +31,7 @@ import {
   trackRequirementMetric,
   type RequirementMetricEvent,
 } from "../../application/telemetry/requirement-center-metrics";
+import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { formatWorkspaceBytes, useWorkspaceViewModel } from "../../application/workspace";
 import { toast } from "../../components/system/toast-store";
 import { Badge } from "../../components/ui/badge";
@@ -42,28 +43,8 @@ import { formatTime } from "../../lib/utils";
 import { useBoardCommunicationSync } from "../board/hooks/useBoardCommunicationSync";
 import { useBoardRuntimeState } from "../board/hooks/useBoardRuntimeState";
 import { useBoardTaskBackfill } from "../board/hooks/useBoardTaskBackfill";
-
-function getExecutionStateLabel(state: string | null | undefined) {
-  if (state === "completed") {
-    return "已完成";
-  }
-  if (state === "waiting_input") {
-    return "待输入";
-  }
-  if (state === "waiting_peer") {
-    return "待协作";
-  }
-  if (state === "blocked_timeout" || state === "blocked_tool_failure" || state === "manual_takeover_required") {
-    return "有阻塞";
-  }
-  if (state === "running") {
-    return "执行中";
-  }
-  if (state === "idle") {
-    return "待启动";
-  }
-  return "待确认";
-}
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
+import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 
 function getRequirementTimelineLabel(eventType: string) {
   if (eventType === "requirement_seeded") return "主线已立项";
@@ -125,6 +106,35 @@ function buildRequirementTimelineDedupKey(event: RequirementCenterContentProps["
   return event.id;
 }
 
+function openRequirementOpsRoute(input: {
+  companyId: string;
+  requirementId: string | null;
+  visibleTakeoverCount: number;
+  visibleSlaAlertCount: number;
+  visiblePendingHandoffCount: number;
+  navigate: (to: string) => void;
+}) {
+  trackRequirementMetric({
+    companyId: input.companyId,
+    requirementId: input.requirementId,
+    name: "requirement_ops_opened",
+  });
+  void appendOperatorActionAuditEvent({
+    companyId: input.companyId,
+    action: "ops_route_open",
+    surface: "requirement_center",
+    outcome: "succeeded",
+    details: {
+      route: "/ops",
+      requirementId: input.requirementId,
+      visibleTakeoverCount: input.visibleTakeoverCount,
+      visibleSlaAlertCount: input.visibleSlaAlertCount,
+      visiblePendingHandoffCount: input.visiblePendingHandoffCount,
+    },
+  });
+  input.navigate("/ops");
+}
+
 type RequirementCenterContentProps = Omit<ReturnType<typeof useMissionBoardQuery>, "activeCompany"> &
   ReturnType<typeof useMissionBoardApp> & {
     activeCompany: NonNullable<ReturnType<typeof useMissionBoardQuery>["activeCompany"]>;
@@ -168,6 +178,7 @@ function RequirementCenterContent({
   ensureRequirementRoomForAggregate,
 }: RequirementCenterContentProps) {
   const navigate = useNavigate();
+  const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
   const isPageVisible = usePageVisibility();
   const connected = useGatewayStore((state) => state.connected);
   const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
@@ -806,14 +817,16 @@ function RequirementCenterContent({
               </Button>
               <Button
                 variant="outline"
-                onClick={() => {
-                  trackRequirementMetric({
+                onClick={() =>
+                  openRequirementOpsRoute({
                     companyId: activeCompany.id,
                     requirementId: aggregate?.id ?? null,
-                    name: "requirement_ops_opened",
-                  });
-                  navigate("/ops");
-                }}
+                    visibleTakeoverCount: boardTaskSurface.visibleTakeoverCount,
+                    visibleSlaAlertCount: boardTaskSurface.visibleSlaAlerts.length,
+                    visiblePendingHandoffCount: boardTaskSurface.visiblePendingHandoffs.length,
+                    navigate,
+                  })
+                }
               >
                 <ShieldAlert className="mr-2 h-4 w-4" />
                 去排障
@@ -828,6 +841,13 @@ function RequirementCenterContent({
           </div>
         </CardHeader>
       </Card>
+
+      <CanonicalRuntimeSummaryCard
+        summary={runtimeSummary}
+        title="统一运行态摘要"
+        description="需求中心继续负责验收、变更和决策；实时运行态、阻塞链和排障总览统一复用 `/runtime`。"
+        compact
+      />
 
       {!aggregate ? (
         <Card className="border-slate-200 bg-white shadow-sm">
@@ -848,7 +868,7 @@ function RequirementCenterContent({
                   进入 CEO 深聊
                 </Button>
               ) : null}
-              <Button variant="outline" onClick={() => navigate("/")}>
+              <Button variant="outline" onClick={() => navigate("/ceo")}>
                 返回 CEO 首页
               </Button>
             </div>
@@ -898,7 +918,7 @@ function RequirementCenterContent({
                           <div>
                             <div className="text-sm font-semibold text-slate-950">{item.task.title}</div>
                             <div className="mt-1 text-xs text-slate-500">
-                              {item.ownerLabel} · {getExecutionStateLabel(item.execution.state)}
+                              {item.ownerLabel} · {item.execution.label}
                             </div>
                           </div>
                           <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
@@ -1250,7 +1270,19 @@ function RequirementCenterContent({
                   <RefreshCcw className="mr-2 h-4 w-4" />
                   {recoveringCommunication ? "同步中..." : "恢复当前阻塞"}
                 </Button>
-                <Button variant="outline" onClick={() => navigate("/ops")}>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    openRequirementOpsRoute({
+                      companyId: activeCompany.id,
+                      requirementId: aggregate?.id ?? null,
+                      visibleTakeoverCount: boardTaskSurface.visibleTakeoverCount,
+                      visibleSlaAlertCount: boardTaskSurface.visibleSlaAlerts.length,
+                      visiblePendingHandoffCount: boardTaskSurface.visiblePendingHandoffs.length,
+                      navigate,
+                    })
+                  }
+                >
                   <RotateCcw className="mr-2 h-4 w-4" />
                   打开 Ops
                 </Button>

@@ -58,13 +58,13 @@ Depends on:
 截至 2026-03-13，V1 已经从“纯规划”进入“第一批实现”：
 
 - `PC-OPS-01` / `PC-OPS-02`
-  设置页已经有一版 Doctor 基线，可以直接区分 `Gateway / Authority / Executor / Runtime`，`Connect` 与 `Settings Doctor` 也开始共用同一类诊断摘要表达
+  这两条现在都已经在 V1 范围达到关单标准。设置页已有 Doctor 基线，可以直接区分 `Gateway / Authority / Executor / Runtime`；authority 的结构化修复建议也已经贯通 CLI、`/health`、Connect、Settings Doctor 和产品内全局 authority 风险 banner，同一类问题现在会统一解释成“问题标题 / 当前原因 / 下一步动作 / 推荐命令”
 - `PC-STATE-02`
-  `requirement.transition`、`requirement.promote`、`room.append`、`room.delete`、`room-bindings.upsert`、`dispatch.create`、`dispatch.delete`、`artifact.upsert`、`artifact.sync-mirror`、`artifact.delete` 已经改成 authority command 写入，开始从“浏览器整份 runtime 回灌”收口
+  这条现在已经在 V1 范围达到关单标准：`requirement.transition`、`requirement.promote`、`room.append`、`room.delete`、`room-bindings.upsert`、`round.upsert`、`round.delete`、`mission.upsert/delete`、`conversation-state.upsert/delete`、`work-item.upsert/delete`、`dispatch.create`、`dispatch.delete`、`artifact.upsert`、`artifact.sync-mirror`、`artifact.delete` 都已改成 authority command 写入；compatibility-owned runtime slice 已归零，normal authority-backed UI 交互也不再通过 `/runtime` push 状态，`/runtime` 剩余角色只保留 restore/import/legacy manual recovery。Settings Doctor 现在也能直接显示 authority-owned slice 边界。
 - `PC-STATE-01` / `PC-STATE-03`
-  已补 `docs/v1-phase3-authority-object-boundaries.md`，而且不只是第一刀：revision baseline 已上线，`DecisionTicket` 也已经补上显式 `decision.resolve / decision.cancel` 命令，`loadRuntime()` 也已从读时写回收成纯读；现在第一批 authority company event audit 已覆盖 decision lifecycle、dispatch、room、room-binding、artifact、runtime repair，以及自治引擎生成的 support request / escalation / decision 的 upsert/delete 生命周期。与此同时，`requirement_*` workflow event payload 也已经补到带 `source / changedFields / previous*` 的解释级别，而且显式 operator recovery、chat focus action、chat takeover pack copy、chat 打开需求团队房间和运营大厅 `blueprint copy / knowledge sync / group chat / quick task / hire / role update / fire` 也已经开始进入同一条 event log。下一步主要是 audit 规则收口
+  这条线现在已经在 V1 范围达到关单标准。`docs/v1-phase3-authority-object-boundaries.md` 对应的三刀都已落地：revision baseline 已覆盖到 `RequirementAggregate / RequirementRoom / Dispatch / Artifact / DecisionTicket / SupportRequest / Escalation`，`DecisionTicket` 也已经补上显式 `decision.resolve / decision.cancel` 命令，`loadRuntime()` 已从读时写回收成纯读；authority company event audit 已覆盖 decision lifecycle、dispatch、room、room-binding、artifact、runtime repair，以及自治引擎生成的 support request / escalation / decision 的 upsert/delete 生命周期。与此同时，`RequirementAggregate` 的 no-op reconcile / duplicate evidence / no-op transition 已开始按 material-change 规则收稳，`requirement_*` workflow payload 的 `changedFields` 也按真实 material diff 生成；显式 operator recovery、chat focus action、chat takeover pack copy、chat 打开需求团队房间、运营大厅 `blueprint copy / knowledge sync / group chat / quick task / hire / role update / fire`，以及 `Board / Lobby / Requirement Center / CEO` 的高信号异常入口都已经进入同一条 event log。
 - `PC-OPS-03` / `PC-OPS-04`
-  这轮已经从“纯计划”进入第一刀实现：新增了 `authority:doctor / authority:backup / authority:backups / authority:migrate / authority:restore / authority:preflight` CLI，能直接检查本地 authority SQLite 的公司数、runtime 数、event 数、active company、executor state、backup inventory，显式生成本地备份文件、列出备份清单，并从备份恢复 authority SQLite；`authority:migrate` 已作为第一版显式 migration 入口，用来给老库回填缺失的 `schemaVersion` metadata。`authority:restore` 现在不只支持 `--latest`，还支持 `--plan / --force / --allow-safety-backup`，会在真正覆盖前先输出 restore plan，并默认阻止“恢复 pre-restore safety backup”以及“用更旧备份覆盖更新数据库”。同时 authority server 已开始写入 `schemaVersion` metadata，doctor / preflight / restore plan 也开始显式显示 schema version，并阻止恢复来自更高 schema 版本的备份。`authority:preflight` 也已经从二元检查升级成真实 startup checks：如果数据库已存在但缺少 schemaVersion metadata、还没有标准备份，或最新标准备份过旧，会明确返回 `degraded`。`npm run dev` 和 `npm run authority:start` 也已开始先跑 preflight，而且 backup 已开始支持最小 retention。现在这些结论也已经回推到 Settings Doctor 和 Connect 探测卡片，页面可以直接看到 authority 的 schema version、doctor / preflight / backup 摘要。下一步主要是更正式的 migration / restore 闭环
+  这两条在 V1 范围内已经达到关单标准。真实环境里已经完成了一轮 `authority:backup -> authority:backups -> authority:doctor -> authority:preflight -> authority:migrate -- --plan -> authority:restore --latest --plan -> authority:rehearse --latest` smoke：当前 authority 数据目录下，`doctor=ready`、`preflight=ready`、`migrate --plan=ready`、backup inventory 能显示 `schema:1 / integrity:ok`；`authority:rehearse --latest` 也已经证明“备份本身是好的”，因为 rehearsal doctor 返回 `ready / schema:1 / integrity:ok`。这意味着 authority 的 V1 operator loop 已经具备 `plan / apply / rehearse / restore` 四段闭环。
 
 与此同时，产品表面也开始配合这条稳定性路线收口：
 
@@ -73,7 +73,7 @@ Depends on:
 - `Board / Ops`、`Connect / Settings`、`CEO / Dashboard` 开始复用共享摘要模块
 - `Requirement Center` 不再直接依赖 board 命名的 projection builder
 
-这让 V1 的推进不再只是“底层更稳”，而是“页面语义也更一致”；当前剩余的兼容路径主要集中在 `/runtime` 兼容同步仍保留，以及更深层的对象边界收口上。
+这让 V1 的推进不再只是“底层更稳”，而是“页面语义也更一致”；当前真正还开放的重点，已经从 command-path closeout 收缩到更深层的对象边界和治理规则收口上。
 
 这意味着当前项目的稳定性改造，已经从“讨论方向”进入“有代码、有界面、有追踪文档”的阶段。
 
@@ -84,10 +84,12 @@ Depends on:
 - `stabilizing` 表示主实现已落，但还没正式关单
 - 不表示当前在并行推进多条实现主线
 
-当前真正的施工焦点只有一条：
+当前没有新的 `active` 施工焦点。
 
-- `PC-OPS-03` / `PC-OPS-04`
-  也就是 V1 Phase 4 的 authority operator tooling：先把体检、备份、恢复和启动前检查做成真实入口
+V1 closeout 后已经开始进入下一阶段：
+
+- `PC-GOV-01`
+  已在当前最小 V2 范围达到关单标准。approval gate 已经不是单条样板，而是三条真实 gate：当 `humanApprovalRequiredForLayoffs` 打开时，离职动作会先形成 company-level durable approval record；当 `humanApprovalRequiredForDepartmentCreateRemove` 打开时，新增/归档部门也会先形成 approval record；当 `humanApprovalRequiredForAutomationEnable` 打开时，新建或重新启用自动化也会先形成 approval record。三者都会在 `Lobby` 里等待批准/拒绝，并在批准后继续执行原动作。
 
 后续推进约束也明确一下：
 
@@ -104,13 +106,13 @@ Depends on:
 - 已经借到手的：
   - `PC-OPS-01` / `PC-OPS-02`
   - `PC-STATE-02`
-  也就是 Doctor 基线、统一诊断表达、authority command 写入样板，这些已经从想法变成代码和界面。
-- 当前正在推进的：
-- `PC-STATE-01` / `PC-STATE-03`
-  也就是关键对象稳态化，这一轮已经从设计稿推进到四步实现：`revision baseline + decision ticket explicit commands + read-path cleanup + first decision/dispatch/room/binding/artifact/repair/company-ops lifecycle audit events` 都已落成，而且 requirement workflow payload 也已经开始自带推进上下文；下一步主要剩 audit 边界。
+  也就是 Doctor 基线、统一诊断表达、startup banner、authority operator tooling 和 authority command 写入样板，这些已经从想法变成代码和界面。
+- 刚完成关单的：
+  - `PC-GOV-01`
+  也就是轻量 approval gate。现在已经不是“下一步建议”，而是已经落了三条真实动作：`employee_fire`、`department_change` 和 `automation_enable` 都会先进入 authority approval，再由 `Lobby` 做人工批准/拒绝并继续执行。
 - 紧随其后的下一步：
-  - `PC-STATE-01` / `PC-STATE-03`
-  也就是在 Phase 4 打开体检/备份入口后，再回头把剩余 audit 规则和对象边界继续收口。
+  - `PC-GOV-02` / `PC-EXEC-01`
+  也就是在最小 approval foundation 已经收口后，继续把预算护栏和自动化 run ledger 做成下一轮稳态能力。更高风险但目前还没有成熟产品面的动作，例如 `runtime restore`，应该拆成下一轮独立切片，而不是继续把 `PC-GOV-01` 挂着不关。
 - 明确不借的：
   - issue-first 前台叙事
   - 通用 agent company OS 产品表面

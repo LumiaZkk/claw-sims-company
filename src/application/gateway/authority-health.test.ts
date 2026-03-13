@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/contract";
 import {
+  buildAuthorityBannerModel,
+  buildAuthorityGuidanceItems,
   collectAuthorityGuidance,
+  collectAuthorityRepairSteps,
+  extractAuthorityHealthSnapshot,
   resolveAuthorityControlState,
   resolveAuthorityStorageState,
 } from "./authority-health";
@@ -34,6 +38,8 @@ function createHealthSnapshot(
       doctor: {
         status: "ready",
         schemaVersion: 1,
+        integrityStatus: "ok",
+        integrityMessage: null,
         backupDir: "/tmp/backups",
         backupCount: 2,
         latestBackupAt: 3_000,
@@ -51,6 +57,8 @@ function createHealthSnapshot(
         backupDir: "/tmp/backups",
         dbExists: true,
         schemaVersion: 1,
+        integrityStatus: "ok",
+        integrityMessage: null,
         backupCount: 2,
         latestBackupAt: 3_000,
         notes: ["Authority SQLite 已存在，启动时会直接复用。"],
@@ -131,5 +139,157 @@ describe("authority health helpers", () => {
     expect(collectAuthorityGuidance(health)[0]).toBe(
       "Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。",
     );
+  });
+
+  it("produces structured guidance for missing backups", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        preflight: {
+          ...base.authority.preflight,
+          status: "degraded",
+          backupCount: 0,
+          warnings: ["Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。"],
+        },
+        doctor: {
+          ...base.authority.doctor,
+          backupCount: 0,
+          latestBackupAt: null,
+        },
+      },
+    });
+
+    const guidance = buildAuthorityGuidanceItems(health);
+    expect(guidance[0]).toMatchObject({
+      id: "authority-backup-missing",
+      state: "degraded",
+      title: "还没有标准备份",
+      command: "npm run authority:backup",
+    });
+    expect(collectAuthorityRepairSteps(health)[0]).toContain("npm run authority:backup");
+  });
+
+  it("recommends migrate plan when schema metadata is missing", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        doctor: {
+          ...base.authority.doctor,
+          status: "degraded",
+          schemaVersion: null,
+          issues: ["Authority SQLite 还没有 schemaVersion metadata。建议先运行 authority:migrate。"],
+        },
+        preflight: {
+          ...base.authority.preflight,
+          status: "degraded",
+          schemaVersion: null,
+          warnings: ["Authority SQLite 缺少 schemaVersion metadata。建议先运行 authority:migrate。"],
+        },
+      },
+    });
+
+    const guidance = buildAuthorityGuidanceItems(health);
+    expect(guidance.some((item) => item.id === "authority-schema-metadata-missing")).toBe(true);
+    expect(collectAuthorityRepairSteps(health).some((step) => step.includes("authority:migrate -- --plan"))).toBe(
+      true,
+    );
+  });
+
+  it("prioritizes restore planning when integrity check fails", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        doctor: {
+          ...base.authority.doctor,
+          status: "blocked",
+          integrityStatus: "failed",
+          integrityMessage: "database disk image is malformed",
+          issues: ["Authority SQLite integrity_check 失败：database disk image is malformed"],
+        },
+        preflight: {
+          ...base.authority.preflight,
+          status: "blocked",
+          integrityStatus: "failed",
+          integrityMessage: "database disk image is malformed",
+          issues: ["Authority SQLite integrity_check 失败：database disk image is malformed"],
+        },
+      },
+    });
+
+    const guidance = buildAuthorityGuidanceItems(health);
+    expect(guidance[0]).toMatchObject({
+      id: "authority-db-integrity-failed",
+      state: "blocked",
+      command: "npm run authority:restore -- --latest --plan",
+    });
+    expect(collectAuthorityRepairSteps(health)[0]).toContain("authority:restore -- --latest --plan");
+  });
+
+  it("prefers server-provided guidance over local fallback recomputation", () => {
+    const health = createHealthSnapshot({
+      authority: {
+        ...createHealthSnapshot().authority,
+        guidance: [
+          {
+            id: "authority-server-guidance",
+            state: "degraded",
+            title: "来自 authority /health 的统一建议",
+            summary: "这条建议应直接作为单一真相返回给前台。",
+            action: "先按 authority 提示处理，再做下一步判断。",
+            command: "npm run authority:doctor",
+          },
+        ],
+        preflight: {
+          ...createHealthSnapshot().authority.preflight,
+          status: "degraded",
+          backupCount: 0,
+          warnings: ["Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。"],
+        },
+      },
+    });
+
+    expect(buildAuthorityGuidanceItems(health)[0]).toMatchObject({
+      id: "authority-server-guidance",
+      command: "npm run authority:doctor",
+    });
+    expect(collectAuthorityRepairSteps(health)[0]).toContain("npm run authority:doctor");
+  });
+
+  it("extracts a valid authority health snapshot from gateway status payloads", () => {
+    const health = createHealthSnapshot();
+
+    expect(extractAuthorityHealthSnapshot(health)).toEqual(health);
+    expect(extractAuthorityHealthSnapshot({ ok: true })).toBeNull();
+    expect(extractAuthorityHealthSnapshot(null)).toBeNull();
+  });
+
+  it("builds a startup banner model when authority is degraded", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        preflight: {
+          ...base.authority.preflight,
+          status: "degraded",
+          backupCount: 0,
+          warnings: ["Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。"],
+        },
+        doctor: {
+          ...base.authority.doctor,
+          backupCount: 0,
+          latestBackupAt: null,
+        },
+      },
+    });
+
+    expect(buildAuthorityBannerModel(createHealthSnapshot())).toBeNull();
+    expect(buildAuthorityBannerModel(health)).toMatchObject({
+      state: "degraded",
+      title: "Authority 当前有待处理项：还没有标准备份",
+    });
+    expect(buildAuthorityBannerModel(health)?.steps[0]).toContain("npm run authority:backup");
   });
 });

@@ -23,6 +23,7 @@ import {
   normalizeProductWorkItemIdentity,
   normalizeStrategicWorkItemId,
 } from "./work-item";
+import { diffRequirementAggregateMaterialFields } from "./requirement-aggregate-diff";
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -627,30 +628,26 @@ function materializeAggregateRecord(input: {
   };
 
   const existing = input.existing;
-  const materialChanged =
-    !existing ||
-    existing.topicKey !== nextRecordBase.topicKey ||
-    existing.kind !== nextRecordBase.kind ||
-    existing.workItemId !== nextRecordBase.workItemId ||
-    existing.roomId !== nextRecordBase.roomId ||
-    existing.ownerActorId !== nextRecordBase.ownerActorId ||
-    existing.ownerLabel !== nextRecordBase.ownerLabel ||
-    existing.lifecyclePhase !== nextRecordBase.lifecyclePhase ||
-    existing.stageGateStatus !== nextRecordBase.stageGateStatus ||
-    existing.stage !== nextRecordBase.stage ||
-    existing.summary !== nextRecordBase.summary ||
-    existing.nextAction !== nextRecordBase.nextAction ||
-    existing.sourceConversationId !== nextRecordBase.sourceConversationId ||
-    existing.status !== nextRecordBase.status ||
-    existing.acceptanceStatus !== nextRecordBase.acceptanceStatus ||
-    (existing.acceptanceNote ?? null) !== (nextRecordBase.acceptanceNote ?? null) ||
-    existing.startedAt !== nextRecordBase.startedAt ||
-    existing.memberIds.join("|") !== nextRecordBase.memberIds.join("|");
+  if (!existing) {
+    return {
+      ...nextRecordBase,
+      primary: false,
+      revision: 1,
+    };
+  }
+  const changedFields = diffRequirementAggregateMaterialFields(existing, {
+    ...existing,
+    ...nextRecordBase,
+    primary: existing.primary,
+    revision: existing.revision,
+  });
+  const materialChanged = changedFields.length > 0;
 
   return {
     ...nextRecordBase,
-    primary: existing?.primary ?? false,
-    revision: existing ? (materialChanged ? existing.revision + 1 : existing.revision) : 1,
+    primary: existing.primary,
+    updatedAt: materialChanged ? nextRecordBase.updatedAt : existing.updatedAt,
+    revision: materialChanged ? existing.revision + 1 : existing.revision,
   };
 }
 
@@ -1272,7 +1269,8 @@ export function applyRequirementEvidenceToAggregates(input: {
       nextStatus === "archived"
         ? nextStatus
         : null;
-    const nextRecord: RequirementAggregateRecord = {
+    const nextLastEvidenceAt = Math.max(aggregate.lastEvidenceAt ?? 0, input.event.timestamp) || null;
+    const nextRecordBase: RequirementAggregateRecord = {
       ...aggregate,
       ownerActorId: nextOwnerActorId,
       ownerLabel: nextOwnerLabel,
@@ -1295,12 +1293,21 @@ export function applyRequirementEvidenceToAggregates(input: {
         ]),
       ),
       sourceConversationId: readString(input.event.sessionKey) ?? aggregate.sourceConversationId,
-      updatedAt: Math.max(aggregate.updatedAt, input.event.timestamp),
-      lastEvidenceAt: Math.max(aggregate.lastEvidenceAt ?? 0, input.event.timestamp),
       status: lifecycleStatus ?? aggregate.status,
-      revision: aggregate.revision + 1,
     };
-    return nextRecord;
+    const changedFields = diffRequirementAggregateMaterialFields(aggregate, nextRecordBase);
+    if (changedFields.length === 0 && nextLastEvidenceAt === (aggregate.lastEvidenceAt ?? null)) {
+      return aggregate;
+    }
+    return {
+      ...nextRecordBase,
+      updatedAt:
+        changedFields.length > 0
+          ? Math.max(aggregate.updatedAt, input.event.timestamp)
+          : aggregate.updatedAt,
+      lastEvidenceAt: nextLastEvidenceAt,
+      revision: changedFields.length > 0 ? aggregate.revision + 1 : aggregate.revision,
+    };
   });
 
   return {

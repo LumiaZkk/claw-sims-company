@@ -7,6 +7,8 @@ import {
   normalizeStrategicWorkItemId,
 } from "../../application/mission/work-item";
 import { sanitizeRequirementAggregateRecords } from "../../application/mission/requirement-aggregate";
+import { normalizeEscalationRecord } from "../../domain/delegation/escalation";
+import { normalizeSupportRequestRecord } from "../../domain/delegation/support-request";
 import { sanitizeRequirementRoomRecords } from "../company/persistence/room-persistence";
 import { sanitizeWorkItemRecords } from "../company/persistence/work-item-persistence";
 import type { RequirementStageGateStatus } from "../../domain/mission/types";
@@ -258,6 +260,7 @@ export function runtimeStateFromAuthorityRuntimeSnapshot(
   | "activeAgentRuns"
   | "activeAgentRuntime"
   | "activeAgentStatuses"
+  | "activeAgentStatusHealth"
 > {
   const companyId = runtime?.companyId ?? null;
   const activeWorkItems = runtime ? sanitizeWorkItemRecords(runtime.activeWorkItems ?? []) : [];
@@ -304,13 +307,23 @@ export function runtimeStateFromAuthorityRuntimeSnapshot(
     activeArtifacts: runtime?.activeArtifacts ?? [],
     activeDispatches: runtime?.activeDispatches ?? [],
     activeRoomBindings: runtime?.activeRoomBindings ?? [],
-    activeSupportRequests: runtime?.activeSupportRequests ?? [],
-    activeEscalations: runtime?.activeEscalations ?? [],
+    activeSupportRequests: (runtime?.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
+    activeEscalations: (runtime?.activeEscalations ?? []).map(normalizeEscalationRecord),
     activeDecisionTickets: runtime?.activeDecisionTickets ?? [],
     activeAgentSessions: runtime?.activeAgentSessions ?? [],
     activeAgentRuns: runtime?.activeAgentRuns ?? [],
     activeAgentRuntime: runtime?.activeAgentRuntime ?? [],
     activeAgentStatuses: runtime?.activeAgentStatuses ?? [],
+    activeAgentStatusHealth: runtime?.activeAgentStatusHealth ?? {
+      source: "fallback",
+      coverage: "fallback",
+      coveredAgentCount: 0,
+      expectedAgentCount: 0,
+      missingAgentIds: [],
+      isComplete: false,
+      generatedAt: null,
+      note: "Authority runtime snapshot does not include canonical status health.",
+    },
   };
 }
 
@@ -339,6 +352,7 @@ export function runtimeStateFromAuthorityBootstrap(
   | "activeAgentRuns"
   | "activeAgentRuntime"
   | "activeAgentStatuses"
+  | "activeAgentStatusHealth"
 > {
   return {
     ...runtimeStateFromAuthorityRuntimeSnapshot(snapshot.runtime),

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { appendOperatorActionAuditEvent } from "../../../application/governance/operator-action-audit";
+import type { ApprovalRecord } from "../../../domain/governance/types";
 import type { HireConfig } from "../../../components/ui/immersive-hire-dialog";
 import { toast } from "../../../components/system/toast-store";
 
@@ -13,7 +14,10 @@ type LobbyCommands = {
     role: string,
     description: string,
   ) => Promise<boolean | null>;
-  fireEmployee: (agentId: string) => Promise<unknown>;
+  fireEmployee: (agentId: string, options?: { skipApproval?: boolean }) => Promise<{
+    mode: "executed" | "approval_requested";
+  }>;
+  resolveApproval: (approval: ApprovalRecord, decision: "approved" | "rejected") => Promise<ApprovalRecord>;
   assignQuickTask: (agentId: string, text: string) => Promise<boolean | null>;
   buildGroupChatRoute: (input: { memberIds: string[]; topic: string }) => Promise<string | null>;
   recoverCommunication: (options?: { silent?: boolean; force?: boolean }) => Promise<{
@@ -36,6 +40,7 @@ export function useLobbyPageState(input: {
   const [updateRoleInitial, setUpdateRoleInitial] = useState({ role: "", description: "" });
   const [fireEmployeeDialogOpen, setFireEmployeeDialogOpen] = useState(false);
   const [fireEmployeeTarget, setFireEmployeeTarget] = useState<string | null>(null);
+  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
   const [groupChatDialogOpen, setGroupChatDialogOpen] = useState(false);
   const [quickTaskInput, setQuickTaskInput] = useState("");
   const [quickTaskTarget, setQuickTaskTarget] = useState("");
@@ -133,10 +138,29 @@ export function useLobbyPageState(input: {
       return;
     }
     try {
-      await input.commands.fireEmployee(fireEmployeeTarget);
-      setTimeout(() => window.location.reload(), 1500);
+      const result = await input.commands.fireEmployee(fireEmployeeTarget);
+      setFireEmployeeDialogOpen(false);
+      if (result.mode === "executed") {
+        setTimeout(() => window.location.reload(), 1500);
+      }
     } catch (error) {
       console.error(error);
+    }
+  };
+
+  const handleApprovalDecision = async (approval: ApprovalRecord, decision: "approved" | "rejected") => {
+    setApprovalBusyId(approval.id);
+    try {
+      const resolved = await input.commands.resolveApproval(approval, decision);
+      if (decision === "approved") {
+        toast.success("审批已批准", `已批准「${resolved.summary}」，并继续执行后续动作。`);
+      } else {
+        toast.info("审批已拒绝", `已拒绝「${resolved.summary}」。`);
+      }
+    } catch (error) {
+      toast.error("审批处理失败", error instanceof Error ? error.message : String(error));
+    } finally {
+      setApprovalBusyId(null);
     }
   };
 
@@ -224,7 +248,9 @@ export function useLobbyPageState(input: {
     handleHireSubmit,
     handleUpdateRoleSubmit,
     handleFireEmployee,
+    handleApprovalDecision,
     onFireEmployeeSubmit,
+    approvalBusyId,
     handleQuickTaskSubmit,
     handleGroupChatSubmit,
     openCeoChat: () => {

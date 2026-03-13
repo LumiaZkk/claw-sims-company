@@ -32,7 +32,46 @@ export interface RecoveryRule {
   enabled: boolean;
 }
 
+export type ApprovalScope =
+  | "mission"
+  | "dispatch"
+  | "artifact"
+  | "org"
+  | "automation"
+  | "runtime";
+
+export type ApprovalActionType =
+  | "employee_fire"
+  | "department_change"
+  | "automation_enable"
+  | "runtime_restore";
+
+export type ApprovalStatus = "pending" | "approved" | "rejected";
+
 export interface ApprovalRecord {
+  id: string;
+  companyId: string;
+  revision?: number;
+  scope: ApprovalScope;
+  actionType: ApprovalActionType;
+  status: ApprovalStatus;
+  summary: string;
+  detail?: string | null;
+  requestedByActorId?: string | null;
+  requestedByLabel?: string | null;
+  targetActorId?: string | null;
+  targetLabel?: string | null;
+  payload?: Record<string, unknown>;
+  requestedAt: number;
+  resolution?: string | null;
+  decidedByActorId?: string | null;
+  decidedByLabel?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  resolvedAt?: number | null;
+}
+
+export interface LegacyApprovalRecord {
   id: string;
   scope: "mission" | "dispatch" | "artifact" | "org";
   status: "pending" | "approved" | "rejected";

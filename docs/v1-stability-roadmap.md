@@ -36,10 +36,10 @@ V1 不覆盖这些方向：
 
 | Phase | 目标 | 借鉴项 | 当前状态 |
 |---|---|---|---|
-| Phase 1 | 先看清问题，再建立升级基线 | `PC-OPS-01`, `PC-OPS-02` | `stabilizing` |
-| Phase 2 | 收紧写入边界，停止整份 runtime 回灌 | `PC-STATE-02` | `stabilizing` |
-| Phase 3 | 把关键对象从运行态投影收口成稳态对象 | `PC-STATE-01`, `PC-STATE-03` | `stabilizing` |
-| Phase 4 | 补齐 Authority 运维闭环 | `PC-OPS-01`, `PC-OPS-02`, `PC-OPS-03`, `PC-OPS-04` | `active` |
+| Phase 1 | 先看清问题，再建立升级基线 | `PC-OPS-01`, `PC-OPS-02` | `complete` |
+| Phase 2 | 收紧写入边界，停止整份 runtime 回灌 | `PC-STATE-02` | `complete` |
+| Phase 3 | 把关键对象从运行态投影收口成稳态对象 | `PC-STATE-01`, `PC-STATE-03` | `complete` |
+| Phase 4 | 补齐 Authority 运维闭环 | `PC-OPS-01`, `PC-OPS-02`, `PC-OPS-03`, `PC-OPS-04` | `complete` |
 
 ## 2.1 当前唯一施工切片
 
@@ -49,6 +49,8 @@ V1 不覆盖这些方向：
   表示当前唯一施工切片所在阶段。
 - `stabilizing`
   表示主实现已落，但还没达到关闭标准，当前处于收尾与验证阶段。
+- `complete`
+  表示该阶段在当前 V1 范围内已经达到关单标准，不再保留活跃施工状态。
 
 当前的执行约束是：
 
@@ -59,20 +61,15 @@ V1 不覆盖这些方向：
 - 实施层面只保留一个当前唯一施工切片
   这样可以避免单人串行推进时的上下文切换和半完成状态堆积。
 
-截至 2026-03-13，当前唯一施工切片是：
+截至 2026-03-13，V1 范围内已经没有新的 `active` 施工切片。
 
-- `Phase 4 / Slice D-1`
-  内容：先把 authority 的本地体检和备份恢复做成真实可用的 operator tooling，而不是只留在设置页说明和底层实现里。
-  当前进度：已新增 `authority:doctor / authority:backup / authority:backups / authority:migrate / authority:restore / authority:preflight` CLI。`authority:doctor` 会直接读取本地 authority SQLite，输出 `schema version / db path / db size / backup dir / backup count / latest backup / companies / runtimes / events / active company / executor state / latest runtime / latest event`；`authority:backup` 会在 checkpoint 后复制当前 SQLite，并开始支持最小 retention；`authority:backups` 会列出当前备份清单；`authority:migrate` 已作为第一版显式 migration 入口，用来给老库回填 `schemaVersion` metadata；`authority:restore` 除了支持 `--from` 之外，也已经支持 `--latest`、`--plan`、`--force`、`--allow-safety-backup`，可以在真正覆盖前先输出 restore plan，并默认阻止“直接恢复 pre-restore safety backup”以及“用更旧备份覆盖更新的 authority.sqlite”；现在 restore plan 还会检查 `schemaVersion`，默认阻止恢复来自更高 schema 版本的备份，并对 legacy / 旧 schema 备份给出显式 warning；authority server 启动时也会开始写入 `schemaVersion` metadata，给后续 migration 留出稳定基线；`authority:preflight` 已不再只是 ready/blocked 二元检查，而是会在“数据库已存在但缺 schemaVersion metadata”、“数据库已存在但还没有标准备份”或“标准备份过旧”时返回 `degraded`，并在 `npm run dev` 与 `npm run authority:start` 里开始实际运行。现在这些结论已经回推到 Settings Doctor 和 Connect 探测卡片里，页面也能直接看到 `schema version`、backup inventory、doctor / preflight 状态和最小修复提示。当前下一步是继续补更正式的 migration / restore 闭环。
+V1 closeout 之后，上一轮跨入下一阶段的 `PC-GOV-01` 也已经在当前最小 V2 范围达到关单标准：
 
-当前不是主施工焦点、但仍保持开放的 `stabilizing` 阶段：
+- `PC-GOV-01 / Slice G-3`
+  `layoff approval gate`、`department change approval gate` 和 `automation enable approval gate` 都已接入同一套 company-level durable approval record、authority `approval.request / approval.resolve` 命令和 `Lobby` 待审批面板。当前 approval line 已经证明这不是一次性的前端确认框，而是一个可跨组织动作与自动化动作复用的治理对象。
 
-- `Phase 1`
-  原因：Doctor 基线已落，但启动体检、异常分型、修复建议闭环还没完全收口。
-- `Phase 2`
-  原因：主链 command 已落，但 `/runtime` 兼容路径还没完全退居恢复通道。
-- `Phase 3`
-  原因：关键对象稳态化和 operator audit 已经做了大半，但 audit 规则还没完全收口成关闭状态。
+- `Phase 3 / Slice A-3`
+  已在 V1 范围达到关单标准：`support request / escalation` 已补 revision baseline，`companyOpsEngine` 会按 material change 递增 revision，对应 audit payload 也带上了 `revision`；`RequirementAggregate` 的 no-op reconcile / duplicate evidence / no-op transition 也已收进统一 material-change 规则；同时 `Board / Lobby` 的“查看接管包”、`Requirement Center` 的“去排障 / 打开 Ops”、`CEO 首页` 的“查看运营异常” 也已经进入 `operator_action_recorded`。这意味着 Phase 3 不再只是在“对象本身稳定”，而是“对象变化和人类干预都可解释、可追溯”。
 
 ## 2.2 关闭标准
 
@@ -114,6 +111,8 @@ V1 的阶段不允许长期停留在 `stabilizing`。
 - `Requirement Center` 与 `Board` 已切到中性 `requirement-execution-projection`，不再由需求中心直接依赖 board 命名的 builder
 - 已补 `docs/v1-phase3-authority-object-boundaries.md`，把 `RequirementAggregate / RequirementRoom / Dispatch / Artifact / DecisionTicket` 的字段分层、revision 和 command 边界写成正式设计稿
 - `RequirementRoom / Dispatch / Artifact / DecisionTicket` 已补 revision baseline，authority snapshot / runtime normalizer / persistence / authority-backed 测试都已跟上
+- `support request / escalation` 也开始补 revision baseline，自治治理对象不再只靠 `updatedAt` 表达实质变化
+- `RequirementAggregate` 的 no-op reconcile / duplicate evidence / no-op transition 现在也开始按 material-change 规则稳定处理，不再让 `updatedAt / revision / changedFields` 虚假抖动
 - `DecisionTicket` 已开始走 `decision.upsert` / `decision.delete` authority command，不再只靠本地 `upsertDecisionTicketRecord` 改状态
 - `Requirement Center` 与 `Chat` 里的决策动作已经改走显式 `decision.resolve`，不再把“做决定”混成 generic upsert
 - `Authority loadRuntime()` 不再在主读路径里自动 `saveRuntime()`；repair 改成显式 `repairRuntimeIfNeeded()`，并在启动时统一执行一次
@@ -125,6 +124,7 @@ V1 的阶段不允许长期停留在 `stabilizing`。
 - `artifact.upsert / delete / sync-mirror` 已开始写入 `artifact_record_upserted / artifact_record_deleted / artifact_mirror_synced`
 - 显式 `repairRuntimeIfNeeded()` 已开始写入 `runtime_repaired`
 - `companyOpsEngine` 已开始为自治引擎生成或收走的 `support request / escalation / decision` 写入 `ops_cycle_applied`、对应的 `*_record_upserted`，以及 `support_request_record_deleted / escalation_record_deleted / decision_record_deleted`
+- `support_request_record_upserted / deleted` 与 `escalation_record_upserted / deleted` 的 payload 现在也会稳定带 `revision`
 - `requirement_*` workflow event 的 payload 已开始带 `source / changedFields / previousAggregateId / previousOwner* / previousRoomId / previousRevision`
 - 已新增 `authority:doctor` CLI，可直接体检本地 authority SQLite 的公司数、runtime 数、event 数、active company 和 executor state
 - 已新增 `authority:backup` CLI，可直接生成本地 authority SQLite 备份文件，并支持最小 retention
@@ -132,21 +132,23 @@ V1 的阶段不允许长期停留在 `stabilizing`。
 - 已新增 `authority:restore` CLI，可从备份文件恢复 authority SQLite，并自动留下 `pre-restore` safety backup
 - `authority:restore` 已支持 `--latest`，恢复时不再需要先手工找备份路径
 - `authority:restore` 已支持 `--plan / --force / --allow-safety-backup`，恢复前会默认阻止高风险回滚
+- 已新增 `authority:rehearse` CLI，可先把备份恢复到隔离 rehearsal 环境，再用 doctor 验证这份备份本身是否可用
 - authority 已开始写入 `schemaVersion` metadata，doctor / preflight / restore plan 也开始显式显示 schema version
-- 已新增 `authority:migrate` CLI，开始显式回填老库缺失的 `schemaVersion` metadata
+- 已新增 `authority:migrate` CLI，开始显式回填老库缺失的 `schemaVersion` metadata，并支持 `--plan` 先输出迁移计划再决定是否执行
+- doctor / preflight 已开始显式执行 SQLite `integrity_check`，并能把坏库 / 不可读库标成 `blocked`
 - restore plan 已开始阻止恢复来自更高 schema 版本的备份，并对 legacy / 旧 schema 备份给出提示
 - 已新增 `authority:preflight` CLI，可在启动前检查 authority data dir / backup dir / db path
-- `authority:preflight` 已开始区分 `ready / degraded / blocked`，会把“已有数据库但缺 schema metadata”、“已有数据库但没备份”或“备份太旧”标成真实风险
+- `authority:preflight` 已开始区分 `ready / degraded / blocked`，会把“已有数据库但 integrity_check 失败 / 不可读”、“已有数据库但缺 schema metadata”、“已有数据库但没备份”或“备份太旧”标成真实风险
 - `npm run dev` 与 `npm run authority:start` 已开始在启动 authority 前执行 `authority:preflight`
 - Settings Doctor 已开始直接显示 authority schema version、backup inventory、company/runtime/event 计数和 preflight 结果
 - Connect 已开始在失败前后探测 Authority `/health`，并显示控制面可达性、schema version、备份状态和最小修复提示
+- `mission.upsert/delete`、`conversation-state.upsert/delete`、`work-item.upsert/delete` 已切到 authority command，正常 authority-backed UI 交互下不再需要靠 `/runtime` 兼容通道写回这些对象
+- `CompanyAuthoritySyncHost` 在 compatibility-owned slice 归零后，已经停止正常 authority-backed UI 交互下的 `/runtime` push；`/runtime` 只保留 restore/import/legacy manual recovery 角色
+- Settings Doctor 现在能直接显示 authority-owned slice 边界，不再把 `/runtime` 兼容路径误读成日常主写入链路
 
 仍然保留：
 
-- `/runtime` 兼容同步路径仍开启
 - Authority Doctor 仍然是“设置页基线版”，还不是完整的修复工具
-- backup / restore 已经具备最小可用路径，retention、restore guardrail 和 schema/version 基线也已有第一版，但还没有更正式的 migration / restore 闭环
-- startup preflight 已经能识别备份缺失/过旧，但还没有自动 remediation 或更强的恢复保护
 - Settings / Connect 已经能看见 authority operator tooling 的关键结论，但还没有直接在页面里触发 backup / restore
 - `Board` 与 `Ops` 虽然已经开始分层，但更深的共享摘要模块和更彻底的页面裁剪还可以继续收口
 
@@ -156,24 +158,25 @@ V1 的阶段不允许长期停留在 `stabilizing`。
 
 - 能回答“现在坏的是 Gateway、Authority、Executor 还是 Runtime”
 - 有固定验证清单，而不是每次临时凭感觉排查
-- `PC-OPS-01`、`PC-OPS-02` 已从纯文档规划进入实现阶段
+- `PC-OPS-01`、`PC-OPS-02` 已在 V1 范围达到关单标准，结构化修复建议与 startup banner 已贯通 CLI、`/health`、Connect、Settings Doctor 和产品内主壳层
 
 ### Phase 2
 
-- 至少一条核心主线写入不再依赖 `/runtime` 回灌
-- Authority 单写者方向在代码和文档里都明确
-- `/runtime` 被降级为兼容路径，而不是唯一主写入路径
+- 核心主线写入已经不再依赖 `/runtime` 回灌
+- Authority 单写者方向在代码和文档里都已经明确
+- `/runtime` 已降级为 restore/import/legacy manual recovery 通道，而不是正常 UI 交互的写入路径
+- compatibility-owned runtime slice 已归零，不再存在 daily mutation slice
 
 ### Phase 3
 
-- `RequirementAggregate` 的权威字段和派生字段写清楚
+- `RequirementAggregate` 的权威字段和派生字段写清楚，并让 no-op reconcile / duplicate evidence / no-op transition 不再制造虚假主线变化
 - `Dispatch` / `DecisionTicket` / `Artifact` / `RequirementRoom` 的边界更稳定
-- Phase 3 设计稿、Slice A-1 和 Slice A-2 的第一批命令已落地，主读路径的 read-repair 也已经拆出，第一批 decision / dispatch / room / binding / artifact / repair / company-ops 审计事件也开始进入 company event log，而且 `companyOpsEngine` 已开始补齐 `support request / escalation / decision` 的 upsert/delete 生命周期；`requirement_*` workflow event 也开始自带更完整的推进上下文。下一步主要是 audit 规则继续扩面
+- Phase 3 设计稿、Slice A-1、Slice A-2 和 Slice A-3 的稳态对象与审计规则都已落地：主读路径的 read-repair 已拆出，`DecisionTicket` 有显式 command，`support request / escalation` 具备 revision baseline，第一批 decision / dispatch / room / binding / artifact / repair / company-ops 审计事件已经进入 company event log，`requirement_*` workflow event 也开始自带更完整的推进上下文，高信号 operator action 也已经纳入统一治理日志。Phase 3 已在 V1 范围达到关单标准
 
 ### Phase 4
 
 - 启动、诊断、备份、恢复的基本链路可用
-- Authority 不再只是“能启动”，而是“出问题也知道怎么查”
+- Authority 不再只是“能启动”，而是“出问题也知道怎么查”，并且这条 operator loop 已在真实环境完成 `backup -> backups -> doctor -> preflight -> migrate --plan -> restore --plan -> rehearse` smoke
 
 ## 5. 固定验证清单
 
@@ -199,15 +202,15 @@ V1 的阶段不允许长期停留在 `stabilizing`。
 如果下一轮继续沿着 `paperclip` 借鉴线推进，优先级建议固定为：
 
 1. `PC-STATE-01` + `PC-STATE-03`
-   先把 `RequirementAggregate / Dispatch / RequirementRoom / Artifact / DecisionTicket` 的对象边界写实：
+   再把 `RequirementAggregate / Dispatch / RequirementRoom / Artifact / DecisionTicket` 的对象边界写实：
    - 哪些字段是权威字段
    - 哪些字段允许派生
    - revision 怎么变化
    - 哪些写入必须经过 authority command
-2. `PC-OPS-03`
-   补最小可用的 authority backup / restore 路径，先让“坏了怎么回”有一条硬路径。
-3. `PC-OPS-04`
-   补 run 前检查和启动前提示，先解决“看起来启动了，其实不可用”的灰状态。
+2. `PC-GOV-03`
+   继续把 operator action / requirement workflow audit 的收尾规则补齐，避免对象边界做稳以后审计线反而断档。
+3. `PC-GOV-02` + `PC-EXEC-01`
+   轻量 approval gate 的最小 foundation 已经完成，下一轮更值得做的是预算护栏与自动化 run ledger。像 `runtime restore approval` 这种更高风险但当前还没有成熟产品面的动作，应该拆成新的治理切片，而不是继续把 `PC-GOV-01` 挂着不关。
 
 在这三个动作都没落地前，不建议把精力切去：
 

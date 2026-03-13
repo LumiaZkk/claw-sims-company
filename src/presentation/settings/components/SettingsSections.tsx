@@ -19,6 +19,7 @@ import type {
 } from "../../../application/gateway/settings";
 import type { AuthorityHealthSnapshot } from "../../../infrastructure/authority/contract";
 import { buildCollaborationContextSnapshot } from "../../../application/company/collaboration-context";
+import { buildAuthorityGuidanceItems } from "../../../application/gateway/authority-health";
 import { buildDefaultOrgSettings } from "../../../domain/org/autonomy-policy";
 import type {
   CollaborationEdge,
@@ -197,6 +198,7 @@ export function SettingsDoctorSection(props: {
   const { doctorBaseline, authorityHealth } = props;
   const authorityDoctor = authorityHealth?.authority.doctor ?? null;
   const authorityPreflight = authorityHealth?.authority.preflight ?? null;
+  const authorityGuidanceItems = authorityHealth ? buildAuthorityGuidanceItems(authorityHealth, 4) : [];
 
   return (
     <Card className="shadow-sm border-slate-200">
@@ -265,6 +267,12 @@ export function SettingsDoctorSection(props: {
               `/runtime` 兼容路径：{doctorBaseline.compatibilityPathEnabled ? "仍开启" : "已关闭"}
             </div>
             <div className="mt-1 text-xs text-slate-600">
+              兼容 slice：{doctorBaseline.compatibilitySlices.join(", ")}
+            </div>
+            <div className="mt-1 text-xs text-slate-600">
+              Authority-owned slice：{doctorBaseline.authorityOwnedSlices.join(", ")}
+            </div>
+            <div className="mt-1 text-xs text-slate-600">
               已切到 command 的链路：{doctorBaseline.commandRoutes.join(", ")}
             </div>
             {doctorBaseline.lastError ? (
@@ -292,6 +300,10 @@ export function SettingsDoctorSection(props: {
                 <div className="mt-2 text-xs text-slate-600">
                   Schema：v{authorityDoctor.schemaVersion ?? "?"}
                 </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  Integrity：{authorityDoctor.integrityStatus}
+                  {authorityDoctor.integrityMessage ? ` · ${authorityDoctor.integrityMessage}` : ""}
+                </div>
                 <div className="mt-2 text-xs text-slate-600">
                   备份：<strong>{authorityDoctor.backupCount}</strong> 份
                 </div>
@@ -314,6 +326,33 @@ export function SettingsDoctorSection(props: {
               <div className="mt-2 text-xs text-slate-500">还没拿到 Authority 运维快照。</div>
             )}
           </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="text-sm font-semibold text-slate-900">优先修复建议</div>
+            <div className="mt-2 space-y-2">
+              {authorityGuidanceItems.length > 0 ? (
+                authorityGuidanceItems.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-slate-900">{item.title}</div>
+                      <Badge variant="outline" className={doctorToneClass(item.state)}>
+                        {item.state}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">{item.summary}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">{item.action}</div>
+                    {item.command ? (
+                      <div className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-700">
+                        {item.command}
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <div className="text-xs text-slate-500">当前没有需要优先处理的 authority 修复项。</div>
+              )}
+            </div>
+          </div>
         </div>
 
         {authorityPreflight ? (
@@ -329,6 +368,10 @@ export function SettingsDoctorSection(props: {
             </div>
             <div className="mt-1 text-xs text-slate-600">
               Schema：v{authorityPreflight.schemaVersion ?? "?"}
+            </div>
+            <div className="mt-1 text-xs text-slate-600">
+              Integrity：{authorityPreflight.integrityStatus}
+              {authorityPreflight.integrityMessage ? ` · ${authorityPreflight.integrityMessage}` : ""}
             </div>
             <div className="mt-1 text-xs text-slate-600">
               标准备份：{authorityPreflight.backupCount} 份

@@ -46,11 +46,11 @@ export function ChatHistoryMenu(input: {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
           title="查看并切换历史会话"
+          aria-label="历史会话"
         >
           <History className="h-3.5 w-3.5" />
-          历史会话
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="z-50 w-80 bg-white">

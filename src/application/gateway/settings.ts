@@ -4,10 +4,14 @@ import { useOrgApp } from "../org";
 import { isOrgAutopilotEnabled } from "../assignment/org-fit";
 import { gateway, type GatewayModelChoice, useGatewayStore } from "./index";
 import { useAuthorityRuntimeSyncStore } from "../../infrastructure/authority/runtime-sync-store";
-import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/contract";
+import {
+  listAuthorityOwnedRuntimeSliceLabels,
+  listCompatibilityRuntimeSliceLabels,
+} from "../../infrastructure/authority/runtime-slice-ownership";
 import type { CompanyCollaborationPolicy } from "../../domain/org/types";
 import {
   collectAuthorityGuidance,
+  extractAuthorityHealthSnapshot,
   resolveAuthorityStorageState,
 } from "./authority-health";
 import {
@@ -33,6 +37,8 @@ export type GatewayDoctorBaseline = {
   layers: GatewayDoctorLayer[];
   validationChecklist: string[];
   compatibilityPathEnabled: boolean;
+  compatibilitySlices: string[];
+  authorityOwnedSlices: string[];
   commandRoutes: string[];
   lastError: string | null;
 };
@@ -43,17 +49,6 @@ export type GatewayProviderConfig = {
   models?: string[];
 } & Record<string, unknown>;
 export type GatewayTelegramConfig = { enabled?: boolean; botToken?: string } | null;
-
-function extractAuthorityHealth(value: JsonMap | null): AuthorityHealthSnapshot | null {
-  if (!value) {
-    return null;
-  }
-  const candidate = value as Partial<AuthorityHealthSnapshot>;
-  if (!candidate.executor || !candidate.executorConfig || !candidate.authority) {
-    return null;
-  }
-  return candidate as AuthorityHealthSnapshot;
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -154,7 +149,7 @@ export function useGatewaySettingsQuery() {
   const telegramConfig = ((configSnapshot?.config as {
     channels?: { telegram?: { enabled?: boolean; botToken?: string } };
   })?.channels?.telegram ?? null) as GatewayTelegramConfig;
-  const authorityHealth = useMemo(() => extractAuthorityHealth(status), [status]);
+  const authorityHealth = useMemo(() => extractAuthorityHealthSnapshot(status), [status]);
   const executorStatus = authorityHealth?.executor ?? null;
   const executorConfig = authorityHealth?.executorConfig ?? null;
   const doctorBaseline = useMemo<GatewayDoctorBaseline>(() => {
@@ -256,6 +251,8 @@ export function useGatewaySettingsQuery() {
         "authority / gateway / executor 异常能分层定位",
       ],
       compatibilityPathEnabled: runtimeSync.compatibilityPathEnabled,
+      compatibilitySlices: listCompatibilityRuntimeSliceLabels(),
+      authorityOwnedSlices: listAuthorityOwnedRuntimeSliceLabels(),
       commandRoutes: runtimeSync.commandRoutes,
       lastError: runtimeSync.lastError,
     };

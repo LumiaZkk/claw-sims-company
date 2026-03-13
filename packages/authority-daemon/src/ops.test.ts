@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,10 +13,15 @@ import {
   readAuthorityPreflightSnapshot,
   readAuthorityDoctorSnapshot,
   readAuthorityRestorePlan,
+  rehearseAuthorityRestore,
   renderAuthorityBackupsReport,
+  renderAuthorityMigrateReport,
+  renderAuthorityGuidanceReport,
+  renderAuthorityRestoreRehearsalReport,
   renderAuthorityRestorePlanReport,
   resolveAuthorityDbPath,
   resolveAuthorityBackupDir,
+  resolveAuthorityRehearsalParentDir,
   restoreAuthorityBackup,
 } from "./ops";
 
@@ -86,6 +91,7 @@ describe("authority ops", () => {
     const snapshot = readAuthorityDoctorSnapshot({ homeDir });
     expect(snapshot.status).toBe("ready");
     expect(snapshot.schemaVersion).toBe(AUTHORITY_SCHEMA_VERSION);
+    expect(snapshot.integrityStatus).toBe("ok");
     expect(snapshot.backupCount).toBe(0);
     expect(snapshot.latestBackupAt).toBe(null);
     expect(snapshot.companyCount).toBe(1);
@@ -102,6 +108,17 @@ describe("authority ops", () => {
     expect(snapshot.status).toBe("degraded");
     expect(snapshot.schemaVersion).toBe(null);
     expect(snapshot.issues[0]).toContain("schemaVersion");
+  });
+
+  it("blocks doctor when authority sqlite is unreadable", () => {
+    const homeDir = makeTempHome();
+    const dbPath = resolveAuthorityDbPath(homeDir);
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "not-a-sqlite-db");
+    const snapshot = readAuthorityDoctorSnapshot({ homeDir });
+    expect(snapshot.status).toBe("blocked");
+    expect(snapshot.integrityStatus).toBe("failed");
+    expect(snapshot.issues[0]).toContain("无法读取");
   });
 
   it("creates a backup copy for an existing authority db", () => {
@@ -149,6 +166,7 @@ describe("authority ops", () => {
     const snapshot = readAuthorityPreflightSnapshot({ homeDir });
     expect(snapshot.status).toBe("ready");
     expect(snapshot.dbExists).toBe(false);
+    expect(snapshot.integrityStatus).toBe("unknown");
     expect(snapshot.backupCount).toBe(0);
     expect(snapshot.notes).toContain("Authority SQLite 还不存在，首次启动会自动初始化。");
   });
@@ -159,6 +177,7 @@ describe("authority ops", () => {
     const snapshot = readAuthorityPreflightSnapshot({ homeDir });
     expect(snapshot.status).toBe("degraded");
     expect(snapshot.dbExists).toBe(true);
+    expect(snapshot.integrityStatus).toBe("ok");
     expect(snapshot.backupCount).toBe(0);
     expect(snapshot.warnings).toContain(
       "Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。",
@@ -172,6 +191,17 @@ describe("authority ops", () => {
     expect(snapshot.status).toBe("degraded");
     expect(snapshot.schemaVersion).toBe(null);
     expect(snapshot.warnings[0]).toContain("authority:migrate");
+  });
+
+  it("blocks preflight when authority sqlite is unreadable", () => {
+    const homeDir = makeTempHome();
+    const dbPath = resolveAuthorityDbPath(homeDir);
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "not-a-sqlite-db");
+    const snapshot = readAuthorityPreflightSnapshot({ homeDir });
+    expect(snapshot.status).toBe("blocked");
+    expect(snapshot.integrityStatus).toBe("failed");
+    expect(snapshot.issues[0]).toContain("无法读取");
   });
 
   it("prunes older standard backups while keeping safety backups", () => {
@@ -221,6 +251,18 @@ describe("authority ops", () => {
     expect(snapshot.latestBackupAt).not.toBe(null);
   });
 
+  it("degrades doctor when latest backup is unreadable", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+    const backupDir = resolveAuthorityBackupDir(homeDir);
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(path.join(backupDir, "authority-20260313-090000.sqlite"), "not-a-sqlite-backup");
+
+    const snapshot = readAuthorityDoctorSnapshot({ homeDir });
+    expect(snapshot.status).toBe("degraded");
+    expect(snapshot.issues.some((issue) => issue.includes("最新备份不可读"))).toBe(true);
+  });
+
   it("reports degraded preflight when latest standard backup is stale", () => {
     const homeDir = makeTempHome();
     seedAuthorityDb(homeDir);
@@ -241,6 +283,18 @@ describe("authority ops", () => {
     expect(snapshot.backupCount).toBe(1);
     expect(snapshot.latestBackupAt).not.toBe(null);
     expect(snapshot.warnings[0]).toContain("Authority 最新标准备份已超过 24 小时");
+  });
+
+  it("blocks preflight when latest standard backup is unreadable", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+    const backupDir = resolveAuthorityBackupDir(homeDir);
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(path.join(backupDir, "authority-20260313-090000.sqlite"), "not-a-sqlite-backup");
+
+    const snapshot = readAuthorityPreflightSnapshot({ homeDir });
+    expect(snapshot.status).toBe("blocked");
+    expect(snapshot.issues.some((issue) => issue.includes("最新标准备份不可读"))).toBe(true);
   });
 
   it("blocks restoring a backup from a newer schema version", () => {
@@ -264,6 +318,87 @@ describe("authority ops", () => {
     expect(plan.issues[0]).toContain("高于当前代码支持的");
   });
 
+  it("blocks restoring an unreadable backup", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+    const backupDir = resolveAuthorityBackupDir(homeDir);
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = path.join(backupDir, "authority-20260313-090000.sqlite");
+    writeFileSync(backupPath, "not-a-sqlite-backup");
+
+    const plan = readAuthorityRestorePlan({
+      homeDir,
+      backupPath,
+      force: true,
+    });
+    expect(plan.status).toBe("blocked");
+    expect(plan.issues.some((issue) => issue.includes("integrity_check"))).toBe(true);
+  });
+
+  it("rehearses restoring a valid backup into an isolated home dir", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+    const backup = createAuthorityBackup({
+      homeDir,
+      fileName: "authority-20260313-090000.sqlite",
+      now: new Date(2026, 2, 13, 9, 0, 0).getTime(),
+    });
+
+    const rehearsal = rehearseAuthorityRestore({
+      homeDir,
+      backupPath: backup.backupPath,
+    });
+    expect(rehearsal.status).toBe("ready");
+    expect(rehearsal.rehearsalHomeDir).toContain(resolveAuthorityRehearsalParentDir(homeDir));
+    expect(rehearsal.rehearsalDoctor.status).toBe("ready");
+    expect(rehearsal.rehearsalDoctor.schemaVersion).toBe(AUTHORITY_SCHEMA_VERSION);
+
+    const report = renderAuthorityRestoreRehearsalReport(rehearsal);
+    expect(report).toContain("Authority restore rehearsal: ready");
+    expect(report).toContain("Live restore plan: ready");
+  });
+
+  it("degrades rehearsal when live restore would still require force", () => {
+    const homeDir = makeTempHome();
+    const dbPath = seedAuthorityDb(homeDir);
+    const backup = createAuthorityBackup({
+      homeDir,
+      fileName: "authority-20260313-090000.sqlite",
+      now: new Date(2026, 2, 13, 9, 0, 0).getTime(),
+    });
+    const backupTime = new Date(2026, 2, 13, 9, 0, 0);
+    utimesSync(backup.backupPath, backupTime, backupTime);
+    const newerTime = new Date(2026, 2, 13, 10, 0, 0);
+    utimesSync(dbPath, newerTime, newerTime);
+
+    const rehearsal = rehearseAuthorityRestore({
+      homeDir,
+      backupPath: backup.backupPath,
+    });
+    expect(rehearsal.status).toBe("degraded");
+    expect(rehearsal.rehearsalDoctor.status).toBe("ready");
+    expect(rehearsal.liveRestorePlan.status).toBe("blocked");
+    expect(rehearsal.warnings.some((warning) => warning.includes("restore plan 当前仍是 blocked"))).toBe(
+      true,
+    );
+  });
+
+  it("blocks rehearsal when backup is unreadable", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+    const backupDir = resolveAuthorityBackupDir(homeDir);
+    mkdirSync(backupDir, { recursive: true });
+    const backupPath = path.join(backupDir, "authority-20260313-090000.sqlite");
+    writeFileSync(backupPath, "not-a-sqlite-backup");
+
+    const rehearsal = rehearseAuthorityRestore({
+      homeDir,
+      backupPath,
+    });
+    expect(rehearsal.status).toBe("blocked");
+    expect(rehearsal.issues.some((issue) => issue.includes("不可读"))).toBe(true);
+  });
+
   it("backfills missing schemaVersion metadata via migrate command", () => {
     const homeDir = makeTempHome();
     const dbPath = seedAuthorityDb(homeDir, { schemaVersion: null });
@@ -280,6 +415,69 @@ describe("authority ops", () => {
     };
     db.close();
     expect(row.value).toBe(String(AUTHORITY_SCHEMA_VERSION));
+  });
+
+  it("renders a migrate plan without mutating the db", () => {
+    const homeDir = makeTempHome();
+    const dbPath = seedAuthorityDb(homeDir, { schemaVersion: null });
+
+    const result = migrateAuthoritySchemaVersion({ homeDir, planOnly: true });
+    expect(result.mode).toBe("plan");
+    expect(result.status).toBe("degraded");
+    expect(result.migrationRequired).toBe(true);
+    expect(result.previousSchemaVersion).toBe(null);
+    expect(result.currentSchemaVersion).toBe(null);
+    expect(result.actions[0]).toContain(`v${AUTHORITY_SCHEMA_VERSION}`);
+
+    const db = new DatabaseSync(dbPath);
+    const row = db.prepare("SELECT value FROM metadata WHERE key = ?").get("schemaVersion") as
+      | { value: string }
+      | undefined;
+    db.close();
+    expect(row).toBeUndefined();
+
+    const report = renderAuthorityMigrateReport(result);
+    expect(report).toContain("Authority migrate plan: degraded");
+    expect(report).toContain("Migration required: yes");
+  });
+
+  it("renders a ready migrate plan when no schema change is required", () => {
+    const homeDir = makeTempHome();
+    seedAuthorityDb(homeDir);
+
+    const result = migrateAuthoritySchemaVersion({ homeDir, planOnly: true });
+    expect(result.mode).toBe("plan");
+    expect(result.status).toBe("ready");
+    expect(result.migrationRequired).toBe(false);
+
+    const report = renderAuthorityMigrateReport(result);
+    expect(report).toContain("Authority migrate plan: ready");
+    expect(report).toContain("Migration required: no");
+  });
+
+  it("renders next actions for structured authority guidance", () => {
+    const report = renderAuthorityGuidanceReport([
+      {
+        id: "authority-backup-missing",
+        state: "degraded",
+        title: "还没有标准备份",
+        summary: "当前 authority SQLite 已存在，但还没有任何标准备份。",
+        action: "先创建第一份标准备份，再继续运行或做恢复判断。",
+        command: "npm run authority:backup",
+      },
+      {
+        id: "authority-executor-not-ready",
+        state: "degraded",
+        title: "下游执行器还没 ready",
+        summary: "Authority 已接入 OpenClaw，但当前执行器不可用。",
+        action: "去 Settings 检查 OpenClaw 地址、Token 和最近连接错误。",
+        command: null,
+      },
+    ]);
+
+    expect(report).toContain("Next actions:");
+    expect(report).toContain("还没有标准备份: 先创建第一份标准备份，再继续运行或做恢复判断。 (npm run authority:backup)");
+    expect(report).toContain("下游执行器还没 ready: 去 Settings 检查 OpenClaw 地址、Token 和最近连接错误。");
   });
 
   it("prefers the latest standard backup over newer safety backups", () => {
@@ -394,5 +592,7 @@ describe("authority ops", () => {
     expect(report).toContain("Authority backups:");
     expect(report).toContain("authority-20260313-090000.sqlite");
     expect(report).toContain("(backup)");
+    expect(report).toContain("schema:1");
+    expect(report).toContain("integrity:ok");
   });
 });

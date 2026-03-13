@@ -140,6 +140,13 @@ export type ProviderRunState =
   | "error";
 
 export type ProviderRuntimeStreamKind = "lifecycle" | "assistant" | "tool";
+export type ProviderProcessState =
+  | "unknown"
+  | "queued"
+  | "running"
+  | "completed"
+  | "aborted"
+  | "error";
 
 export type ProviderSessionStatus = {
   providerId: string;
@@ -163,6 +170,22 @@ export type ProviderRuntimeEvent = {
   timestamp: number;
   errorMessage?: string | null;
   toolName?: string | null;
+  raw?: unknown;
+};
+
+export type ProviderProcessRecord = {
+  providerId: string;
+  processId: string;
+  sessionKey?: string | null;
+  agentId?: string | null;
+  state: ProviderProcessState;
+  title: string;
+  command?: string | null;
+  summary?: string | null;
+  startedAt?: number | null;
+  updatedAt?: number | null;
+  endedAt?: number | null;
+  exitCode?: number | null;
   raw?: unknown;
 };
 
@@ -354,8 +377,8 @@ export interface AgentBackend extends BackendCore {
   getStatus(): Promise<Record<string, unknown>>;
   getSessionStatus(sessionKey: string): Promise<ProviderSessionStatus>;
   subscribeAgentRuntime(handler: (event: ProviderRuntimeEvent) => void): () => void;
-  listProcesses?(sessionKey?: string): Promise<unknown>;
-  pollProcess?(id: string): Promise<unknown>;
+  listProcesses?(sessionKey?: string): Promise<ProviderProcessRecord[]>;
+  pollProcess?(id: string): Promise<ProviderProcessRecord | null>;
   getConfigSnapshot(): Promise<{
     path: string;
     exists: boolean;

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildRuntimeInspectorSurface } from "./index";
-import type { AgentRunRecord, AgentRuntimeRecord, AgentSessionRecord } from "../agent-runtime";
+import type {
+  AgentRunRecord,
+  AgentRuntimeRecord,
+  AgentSessionRecord,
+  CanonicalAgentStatusHealthRecord,
+} from "../agent-runtime";
 import type { DispatchRecord, EscalationRecord, SupportRequestRecord } from "../../domain/delegation/types";
 import type { WorkItemRecord } from "../../domain/mission/types";
 import type { Company } from "../../domain/org/types";
@@ -25,6 +30,14 @@ function createCompany(): Company {
         role: "Chief Executive Officer",
         isMeta: true,
         metaRole: "ceo",
+        departmentId: "dep-exec",
+      },
+      {
+        agentId: "coo",
+        nickname: "COO",
+        role: "Chief Operating Officer",
+        isMeta: true,
+        metaRole: "coo",
         departmentId: "dep-exec",
       },
       {
@@ -88,6 +101,7 @@ function createRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     lastEventAt: 100,
     endedAt: null,
     streamKindsSeen: ["lifecycle"],
+    toolNamesSeen: [],
     error: null,
     ...overrides,
   };
@@ -127,6 +141,22 @@ function createWorkItem(overrides: Partial<WorkItemRecord> = {}): WorkItemRecord
   };
 }
 
+function createStatusHealth(
+  overrides: Partial<CanonicalAgentStatusHealthRecord> = {},
+): CanonicalAgentStatusHealthRecord {
+  return {
+    source: "fallback",
+    coverage: "fallback",
+    coveredAgentCount: 0,
+    expectedAgentCount: 3,
+    missingAgentIds: ["ceo", "coo", "cto"],
+    isComplete: false,
+    generatedAt: 100,
+    note: "fallback",
+    ...overrides,
+  };
+}
+
 describe("buildRuntimeInspectorSurface", () => {
   it("classifies busy technical agents into the tech lab and surfaces current work", () => {
     const surface = buildRuntimeInspectorSurface({
@@ -139,6 +169,7 @@ describe("buildRuntimeInspectorSurface", () => {
       activeAgentRuns: [createRun()],
       activeAgentRuntime: [createRuntime()],
       activeAgentStatuses: [],
+      activeAgentStatusHealth: createStatusHealth(),
     });
 
     const cto = surface?.agents.find((entry) => entry.agentId === "cto");
@@ -149,6 +180,19 @@ describe("buildRuntimeInspectorSurface", () => {
       currentAssignment: "Build platform",
       activeSessionCount: 1,
       activeRunCount: 1,
+    });
+    expect(surface?.focusAgent?.agentId).toBe("cto");
+    expect(surface?.triageQueue[0]?.agentId).toBe("cto");
+    expect(surface?.timeline[0]).toMatchObject({
+      agentId: "cto",
+      tone: "info",
+    });
+    expect(surface?.recommendedActions[0]?.to).toBe("/chat/cto");
+    expect(surface?.replay[0]).toMatchObject({
+      agentId: "cto",
+      modalityLabel: "Run",
+      phaseLabel: "执行中",
+      tone: "info",
     });
   });
 
@@ -176,12 +220,50 @@ describe("buildRuntimeInspectorSurface", () => {
       activeAgentRuns: [createRun()],
       activeAgentRuntime: [createRuntime()],
       activeAgentStatuses: [],
+      activeAgentStatusHealth: createStatusHealth(),
     });
 
     const cto = surface?.agents.find((entry) => entry.agentId === "cto");
     expect(cto?.attention).toBe("critical");
     expect(cto?.attentionReason).toContain("升级");
     expect(surface?.criticalAgents).toBe(1);
+  });
+
+  it("builds a handling chain so the owner can see who is waiting on whom", () => {
+    const surface = buildRuntimeInspectorSurface({
+      activeCompany: createCompany(),
+      activeWorkItems: [
+        createWorkItem({
+          id: "topic:mission:confirmation",
+          title: "Close the launch plan",
+          ownerActorId: "coo",
+          ownerLabel: "COO",
+          batonActorId: "ceo",
+          batonLabel: "CEO",
+          status: "waiting_owner",
+          stageGateStatus: "waiting_confirmation",
+          nextAction: "等待 CEO 确认后启动执行。",
+          displayNextAction: "等待 CEO 确认后启动执行。",
+          updatedAt: 140,
+        }),
+      ],
+      activeDispatches: [] as DispatchRecord[],
+      activeSupportRequests: [] as SupportRequestRecord[],
+      activeEscalations: [] as EscalationRecord[],
+      activeAgentSessions: [] as AgentSessionRecord[],
+      activeAgentRuns: [] as AgentRunRecord[],
+      activeAgentRuntime: [] as AgentRuntimeRecord[],
+      activeAgentStatuses: [],
+      activeAgentStatusHealth: createStatusHealth(),
+    });
+
+    expect(surface?.chainLinks[0]).toMatchObject({
+      kind: "work_item",
+      stateLabel: "待确认",
+      fromAgentId: "coo",
+      toAgentId: "ceo",
+      summary: "等待 CEO 确认后启动执行。",
+    });
   });
 
   it("does not attribute downstream blocked work to the CEO only because they started it", () => {
@@ -202,6 +284,7 @@ describe("buildRuntimeInspectorSurface", () => {
       activeAgentRuns: [createRun()],
       activeAgentRuntime: [createRuntime()],
       activeAgentStatuses: [],
+      activeAgentStatusHealth: createStatusHealth(),
     });
 
     const ceo = surface?.agents.find((entry) => entry.agentId === "ceo");
@@ -209,5 +292,138 @@ describe("buildRuntimeInspectorSurface", () => {
 
     expect(ceo?.attention).toBe("healthy");
     expect(cto?.attention).toBe("critical");
+    expect(surface?.focusAgent?.agentId).toBe("cto");
+    expect(surface?.triageQueue[0]?.agentId).toBe("cto");
+    expect(surface?.watchlist[0]?.agentId).toBe("cto");
+    expect(surface?.timeline[0]).toMatchObject({
+      agentId: "cto",
+      tone: "danger",
+    });
+  });
+
+  it("surfaces tool-running and terminal-completed replay events", () => {
+    const surface = buildRuntimeInspectorSurface({
+      activeCompany: createCompany(),
+      activeWorkItems: [
+        createWorkItem({
+          id: "topic:mission:tooling",
+          title: "Run consistency checks",
+          ownerActorId: "cto",
+          batonActorId: "cto",
+          updatedAt: 110,
+        }),
+      ],
+      activeDispatches: [] as DispatchRecord[],
+      activeSupportRequests: [] as SupportRequestRecord[],
+      activeEscalations: [] as EscalationRecord[],
+      activeAgentSessions: [
+        createSession(),
+        createSession({
+          agentId: "ceo",
+          sessionKey: "agent:ceo:main",
+          sessionState: "idle",
+          lastSeenAt: 160,
+          lastTerminalRunState: "completed",
+          lastTerminalSummary: "agent:ceo:main 最近一次执行已完成。",
+          source: "lifecycle",
+        }),
+      ],
+      activeAgentRuns: [
+        createRun({
+          streamKindsSeen: ["lifecycle", "tool"],
+        }),
+      ],
+      activeAgentRuntime: [
+        createRuntime(),
+        createRuntime({
+          agentId: "ceo",
+          availability: "idle",
+          activeSessionKeys: [],
+          activeRunIds: [],
+          lastSeenAt: 160,
+          lastBusyAt: 140,
+          lastIdleAt: 160,
+          latestTerminalAt: 160,
+          latestTerminalSummary: "agent:ceo:main 最近一次执行已完成。",
+          currentWorkload: "free",
+          runtimeEvidence: [
+            { kind: "status", summary: "agent:ceo:main 最近一次执行已完成。", timestamp: 160 },
+          ],
+        }),
+      ],
+      activeAgentStatuses: [],
+      activeAgentStatusHealth: createStatusHealth(),
+    });
+
+    expect(surface?.replay[0]).toMatchObject({
+      agentId: "ceo",
+      modalityLabel: "Terminal",
+      phaseLabel: "完成",
+      tone: "success",
+    });
+    expect(surface?.replay.find((event) => event.agentId === "cto")).toMatchObject({
+      modalityLabel: "Tool",
+      phaseLabel: "执行中",
+      tone: "info",
+    });
+    expect(surface?.historyWindow.find((event) => event.sourceLabel === "Replay · Tool")).toMatchObject({
+      agentId: "cto",
+      sourceLabel: "Replay · Tool",
+    });
+  });
+
+  it("uses authority partial coverage for available members and local fallback for missing members", () => {
+    const surface = buildRuntimeInspectorSurface({
+      activeCompany: createCompany(),
+      activeWorkItems: [createWorkItem()],
+      activeDispatches: [] as DispatchRecord[],
+      activeSupportRequests: [] as SupportRequestRecord[],
+      activeEscalations: [] as EscalationRecord[],
+      activeAgentSessions: [createSession()],
+      activeAgentRuns: [createRun()],
+      activeAgentRuntime: [createRuntime()],
+      activeAgentStatuses: [
+        {
+          agentId: "cto",
+          runtimeState: "busy",
+          coordinationState: "executing",
+          interventionState: "healthy",
+          reason: "Authority reports CTO is still executing.",
+          currentAssignment: "Build platform",
+          currentObjective: "Ship runtime inspector",
+          latestSignalAt: 100,
+          activeSessionCount: 1,
+          activeRunCount: 1,
+          openDispatchCount: 0,
+          blockedDispatchCount: 0,
+          openSupportRequestCount: 0,
+          blockedSupportRequestCount: 0,
+          openRequestCount: 0,
+          blockedRequestCount: 0,
+          openHandoffCount: 0,
+          blockedHandoffCount: 0,
+          openEscalationCount: 0,
+          blockedWorkItemCount: 0,
+          primaryWorkItemId: "topic:mission:platform",
+        },
+      ],
+      activeAgentStatusHealth: createStatusHealth({
+        source: "authority",
+        coverage: "authority_partial",
+        coveredAgentCount: 1,
+        expectedAgentCount: 3,
+        missingAgentIds: ["ceo", "coo"],
+        note: "Authority missing executive status rows.",
+      }),
+    });
+
+    const cto = surface?.agents.find((entry) => entry.agentId === "cto");
+    const ceo = surface?.agents.find((entry) => entry.agentId === "ceo");
+
+    expect(surface?.statusHealth.coverage).toBe("authority_partial");
+    expect(surface?.statusCoverage.label).toBe("Authority 局部覆盖");
+    expect(cto?.statusOrigin).toBe("authority");
+    expect(cto?.reason).toBe("Authority reports CTO is still executing.");
+    expect(ceo?.statusOrigin).toBe("fallback");
   });
 });

@@ -10,7 +10,10 @@ import {
   buildAuthorityRuntimeSignature,
   getLastAppliedAuthorityRuntimeSignature,
   recordAuthorityRuntimeSyncError,
+  useAuthorityRuntimeSyncStore,
 } from "../../infrastructure/authority/runtime-sync-store";
+import { readCachedAuthorityRuntimeSnapshot } from "../../infrastructure/authority/runtime-cache";
+import { buildAuthorityCompatibilityRuntimeSnapshot } from "../../infrastructure/authority/runtime-compatibility-snapshot";
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
 
 function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
@@ -19,7 +22,7 @@ function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
   if (!companyId) {
     return null;
   }
-  return {
+  const snapshot: AuthorityCompanyRuntimeSnapshot = {
     companyId,
     activeRoomRecords: state.activeRoomRecords,
     activeMissionRecords: state.activeMissionRecords,
@@ -39,8 +42,16 @@ function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
     activeAgentRuns: state.activeAgentRuns,
     activeAgentRuntime: state.activeAgentRuntime,
     activeAgentStatuses: state.activeAgentStatuses,
+    activeAgentStatusHealth: state.activeAgentStatusHealth,
     updatedAt: Date.now(),
   };
+  if (!state.authorityBackedState) {
+    return snapshot;
+  }
+  return buildAuthorityCompatibilityRuntimeSnapshot({
+    localRuntime: snapshot,
+    authorityRuntime: readCachedAuthorityRuntimeSnapshot(companyId),
+  });
 }
 
 export function CompanyAuthoritySyncHost() {
@@ -48,6 +59,7 @@ export function CompanyAuthoritySyncHost() {
   const flushTimerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const pullInFlightRef = useRef(false);
+  const authorityHydratedRef = useRef(false);
 
   useEffect(() => {
     if (!connected) {
@@ -59,8 +71,18 @@ export function CompanyAuthoritySyncHost() {
       if (inFlightRef.current) {
         return;
       }
+      if (!useAuthorityRuntimeSyncStore.getState().compatibilityPathEnabled) {
+        return;
+      }
       const snapshot = buildSnapshot();
       if (!snapshot) {
+        return;
+      }
+      if (
+        !authorityHydratedRef.current &&
+        ((snapshot.activeAgentStatuses?.length ?? 0) === 0 ||
+          snapshot.activeAgentStatusHealth?.coverage === "fallback")
+      ) {
         return;
       }
       const signature = buildAuthorityRuntimeSignature(snapshot);
@@ -97,12 +119,15 @@ export function CompanyAuthoritySyncHost() {
       pullInFlightRef.current = true;
       void getAuthorityCompanyRuntime(activeCompany.id)
         .then((snapshot) => {
-          applyAuthorityRuntimeSnapshotToStore({
+          const applied = applyAuthorityRuntimeSnapshotToStore({
             operation: "pull",
             snapshot,
             set: useCompanyRuntimeStore.setState,
             get: useCompanyRuntimeStore.getState,
           });
+          if (applied) {
+            authorityHydratedRef.current = true;
+          }
         })
         .catch((error) => {
           console.warn("Failed to refresh runtime snapshot from authority", error);
@@ -116,6 +141,13 @@ export function CompanyAuthoritySyncHost() {
     const unsubscribeStore = useCompanyRuntimeStore.subscribe((state) => {
       if (!state.activeCompany) {
         return;
+      }
+      if (
+        !authorityHydratedRef.current &&
+        state.activeAgentStatuses.length > 0 &&
+        state.activeAgentStatusHealth.coverage !== "fallback"
+      ) {
+        authorityHydratedRef.current = true;
       }
       if (flushTimerRef.current !== null) {
         window.clearTimeout(flushTimerRef.current);
@@ -144,8 +176,10 @@ export function CompanyAuthoritySyncHost() {
       }
       if (
         eventName === "company.updated" ||
+        eventName === "conversation.updated" ||
         eventName === "requirement.updated" ||
         eventName === "room.updated" ||
+        eventName === "round.updated" ||
         eventName === "dispatch.updated" ||
         eventName === "artifact.updated" ||
         eventName === "decision.updated" ||
@@ -155,7 +189,7 @@ export function CompanyAuthoritySyncHost() {
       }
     });
 
-    flush();
+    refreshRemoteRuntime();
 
     return () => {
       unsubscribeStore();

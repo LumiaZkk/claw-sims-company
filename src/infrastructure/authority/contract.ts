@@ -15,9 +15,11 @@ import type {
   RoundRecord,
   WorkItemRecord,
 } from "../../domain/mission/types";
+import type { ApprovalRecord } from "../../domain/governance/types";
 import type { Company, CyberCompanyConfig, Department } from "../../domain/org/types";
 import type {
   CanonicalAgentStatusRecord,
+  CanonicalAgentStatusHealthRecord,
   AgentRunRecord,
   AgentRuntimeRecord,
   AgentSessionRecord,
@@ -101,6 +103,7 @@ export type AuthorityCompanyRuntimeSnapshot = {
   activeAgentRuns?: AgentRunRecord[];
   activeAgentRuntime?: AgentRuntimeRecord[];
   activeAgentStatuses?: CanonicalAgentStatusRecord[];
+  activeAgentStatusHealth?: CanonicalAgentStatusHealthRecord | null;
   updatedAt: number;
 };
 
@@ -128,6 +131,8 @@ export type AuthorityHealthSnapshot = {
     doctor: {
       status: "ready" | "degraded" | "blocked";
       schemaVersion: number | null;
+      integrityStatus: "ok" | "failed" | "unknown";
+      integrityMessage: string | null;
       backupDir: string;
       backupCount: number;
       latestBackupAt: number | null;
@@ -145,13 +150,25 @@ export type AuthorityHealthSnapshot = {
       backupDir: string;
       dbExists: boolean;
       schemaVersion: number | null;
+      integrityStatus: "ok" | "failed" | "unknown";
+      integrityMessage: string | null;
       backupCount: number;
       latestBackupAt: number | null;
       notes: string[];
       warnings: string[];
       issues: string[];
     };
+    guidance?: AuthorityHealthGuidanceItem[];
   };
+};
+
+export type AuthorityHealthGuidanceItem = {
+  id: string;
+  state: "ready" | "degraded" | "blocked";
+  title: string;
+  summary: string;
+  action: string;
+  command?: string | null;
 };
 
 export type AuthorityEvent =
@@ -162,6 +179,7 @@ export type AuthorityEvent =
         | "conversation.updated"
         | "requirement.updated"
         | "room.updated"
+        | "round.updated"
         | "dispatch.updated"
         | "artifact.updated"
         | "decision.updated"
@@ -202,6 +220,18 @@ export type AuthorityCreateCompanyResponse = {
   company: Company;
   config: CyberCompanyConfig;
   runtime: AuthorityCompanyRuntimeSnapshot;
+  warnings: string[];
+};
+
+export type AuthorityRetryCompanyProvisioningRequest = {
+  companyId: string;
+};
+
+export type AuthorityRetryCompanyProvisioningResponse = {
+  company: Company;
+  config: CyberCompanyConfig;
+  runtime: AuthorityCompanyRuntimeSnapshot;
+  warnings: string[];
 };
 
 export type AuthorityHireEmployeeInput = {
@@ -243,6 +273,35 @@ export type AuthorityBatchHireEmployeesResponse = {
   runtime: AuthorityCompanyRuntimeSnapshot;
   employees: Company["employees"][number][];
   warnings: string[];
+};
+
+export type AuthorityApprovalRequest = {
+  companyId: string;
+  scope: ApprovalRecord["scope"];
+  actionType: ApprovalRecord["actionType"];
+  summary: string;
+  detail?: string | null;
+  requestedByActorId?: string | null;
+  requestedByLabel?: string | null;
+  targetActorId?: string | null;
+  targetLabel?: string | null;
+  payload?: Record<string, unknown>;
+  timestamp?: number;
+};
+
+export type AuthorityApprovalResolveRequest = {
+  companyId: string;
+  approvalId: string;
+  decision: Extract<ApprovalRecord["status"], "approved" | "rejected">;
+  resolution?: string | null;
+  decidedByActorId?: string | null;
+  decidedByLabel?: string | null;
+  timestamp?: number;
+};
+
+export type AuthorityApprovalMutationResponse = {
+  bootstrap: AuthorityBootstrapSnapshot;
+  approval: ApprovalRecord;
 };
 
 export type AuthoritySwitchCompanyRequest = {
@@ -298,6 +357,53 @@ export type AuthorityRoomDeleteRequest = {
 export type AuthorityRoomBindingsUpsertRequest = {
   companyId: string;
   bindings: RoomConversationBindingRecord[];
+};
+
+export type AuthorityRoundUpsertRequest = {
+  companyId: string;
+  round: RoundRecord;
+};
+
+export type AuthorityRoundDeleteRequest = {
+  companyId: string;
+  roundId: string;
+};
+
+export type AuthorityMissionUpsertRequest = {
+  companyId: string;
+  mission: ConversationMissionRecord;
+};
+
+export type AuthorityMissionDeleteRequest = {
+  companyId: string;
+  missionId: string;
+};
+
+export type AuthorityConversationStateUpsertRequest = {
+  companyId: string;
+  conversationId: string;
+  changes: Partial<
+    Pick<
+      ConversationStateRecord,
+      "currentWorkKey" | "currentWorkItemId" | "currentRoundId" | "draftRequirement"
+    >
+  >;
+  timestamp?: number;
+};
+
+export type AuthorityConversationStateDeleteRequest = {
+  companyId: string;
+  conversationId: string;
+};
+
+export type AuthorityWorkItemUpsertRequest = {
+  companyId: string;
+  workItem: WorkItemRecord;
+};
+
+export type AuthorityWorkItemDeleteRequest = {
+  companyId: string;
+  workItemId: string;
 };
 
 export type AuthorityDispatchUpsertRequest = {
@@ -420,6 +526,27 @@ export type AuthorityAgentFilesResponse = {
   agentId: string;
   workspace: string;
   files: AuthorityAgentFileRecord[];
+};
+
+export type AuthorityAgentFileRunRequest = {
+  agentId: string;
+  entryPath: string;
+  payload?: Record<string, unknown>;
+  timeoutMs?: number;
+};
+
+export type AuthorityAgentFileRunResponse = {
+  agentId: string;
+  workspace: string;
+  entryPath: string;
+  status: "executed" | "missing" | "unsupported";
+  cwd: string;
+  command?: string[];
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  durationMs?: number;
+  message?: string | null;
 };
 
 export type AuthoritySessionListResponse = {

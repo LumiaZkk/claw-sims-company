@@ -46,6 +46,7 @@ function makeFile(overrides: Partial<WorkspaceFileRow> = {}): WorkspaceFileRow {
     kind: "tooling",
     resourceType: "tool",
     tags: ["tech.tool"],
+    resourceOrigin: "declared",
     updatedAtMs: 10,
     ...overrides,
   };

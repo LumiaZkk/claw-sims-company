@@ -4,19 +4,20 @@ import { useGatewayStore } from "../../application/gateway";
 import { useCompanyShellCommands, useCompanyShellQuery } from "../../application/company/shell";
 import { ActionFormDialog } from "../../components/ui/action-form-dialog";
 import { toast } from "../../components/system/toast-store";
-import { Plus, ArrowRight, Loader, Trash2 } from "lucide-react";
+import { Plus, ArrowRight, Loader, Trash2, AlertTriangle, RefreshCcw } from "lucide-react";
 import type { Company } from "../../domain/org/types";
 import { isReservedSystemCompany } from "../../domain/org/system-company";
 
 export function CompanySelectPresentationPage() {
   const navigate = useNavigate();
   const { config, loading: storeLoading } = useCompanyShellQuery();
-  const { switchCompany, deleteCompany, loadConfig } = useCompanyShellCommands();
+  const { switchCompany, deleteCompany, loadConfig, retryCompanyProvisioning } = useCompanyShellCommands();
   const { connected } = useGatewayStore();
   const [initLoading, setInitLoading] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [retryingCompanyId, setRetryingCompanyId] = useState<string | null>(null);
 
   // 强制确保配置被加载
   useEffect(() => {
@@ -34,7 +35,7 @@ export function CompanySelectPresentationPage() {
 
   const handleSelect = (id: string) => {
     switchCompany(id);
-    navigate("/");
+    navigate("/runtime");
   };
 
   const handleDeleteRequest = (company: Company) => {
@@ -65,6 +66,18 @@ export function CompanySelectPresentationPage() {
       toast.error("删除失败", error instanceof Error ? error.message : String(error));
     } finally {
       setDeleteSubmitting(false);
+    }
+  };
+
+  const handleRetryProvisioning = async (companyId: string) => {
+    setRetryingCompanyId(companyId);
+    try {
+      await retryCompanyProvisioning(companyId);
+      toast.success("已触发执行器补齐", "公司已保留，系统正在重新确认 OpenClaw agent 和上下文文件。");
+    } catch (error) {
+      toast.error("补齐失败", error instanceof Error ? error.message : String(error));
+    } finally {
+      setRetryingCompanyId(null);
     }
   };
 
@@ -108,6 +121,22 @@ export function CompanySelectPresentationPage() {
                 <p className="text-sm text-slate-500 mb-4 flex-1 line-clamp-2">
                   {c.description || "暂无组织描述"}
                 </p>
+                {c.system?.executorProvisioning && c.system.executorProvisioning.state !== "ready" ? (
+                  <div className="mb-4 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-950">
+                    <div className="flex items-center gap-2 font-medium">
+                      <AlertTriangle size={14} />
+                      执行器仍在补齐
+                    </div>
+                    <div className="mt-1">
+                      这家公司已经创建成功，但 OpenClaw agent 仍在补齐。你现在就可以进入工作目录继续看内容和配置入口。
+                    </div>
+                    {c.system.executorProvisioning.lastError ? (
+                      <div className="mt-2 line-clamp-2 text-amber-900/80">
+                        最近原因：{c.system.executorProvisioning.lastError}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </button>
 
               <div className="w-full flex items-center justify-between mt-auto pt-4 border-t border-slate-100">
@@ -115,6 +144,11 @@ export function CompanySelectPresentationPage() {
                   <span className="text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded font-medium">
                     {c.employees?.length || 0} 名成员
                   </span>
+                  {c.system?.executorProvisioning && c.system.executorProvisioning.state !== "ready" ? (
+                    <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded font-medium">
+                      执行器补齐中
+                    </span>
+                  ) : null}
                   {isReservedSystemCompany(c) ? (
                     <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded font-medium">
                       映射 main
@@ -122,6 +156,17 @@ export function CompanySelectPresentationPage() {
                   ) : null}
                 </div>
                 <div className="flex items-center gap-2">
+                  {c.system?.executorProvisioning && c.system.executorProvisioning.state !== "ready" ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleRetryProvisioning(c.id)}
+                      disabled={retryingCompanyId === c.id}
+                      className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <RefreshCcw size={14} className={retryingCompanyId === c.id ? "animate-spin" : undefined} />
+                      重试补齐
+                    </button>
+                  ) : null}
                   {isReservedSystemCompany(c) ? null : (
                     <button
                       type="button"

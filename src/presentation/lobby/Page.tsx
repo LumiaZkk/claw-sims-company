@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useLobbyPageCommands, useLobbyPageViewModel } from "../../application/lobby";
-import { resolveExecutionState } from "../../application/mission/execution-state";
-import { ExecutionStateBadge } from "../../components/execution-state-badge";
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
+import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { Badge } from "../../components/ui/badge";
 import { resolveConversationPresentation } from "../../lib/chat-routes";
 import { usePageVisibility } from "../../lib/use-page-visibility";
@@ -14,10 +14,10 @@ import {
   LobbyMetricCards,
   OpsSectionCard,
   LobbyRequirementCard,
-  LobbyStatusStrip,
 } from "./components/LobbySections";
 import { LobbyTeamActivitySection } from "./components/LobbyTeamActivitySection";
 import { useLobbyPageState } from "./hooks/useLobbyPageState";
+import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 
 type CompanyLobbyPageContentProps = Omit<
   ReturnType<typeof useLobbyPageViewModel>,
@@ -55,18 +55,21 @@ function CompanyLobbyPageContent({
 }: CompanyLobbyPageContentProps) {
   const navigate = useNavigate();
   const isPageVisible = usePageVisibility();
+  const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
   const {
     buildBlueprintText,
     syncKnowledge,
     hireEmployee,
     updateRole,
     fireEmployee,
+    resolveApproval,
     assignQuickTask,
     buildGroupChatRoute,
     hireSubmitting,
     updateRoleSubmitting,
     quickTaskSubmitting,
     groupChatSubmitting,
+    approvalSubmittingId,
     recoveringCommunication,
     recoverCommunication,
   } = useLobbyPageCommands({
@@ -118,12 +121,8 @@ function CompanyLobbyPageContent({
     knowledgeItems,
     retrospective,
     blockedCount,
-    waitingCount,
-    runningCount,
     visibleManualCount,
-    visibleHandoffRecords,
     visiblePendingHandoffs,
-    visibleBlockedHandoffs,
     visibleRequestHealth,
     visibleSlaAlerts,
     teamHealthLabel,
@@ -134,6 +133,7 @@ function CompanyLobbyPageContent({
     groupChatDialogOpen,
     handleCopyBlueprint,
     handleFireEmployee,
+    handleApprovalDecision,
     handleGroupChatSubmit,
     handleHireSubmit,
     handleQuickTaskSubmit,
@@ -142,6 +142,7 @@ function CompanyLobbyPageContent({
     handleUpdateRoleSubmit,
     hireDialogOpen,
     onFireEmployeeSubmit,
+    approvalBusyId,
     openCeoChat,
     quickTaskInput,
     quickTaskTarget,
@@ -163,6 +164,7 @@ function CompanyLobbyPageContent({
       hireEmployee,
       updateRole,
       fireEmployee,
+      resolveApproval,
       assignQuickTask,
       buildGroupChatRoute,
       recoverCommunication,
@@ -202,6 +204,7 @@ function CompanyLobbyPageContent({
       </Badge>
     );
   };
+  const pendingApprovals = (activeCompany.approvals ?? []).filter((approval) => approval.status === "pending");
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-4 md:p-6 lg:p-8">
@@ -255,48 +258,69 @@ function CompanyLobbyPageContent({
         usageCost={usageCost}
       />
 
-      <LobbyStatusStrip
-        hasPrimaryWorkItem={Boolean(primaryWorkItem)}
-        displayOwner={requirementDisplayOwner}
-        displayStage={requirementDisplayStage}
-        displayNext={requirementDisplayNext}
-        completedWorkSteps={completedWorkSteps}
-        totalWorkSteps={totalWorkSteps}
-        visibleManualCount={visibleManualCount}
-        blockedCount={blockedCount}
-        waitingCount={waitingCount}
-        runningCount={runningCount}
-        showOperationalQueues={showOperationalQueues}
-        handoffCount={visibleHandoffRecords.length}
-        visiblePendingHandoffs={visiblePendingHandoffs}
-        visibleBlockedHandoffs={visibleBlockedHandoffs}
-        requestTotal={visibleRequestHealth.total}
-        requestActive={visibleRequestHealth.active}
-        requestBlocked={visibleRequestHealth.blocked}
-        fallbackBadges={
-          <>
-            <ExecutionStateBadge
-              compact
-              status={resolveExecutionState({
-                fallbackState: blockedCount > 0 ? "blocked_timeout" : "idle",
-                evidenceTexts: [
-                  blockedCount > 0
-                    ? `${blockedCount} 位成员存在阻塞`
-                    : "当前没有检测到超时或工具阻塞",
-                ],
-              })}
-            />
-            <ExecutionStateBadge
-              compact
-              status={resolveExecutionState({
-                fallbackState: waitingCount > 0 ? "waiting_peer" : "idle",
-                evidenceTexts: [
-                  waitingCount > 0 ? `${waitingCount} 位成员正在等待输入或同事反馈` : "当前没有等待中的交接",
-                ],
-              })}
-            />
-          </>
-        }
+      {pendingApprovals.length > 0 ? (
+        <OpsSectionCard
+          title="待处理审批"
+          description="危险动作在继续执行前，先在这里经过一次明确确认。"
+          meta={`待处理 ${pendingApprovals.length} 项`}
+        >
+          <div className="space-y-3">
+            {pendingApprovals.map((approval) => {
+              const busy = approvalBusyId === approval.id || approvalSubmittingId === approval.id;
+              return (
+                <div
+                  key={approval.id}
+                  className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-sm text-slate-700"
+                >
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="border-amber-300 bg-white text-amber-700">
+                          {approval.scope === "org" ? "组织审批" : "治理审批"}
+                        </Badge>
+                        {approval.targetLabel ? (
+                          <span className="text-xs text-slate-500">目标：{approval.targetLabel}</span>
+                        ) : null}
+                      </div>
+                      <div className="text-base font-semibold text-slate-900">{approval.summary}</div>
+                      {approval.detail ? <div className="text-sm text-slate-600">{approval.detail}</div> : null}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 md:justify-end">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={busy}
+                        onClick={() => {
+                          void handleApprovalDecision(approval, "rejected");
+                        }}
+                      >
+                        拒绝
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                        disabled={busy}
+                        onClick={() => {
+                          void handleApprovalDecision(approval, "approved");
+                        }}
+                      >
+                        {busy ? "处理中..." : "批准并继续"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </OpsSectionCard>
+      ) : null}
+
+      <CanonicalRuntimeSummaryCard
+        summary={runtimeSummary}
+        title="统一运行态摘要"
+        description="监控、排障和关注队列统一从 `/runtime` 复用，运营大厅只保留执行摘要和动作入口。"
+        compact
       />
 
       <LobbyActionStrip
@@ -304,7 +328,7 @@ function CompanyLobbyPageContent({
         description={
           primaryWorkItem
             ? "这里默认只保留本次需求的负责人、阶段和下一步；旧请求、交接和 SLA 已降到次级视图。"
-            : "这里是后台总览。先在 CEO 首页推进工作，再来这里排障和查看全局状态。"
+            : "这里是运营摘要和动作入口。完整运行态、阻塞链和值班判断统一在 `/runtime`。"
         }
         blockedCount={blockedCount}
         visiblePendingHandoffs={visiblePendingHandoffs}
@@ -339,15 +363,37 @@ function CompanyLobbyPageContent({
             (session) => sessionExecutions.get(session.key)?.state === "manual_takeover_required",
           );
           if (manualSession) {
-            navigate(
-              resolveConversationPresentation({
+            const route = resolveConversationPresentation({
+              sessionKey: manualSession.key,
+              actorId: manualSession.agentId,
+              rooms: activeRoomRecords,
+              employees: activeCompany.employees,
+            }).route;
+            void appendOperatorActionAuditEvent({
+              companyId: activeCompany.id,
+              action: "takeover_route_open",
+              surface: "lobby",
+              outcome: "succeeded",
+              details: {
                 sessionKey: manualSession.key,
-                actorId: manualSession.agentId,
-                rooms: activeRoomRecords,
-                employees: activeCompany.employees,
-              }).route,
-            );
+                targetActorId: manualSession.agentId,
+                route,
+                visibleTakeoverCount: visibleManualCount,
+              },
+            });
+            navigate(route);
+            return;
           }
+          void appendOperatorActionAuditEvent({
+            companyId: activeCompany.id,
+            action: "takeover_route_open",
+            surface: "lobby",
+            outcome: "failed",
+            error: "没有找到可打开的人工接管会话。",
+            details: {
+              visibleTakeoverCount: visibleManualCount,
+            },
+          });
         }}
       />
 

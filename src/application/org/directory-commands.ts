@@ -4,13 +4,17 @@ import {
   sendTurnToCompanyActor,
   type ChatMessage,
 } from "../../application/gateway";
+import { requestAuthorityApproval } from "../../application/gateway/authority-control";
 import { AgentOps } from "../../application/org/employee-ops";
+import type { ApprovalRecord } from "../../domain/governance/types";
 import type { Company } from "../../domain/org/types";
 import {
   buildHrDepartmentBootstrapPrompt,
   extractChatMessageText,
   resolveHrBootstrapAgentId,
 } from "./organization-commands";
+import { toast } from "../../components/system/toast-store";
+import { readCompanyRuntimeState } from "../../infrastructure/company/runtime/selectors";
 
 export type HireEmployeeConfig = {
   avatarFile?: File;
@@ -55,8 +59,63 @@ export async function updateEmployeeIdentityName(agentId: string, nickname: stri
   await AgentOps.updateAgentName(agentId, nickname);
 }
 
-export async function fireCompanyEmployee(agentId: string) {
+export type FireCompanyEmployeeResult =
+  | {
+      mode: "executed";
+      approval: null;
+    }
+  | {
+      mode: "approval_requested";
+      approval: ApprovalRecord;
+    };
+
+export async function fireCompanyEmployee(
+  agentId: string,
+  options?: { skipApproval?: boolean },
+): Promise<FireCompanyEmployeeResult> {
+  const activeCompany = readCompanyRuntimeState().activeCompany;
+  if (!activeCompany) {
+    throw new Error("无活跃公司，无法执行离职流程。");
+  }
+  const target = activeCompany.employees.find((employee) => employee.agentId === agentId) ?? null;
+  if (!target) {
+    throw new Error("在当前公司结构中未查找到该员工名片。");
+  }
+
+  const needsApproval =
+    !options?.skipApproval &&
+    activeCompany.orgSettings?.autonomyPolicy?.humanApprovalRequiredForLayoffs !== false;
+
+  if (needsApproval) {
+    const result = await requestAuthorityApproval({
+      companyId: activeCompany.id,
+      scope: "org",
+      actionType: "employee_fire",
+      summary: `审批解雇 ${target.nickname}`,
+      detail: `准备移除成员 ${target.nickname}（${target.role || "未命名岗位"}）。审批通过后才会向 HR 下发离职流程。`,
+      requestedByActorId: "operator:local-user",
+      requestedByLabel: "当前操作者",
+      targetActorId: target.agentId,
+      targetLabel: target.nickname,
+      payload: {
+        agentId: target.agentId,
+        nickname: target.nickname,
+        role: target.role,
+      },
+    });
+    await readCompanyRuntimeState().loadConfig();
+    toast.info("已提交离职审批", `请先批准「${target.nickname}」的离职请求，再继续执行。`);
+    return {
+      mode: "approval_requested",
+      approval: result.approval,
+    };
+  }
+
   await AgentOps.fireAgent(agentId);
+  return {
+    mode: "executed",
+    approval: null,
+  };
 }
 
 export async function assignEmployeeTask(agentId: string, task: string) {

@@ -1,4 +1,6 @@
 import type {
+  ProviderProcessRecord,
+  ProviderProcessState,
   GatewaySessionRow,
   ProviderRunState,
   ProviderRuntimeEvent,
@@ -75,6 +77,7 @@ export type AgentRunRecord = {
   lastEventAt: number;
   endedAt: number | null;
   streamKindsSeen: ProviderRuntimeStreamKind[];
+  toolNamesSeen: string[];
   error: string | null;
 };
 
@@ -107,6 +110,24 @@ export type InterventionState =
   | "overdue"
   | "escalated"
   | "takeover_required";
+
+export type CanonicalAgentStatusSource = "authority" | "fallback";
+
+export type CanonicalAgentStatusCoverage =
+  | "authority_complete"
+  | "authority_partial"
+  | "fallback";
+
+export type CanonicalAgentStatusHealthRecord = {
+  source: CanonicalAgentStatusSource;
+  coverage: CanonicalAgentStatusCoverage;
+  coveredAgentCount: number;
+  expectedAgentCount: number;
+  missingAgentIds: string[];
+  isComplete: boolean;
+  generatedAt: number | null;
+  note: string | null;
+};
 
 export type CanonicalAgentStatusRecord = {
   agentId: string;
@@ -191,6 +212,32 @@ function normalizeProviderRunState(value: unknown): ProviderRunState | null {
       return "aborted";
     default:
       return null;
+  }
+}
+
+function normalizeProviderProcessState(value: unknown): ProviderProcessState {
+  switch (value) {
+    case "queued":
+    case "pending":
+      return "queued";
+    case "running":
+    case "in_progress":
+    case "active":
+      return "running";
+    case "completed":
+    case "done":
+    case "finished":
+    case "success":
+      return "completed";
+    case "aborted":
+    case "cancelled":
+    case "killed":
+      return "aborted";
+    case "error":
+    case "failed":
+      return "error";
+    default:
+      return "unknown";
   }
 }
 
@@ -394,6 +441,168 @@ export function normalizeProviderRuntimeEvent(
   };
 }
 
+function normalizeProcessCommand(record: Record<string, unknown>): string | null {
+  const direct =
+    normalizeNonEmptyString(record.command)
+    ?? normalizeNonEmptyString(record.cmd)
+    ?? normalizeNonEmptyString(record.executable)
+    ?? normalizeNonEmptyString(record.program);
+  if (direct) {
+    return direct;
+  }
+  const argv = Array.isArray(record.argv) ? record.argv : Array.isArray(record.args) ? record.args : null;
+  if (!argv) {
+    return null;
+  }
+  const parts = argv
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+export function normalizeProviderProcessRecord(
+  providerId: string,
+  raw: unknown,
+  fallbackSessionKey?: string | null,
+): ProviderProcessRecord | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const data =
+    record.data && typeof record.data === "object" && !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : null;
+  const nested =
+    record.process && typeof record.process === "object" && !Array.isArray(record.process)
+      ? (record.process as Record<string, unknown>)
+      : null;
+  const source = nested ?? data ?? record;
+  const sessionKey =
+    normalizeNonEmptyString(record.sessionKey)
+    ?? normalizeNonEmptyString(source.sessionKey)
+    ?? normalizeNonEmptyString(source.sessionId)
+    ?? fallbackSessionKey
+    ?? null;
+  const processId =
+    normalizeNonEmptyString(record.processId)
+    ?? normalizeNonEmptyString(record.id)
+    ?? normalizeNonEmptyString(source.processId)
+    ?? normalizeNonEmptyString(source.id)
+    ?? normalizeNonEmptyString(source.pid)
+    ?? (sessionKey ? `${sessionKey}:${normalizeTimestamp(source.startedAt) ?? normalizeTimestamp(source.updatedAt) ?? Date.now()}` : null);
+  if (!processId) {
+    return null;
+  }
+
+  const command = normalizeProcessCommand(source);
+  const title =
+    normalizeNonEmptyString(record.title)
+    ?? normalizeNonEmptyString(source.title)
+    ?? normalizeNonEmptyString(source.label)
+    ?? normalizeNonEmptyString(source.name)
+    ?? command
+    ?? processId;
+  const recordState = normalizeProviderProcessState(record.state);
+  const recordStatus = normalizeProviderProcessState(record.status);
+  const sourceStateCandidate = normalizeProviderProcessState(source.state);
+  const sourceStatusCandidate = normalizeProviderProcessState(source.status);
+  const sourceState =
+    recordState !== "unknown"
+      ? recordState
+      : recordStatus !== "unknown"
+        ? recordStatus
+        : sourceStateCandidate !== "unknown"
+          ? sourceStateCandidate
+          : sourceStatusCandidate;
+  const exitCode =
+    typeof source.exitCode === "number" && Number.isFinite(source.exitCode)
+      ? source.exitCode
+      : typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
+        ? record.exitCode
+        : null;
+  const state =
+    sourceState !== "unknown"
+      ? sourceState
+      : source.running === true
+        ? "running"
+        : source.pending === true || source.queued === true
+          ? "queued"
+          : exitCode != null
+            ? exitCode === 0
+              ? "completed"
+              : "error"
+            : "unknown";
+
+  return {
+    providerId,
+    processId,
+    sessionKey,
+    agentId:
+      normalizeNonEmptyString(record.actorId)
+      ?? normalizeNonEmptyString(record.agentId)
+      ?? normalizeNonEmptyString(source.actorId)
+      ?? normalizeNonEmptyString(source.agentId)
+      ?? (sessionKey ? resolveSessionActorId(sessionKey) : null),
+    state,
+    title,
+    command,
+    summary:
+      normalizeNonEmptyString(record.summary)
+      ?? normalizeNonEmptyString(source.summary)
+      ?? normalizeNonEmptyString(source.description)
+      ?? command,
+    startedAt:
+      normalizeTimestamp(record.startedAt)
+      ?? normalizeTimestamp(source.startedAt)
+      ?? normalizeTimestamp(source.createdAt),
+    updatedAt:
+      normalizeTimestamp(record.updatedAt)
+      ?? normalizeTimestamp(source.updatedAt)
+      ?? normalizeTimestamp(source.timestamp),
+    endedAt:
+      normalizeTimestamp(record.endedAt)
+      ?? normalizeTimestamp(source.endedAt)
+      ?? normalizeTimestamp(source.finishedAt)
+      ?? normalizeTimestamp(source.completedAt),
+    exitCode,
+    raw,
+  };
+}
+
+export function normalizeProviderProcessList(
+  providerId: string,
+  raw: unknown,
+  fallbackSessionKey?: string | null,
+): ProviderProcessRecord[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => normalizeProviderProcessRecord(providerId, item, fallbackSessionKey))
+      .filter((item): item is ProviderProcessRecord => Boolean(item));
+  }
+
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+
+  const record = raw as Record<string, unknown>;
+  const collection =
+    Array.isArray(record.processes)
+      ? record.processes
+      : Array.isArray(record.items)
+        ? record.items
+        : Array.isArray(record.results)
+          ? record.results
+          : record.process
+            ? [record.process]
+            : [];
+
+  return collection
+    .map((item) => normalizeProviderProcessRecord(providerId, item, fallbackSessionKey))
+    .filter((item): item is ProviderProcessRecord => Boolean(item));
+}
+
 export function buildAgentSessionRecordsFromSessions(input: {
   existing?: AgentSessionRecord[];
   providerId: string;
@@ -488,8 +697,14 @@ export function applyProviderSessionStatusToAgentRuntime(input: {
     abortedLastRun:
       terminalState === "aborted" || input.status.state === "error"
         ? true
-        : previous?.abortedLastRun ?? false,
-    lastError: input.status.errorMessage ?? previous?.lastError ?? null,
+        : input.status.state === "idle" || input.status.state === "running" || input.status.state === "streaming"
+          ? false
+          : previous?.abortedLastRun ?? false,
+    lastError:
+      input.status.errorMessage
+      ?? (input.status.state === "idle" || input.status.state === "running" || input.status.state === "streaming"
+        ? null
+        : previous?.lastError ?? null),
     lastTerminalRunState: terminalState,
     lastTerminalSummary: terminalSummary,
     source: "session_status",
@@ -511,6 +726,7 @@ export function applyProviderSessionStatusToAgentRuntime(input: {
       lastEventAt: input.status.updatedAt ?? now,
       endedAt: null,
       streamKindsSeen: dedupeStreamKinds([...(previousRun?.streamKindsSeen ?? []), "lifecycle"]),
+      toolNamesSeen: previousRun?.toolNamesSeen ?? [],
       error: previousRun?.error ?? null,
     });
   }
@@ -569,11 +785,24 @@ export function applyProviderRuntimeEvent(input: {
         event.streamKind === "assistant"
           ? Math.max(previousSession?.lastMessageAt ?? 0, timestamp) || null
           : previousSession?.lastMessageAt ?? null,
-      abortedLastRun: previousSession?.abortedLastRun ?? event.runState === "aborted",
+      abortedLastRun:
+        event.runState === "aborted"
+          ? true
+          : event.runState === "accepted" ||
+              event.runState === "running" ||
+              event.runState === "streaming" ||
+              event.runState === "completed"
+            ? false
+            : previousSession?.abortedLastRun ?? false,
       lastError:
         event.runState === "error" || event.runState === "aborted"
           ? event.errorMessage ?? previousSession?.lastError ?? null
-          : previousSession?.lastError ?? null,
+          : event.runState === "accepted" ||
+              event.runState === "running" ||
+              event.runState === "streaming" ||
+              event.runState === "completed"
+            ? null
+            : previousSession?.lastError ?? null,
       lastTerminalRunState:
         event.runState === "completed" || event.runState === "aborted" || event.runState === "error"
           ? event.runState
@@ -611,6 +840,10 @@ export function applyProviderRuntimeEvent(input: {
       ...(previousRun?.streamKindsSeen ?? []),
       event.streamKind,
     ]),
+    toolNamesSeen:
+      event.streamKind === "tool" && event.toolName
+        ? [...new Set([...(previousRun?.toolNamesSeen ?? []), event.toolName])]
+        : previousRun?.toolNamesSeen ?? [],
     error:
       nextState === "error" || nextState === "aborted"
         ? event.errorMessage ?? previousRun?.error ?? null
@@ -677,7 +910,10 @@ export function buildAgentRuntimeProjection(input: RuntimeProjectionInput): Agen
     activeRuns.forEach((run) => {
       evidence.push({
         kind: "run",
-        summary: `${run.sessionKey} 正在执行 (${run.state})`,
+        summary:
+          run.toolNamesSeen.length > 0
+            ? `${run.sessionKey} 正在执行 ${run.toolNamesSeen.join(" / ")}`
+            : `${run.sessionKey} 正在执行 (${run.state})`,
         timestamp: run.lastEventAt,
       });
     });
@@ -886,6 +1122,45 @@ export function agentStatusNeedsIntervention(status: CanonicalAgentStatusRecord)
   );
 }
 
+export function buildCanonicalAgentStatusHealth(input: {
+  company: Company | null;
+  statuses: CanonicalAgentStatusRecord[];
+  source: CanonicalAgentStatusSource;
+  generatedAt?: number | null;
+  note?: string | null;
+}): CanonicalAgentStatusHealthRecord {
+  const expectedAgentIds = input.company?.employees.map((employee) => employee.agentId) ?? [];
+  const expectedAgentCount = expectedAgentIds.length || input.statuses.length;
+  const coveredAgentIds = new Set(
+    input.statuses
+      .map((status) => status.agentId)
+      .filter((agentId) => expectedAgentIds.length === 0 || expectedAgentIds.includes(agentId)),
+  );
+  const missingAgentIds =
+    expectedAgentIds.length > 0
+      ? expectedAgentIds.filter((agentId) => !coveredAgentIds.has(agentId))
+      : [];
+  const isComplete =
+    input.source === "authority"
+      ? missingAgentIds.length === 0 && coveredAgentIds.size >= expectedAgentCount
+      : false;
+  return {
+    source: input.source,
+    coverage:
+      input.source === "fallback"
+        ? "fallback"
+        : isComplete
+          ? "authority_complete"
+          : "authority_partial",
+    coveredAgentCount: coveredAgentIds.size,
+    expectedAgentCount,
+    missingAgentIds,
+    isComplete,
+    generatedAt: input.generatedAt ?? null,
+    note: input.note ?? null,
+  };
+}
+
 export function buildCanonicalAgentStatusProjection(input: {
   company: Company;
   activeWorkItems: WorkItemRecord[];
@@ -963,7 +1238,8 @@ export function buildCanonicalAgentStatusProjection(input: {
         (escalation.status === "open" || escalation.status === "acknowledged"),
     );
     const openEscalationCount = openEscalations.length;
-    const blockedWorkItemCount = relevantWorkItems.filter((workItem) => workItem.status === "blocked").length;
+    const blockedWorkItems = relevantWorkItems.filter((workItem) => workItem.status === "blocked");
+    const blockedWorkItemCount = blockedWorkItems.length;
     const latestSignalAt = latestTimestamp([
       runtime?.lastSeenAt,
       runtime?.lastBusyAt,
@@ -986,14 +1262,6 @@ export function buildCanonicalAgentStatusProjection(input: {
           task.state === "manual_takeover_required",
       ) ||
       relatedRequests.some((request) => request.resolution === "manual_takeover");
-
-    const hasExplicitBlocked =
-      runtimeState === "degraded" ||
-      blockedDispatchCount > 0 ||
-      blockedSupportRequestCount > 0 ||
-      blockedRequests.length > 0 ||
-      blockedHandoffs.length > 0 ||
-      blockedWorkItemCount > 0;
 
     const hasWaitingInput =
       primaryWorkItem?.ownerActorId === employee.agentId &&
@@ -1034,6 +1302,9 @@ export function buildCanonicalAgentStatusProjection(input: {
 
     const completedSignals = [
       primaryWorkItem?.status === "completed" ? primaryWorkItem.updatedAt : null,
+      ...agentDispatches
+        .filter((dispatch) => dispatch.status === "answered")
+        .map((dispatch) => dispatch.updatedAt),
       ...relatedRequests
         .filter((request) => request.status === "answered")
         .map((request) => request.updatedAt),
@@ -1041,6 +1312,24 @@ export function buildCanonicalAgentStatusProjection(input: {
         .filter((handoff) => handoff.status === "completed")
         .map((handoff) => handoff.updatedAt),
     ];
+    const latestCompletedAt = Math.max(...completedSignals.filter((value): value is number => Boolean(value)), 0);
+    const hasOpenBusinessChain =
+      Boolean(primaryWorkItem) ||
+      hasWaitingInput ||
+      openDispatchCount > 0 ||
+      openSupportRequestCount > 0 ||
+      openRequests.length > 0 ||
+      openHandoffs.length > 0;
+    const latestExplicitBlockedAt = Math.max(
+      ...blockedDispatches.map((dispatch) => dispatch.updatedAt),
+      ...blockedSupportRequests.map((request) => request.updatedAt),
+      ...blockedRequests.map((request) => request.updatedAt),
+      ...blockedHandoffs.map((handoff) => handoff.updatedAt),
+      ...blockedWorkItems.map((workItem) => workItem.updatedAt),
+      runtimeState === "degraded" && hasOpenBusinessChain ? runtime?.latestTerminalAt ?? 0 : 0,
+      0,
+    );
+    const hasExplicitBlocked = latestExplicitBlockedAt > latestCompletedAt;
 
     let coordinationState: CoordinationState = "none";
     if (hasExplicitBlocked || hasTakeoverRequired) {

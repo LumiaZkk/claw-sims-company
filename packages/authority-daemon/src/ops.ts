@@ -1,13 +1,15 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { AuthorityHealthGuidanceItem } from "../../../src/infrastructure/authority/contract";
 
 type SqlScalarRow = Record<string, number | string | null | undefined>;
 
 export const AUTHORITY_SCHEMA_VERSION = 1;
 
 export type AuthorityDoctorStatus = "ready" | "degraded" | "blocked";
+export type AuthorityIntegrityStatus = "ok" | "failed" | "unknown";
 
 export type AuthorityDoctorSnapshot = {
   status: AuthorityDoctorStatus;
@@ -15,6 +17,8 @@ export type AuthorityDoctorSnapshot = {
   dbPath: string;
   dbExists: boolean;
   schemaVersion: number | null;
+  integrityStatus: AuthorityIntegrityStatus;
+  integrityMessage: string | null;
   dbSizeBytes: number | null;
   backupDir: string;
   backupCount: number;
@@ -39,9 +43,12 @@ export type AuthorityBackupResult = {
 
 export type AuthorityMigrateResult = {
   status: AuthorityDoctorStatus;
+  mode: "plan" | "apply";
   dbPath: string;
   previousSchemaVersion: number | null;
   currentSchemaVersion: number | null;
+  targetSchemaVersion: number;
+  migrationRequired: boolean;
   actions: string[];
   warnings: string[];
   issues: string[];
@@ -53,6 +60,20 @@ export type AuthorityRestoreResult = {
   restoredAt: number;
   sizeBytes: number;
   safetyBackupPath: string | null;
+};
+
+export type AuthorityRestoreRehearsalResult = {
+  status: AuthorityRestorePlanStatus;
+  backupPath: string;
+  rehearsalHomeDir: string;
+  rehearsalDbPath: string;
+  rehearsalCreatedAt: number;
+  rehearsalSizeBytes: number;
+  rehearsalDoctor: AuthorityDoctorSnapshot;
+  liveRestorePlan: AuthorityRestorePlan;
+  notes: string[];
+  warnings: string[];
+  issues: string[];
 };
 
 export type AuthorityRestorePlanStatus = "ready" | "degraded" | "blocked";
@@ -84,6 +105,8 @@ export type AuthorityPreflightSnapshot = {
   backupDir: string;
   dbExists: boolean;
   schemaVersion: number | null;
+  integrityStatus: AuthorityIntegrityStatus;
+  integrityMessage: string | null;
   backupCount: number;
   latestBackupAt: number | null;
   notes: string[];
@@ -97,6 +120,9 @@ export type AuthorityBackupEntry = {
   createdAt: number;
   sizeBytes: number;
   kind: "backup" | "safety-backup";
+  schemaVersion: number | null;
+  integrityStatus: AuthorityIntegrityStatus;
+  integrityMessage: string | null;
 };
 
 export function resolveAuthorityDataDir(homeDir = os.homedir()) {
@@ -109,6 +135,10 @@ export function resolveAuthorityDbPath(homeDir = os.homedir()) {
 
 export function resolveAuthorityBackupDir(homeDir = os.homedir()) {
   return path.join(resolveAuthorityDataDir(homeDir), "backups");
+}
+
+export function resolveAuthorityRehearsalParentDir(homeDir = os.homedir()) {
+  return path.join(resolveAuthorityDataDir(homeDir), "rehearsals");
 }
 
 function tableExists(db: DatabaseSync, tableName: string) {
@@ -178,6 +208,71 @@ function readSchemaVersionFromDbPath(dbPath: string) {
     return null;
   } finally {
     db.close();
+  }
+}
+
+function readIntegrityCheck(db: DatabaseSync): {
+  status: AuthorityIntegrityStatus;
+  message: string | null;
+} {
+  const rows = db.prepare("PRAGMA integrity_check;").all() as SqlScalarRow[];
+  const results = rows
+    .map((row) => Object.values(row).find((value) => typeof value === "string"))
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (results.length === 0) {
+    return {
+      status: "unknown",
+      message: "SQLite integrity_check 没返回结果。",
+    };
+  }
+
+  if (results.length === 1 && results[0] === "ok") {
+    return {
+      status: "ok",
+      message: null,
+    };
+  }
+
+  return {
+    status: "failed",
+    message: results.slice(0, 3).join(" | "),
+  };
+}
+
+function inspectSqliteFile(dbPath: string): {
+  schemaVersion: number | null;
+  integrityStatus: AuthorityIntegrityStatus;
+  integrityMessage: string | null;
+} {
+  if (!existsSync(dbPath)) {
+    return {
+      schemaVersion: null,
+      integrityStatus: "unknown",
+      integrityMessage: "SQLite 文件不存在。",
+    };
+  }
+
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(dbPath);
+    const schemaVersion = readSchemaVersion(db);
+    const integrity = readIntegrityCheck(db);
+    return {
+      schemaVersion,
+      integrityStatus: integrity.status,
+      integrityMessage: integrity.message,
+    };
+  } catch (error) {
+    return {
+      schemaVersion: null,
+      integrityStatus: "failed",
+      integrityMessage: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
   }
 }
 
@@ -251,12 +346,16 @@ export function listAuthorityBackups(input?: {
       const filePath = path.join(backupDir, fileName);
       const stat = statSync(filePath);
       const kind = fileName.startsWith("pre-restore-") ? "safety-backup" : "backup";
+      const inspection = inspectSqliteFile(filePath);
       return {
         path: filePath,
         fileName,
         createdAt: stat.mtimeMs,
         sizeBytes: stat.size,
         kind,
+        schemaVersion: inspection.schemaVersion,
+        integrityStatus: inspection.integrityStatus,
+        integrityMessage: inspection.integrityMessage,
       } satisfies AuthorityBackupEntry;
     })
     .sort((left, right) => right.createdAt - left.createdAt);
@@ -310,6 +409,8 @@ export function readAuthorityDoctorSnapshot(input?: {
       dbPath,
       dbExists: false,
       schemaVersion: null,
+      integrityStatus: "unknown",
+      integrityMessage: null,
       dbSizeBytes: null,
       backupDir,
       backupCount: 0,
@@ -327,9 +428,12 @@ export function readAuthorityDoctorSnapshot(input?: {
 
   const dbSizeBytes = statSync(dbPath).size;
   const backups = listAuthorityBackups({ backupDir });
-  const db = new DatabaseSync(dbPath);
-  try {
+  const latestBackup = backups[0] ?? null;
+    try {
+    const db = new DatabaseSync(dbPath);
+    try {
     const schemaVersion = readSchemaVersion(db);
+    const integrity = readIntegrityCheck(db);
     const companyCount = readCount(db, "companies");
     const runtimeCount = readCount(db, "runtimes");
     const eventCount = readCount(db, "event_log");
@@ -347,6 +451,20 @@ export function readAuthorityDoctorSnapshot(input?: {
     if (eventCount === 0) {
       issues.push("Authority event log 还是空的。");
     }
+    if (latestBackup?.integrityStatus === "failed") {
+      issues.push(
+        `最新备份不可读或 integrity_check 失败：${latestBackup.integrityMessage ?? latestBackup.fileName}`,
+      );
+    } else if (latestBackup?.integrityStatus === "unknown") {
+      issues.push(
+        `最新备份完整性无法确认：${latestBackup.integrityMessage ?? latestBackup.fileName}`,
+      );
+    }
+    if (integrity.status === "failed") {
+      issues.push(`Authority SQLite integrity_check 失败：${integrity.message ?? "未知错误"}`);
+    } else if (integrity.status === "unknown") {
+      issues.push(`Authority SQLite integrity_check 无法确认：${integrity.message ?? "未知错误"}`);
+    }
     if (schemaVersion === null) {
       issues.push("Authority SQLite 还没有 schemaVersion metadata。建议先运行 authority:migrate。");
     } else if (schemaVersion > AUTHORITY_SCHEMA_VERSION) {
@@ -359,11 +477,13 @@ export function readAuthorityDoctorSnapshot(input?: {
     }
 
     const status: AuthorityDoctorStatus =
-      companyCount === 0 || runtimeCount === 0
-        ? "degraded"
-        : issues.length > 0
+      integrity.status === "failed" || schemaVersion !== null && schemaVersion > AUTHORITY_SCHEMA_VERSION
+        ? "blocked"
+        : companyCount === 0 || runtimeCount === 0
           ? "degraded"
-          : "ready";
+          : issues.length > 0
+            ? "degraded"
+            : "ready";
 
     return {
       status,
@@ -371,6 +491,8 @@ export function readAuthorityDoctorSnapshot(input?: {
       dbPath,
       dbExists,
       schemaVersion,
+      integrityStatus: integrity.status,
+      integrityMessage: integrity.message,
       dbSizeBytes,
       backupDir,
       backupCount: backups.length,
@@ -384,8 +506,32 @@ export function readAuthorityDoctorSnapshot(input?: {
       executorConnectionState,
       issues,
     };
-  } finally {
-    db.close();
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    issues.push(`Authority SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
+    return {
+      status: "blocked",
+      dataDir,
+      dbPath,
+      dbExists,
+      schemaVersion: null,
+      integrityStatus: "failed",
+      integrityMessage: error instanceof Error ? error.message : String(error),
+      dbSizeBytes,
+      backupDir,
+      backupCount: backups.length,
+      latestBackupAt: backups[0]?.createdAt ?? null,
+      companyCount: 0,
+      runtimeCount: 0,
+      eventCount: 0,
+      latestRuntimeAt: null,
+      latestEventAt: null,
+      activeCompanyId: null,
+      executorConnectionState: null,
+      issues,
+    };
   }
 }
 
@@ -428,8 +574,10 @@ export function createAuthorityBackup(input?: {
 export function migrateAuthoritySchemaVersion(input?: {
   homeDir?: string;
   dbPath?: string;
+  planOnly?: boolean;
 }): AuthorityMigrateResult {
   const dbPath = input?.dbPath ?? (input?.homeDir ? resolveAuthorityDbPath(input.homeDir) : resolveAuthorityDbPath());
+  const mode = input?.planOnly ? "plan" : "apply";
   const actions: string[] = [];
   const warnings: string[] = [];
   const issues: string[] = [];
@@ -437,9 +585,12 @@ export function migrateAuthoritySchemaVersion(input?: {
   if (!existsSync(dbPath)) {
     return {
       status: "blocked",
+      mode,
       dbPath,
       previousSchemaVersion: null,
       currentSchemaVersion: null,
+      targetSchemaVersion: AUTHORITY_SCHEMA_VERSION,
+      migrationRequired: false,
       actions,
       warnings,
       issues: [`Authority SQLite 数据库不存在: ${dbPath}`],
@@ -456,17 +607,32 @@ export function migrateAuthoritySchemaVersion(input?: {
       );
       return {
         status: "blocked",
+        mode,
         dbPath,
         previousSchemaVersion,
         currentSchemaVersion: previousSchemaVersion,
+        targetSchemaVersion: AUTHORITY_SCHEMA_VERSION,
+        migrationRequired: false,
         actions,
         warnings,
         issues,
       };
     }
 
-    if (previousSchemaVersion === AUTHORITY_SCHEMA_VERSION) {
+    const migrationRequired = previousSchemaVersion !== AUTHORITY_SCHEMA_VERSION;
+
+    if (!migrationRequired) {
       actions.push(`schemaVersion 已是 v${AUTHORITY_SCHEMA_VERSION}，无需迁移。`);
+    } else if (input?.planOnly) {
+      if (previousSchemaVersion === null) {
+        warnings.push("当前 authority SQLite 缺少 schemaVersion metadata。");
+        actions.push(`将回填 schemaVersion v${AUTHORITY_SCHEMA_VERSION}。`);
+      } else {
+        warnings.push(
+          `当前 authority SQLite 的 schemaVersion 将从 v${previousSchemaVersion} 提升到 v${AUTHORITY_SCHEMA_VERSION}。`,
+        );
+        actions.push(`将更新 schemaVersion 到 v${AUTHORITY_SCHEMA_VERSION}。`);
+      }
     } else {
       writeMetadataValue(db, "schemaVersion", String(AUTHORITY_SCHEMA_VERSION));
       if (previousSchemaVersion === null) {
@@ -479,16 +645,26 @@ export function migrateAuthoritySchemaVersion(input?: {
       }
     }
 
-    const currentSchemaVersion = readSchemaVersion(db);
-    if (currentSchemaVersion !== AUTHORITY_SCHEMA_VERSION) {
+    const currentSchemaVersion = input?.planOnly ? previousSchemaVersion : readSchemaVersion(db);
+    if (!input?.planOnly && currentSchemaVersion !== AUTHORITY_SCHEMA_VERSION) {
       issues.push("Authority schemaVersion 回填失败。");
     }
 
     return {
-      status: issues.length > 0 ? "blocked" : warnings.length > 0 ? "degraded" : "ready",
+      status:
+        issues.length > 0
+          ? "blocked"
+          : migrationRequired && input?.planOnly
+            ? "degraded"
+            : warnings.length > 0
+              ? "degraded"
+              : "ready",
+      mode,
       dbPath,
       previousSchemaVersion,
       currentSchemaVersion,
+      targetSchemaVersion: AUTHORITY_SCHEMA_VERSION,
+      migrationRequired,
       actions,
       warnings,
       issues,
@@ -541,6 +717,90 @@ export function restoreAuthorityBackup(input: {
   };
 }
 
+export function rehearseAuthorityRestore(input: {
+  backupPath: string;
+  homeDir?: string;
+  rehearsalRootDir?: string;
+  now?: number;
+}): AuthorityRestoreRehearsalResult {
+  const rehearsalParentDir =
+    input.rehearsalRootDir ??
+    (input.homeDir ? resolveAuthorityRehearsalParentDir(input.homeDir) : resolveAuthorityRehearsalParentDir());
+  mkdirSync(rehearsalParentDir, { recursive: true });
+
+  const liveRestorePlan = readAuthorityRestorePlan({
+    backupPath: input.backupPath,
+  });
+  const backupPath = path.resolve(input.backupPath);
+  const notes: string[] = [];
+  const warnings = [...liveRestorePlan.warnings];
+  const issues = [...liveRestorePlan.issues];
+
+  const backupInspection = inspectSqliteFile(backupPath);
+  if (backupInspection.integrityStatus === "failed") {
+    return {
+      status: "blocked",
+      backupPath,
+      rehearsalHomeDir: rehearsalParentDir,
+      rehearsalDbPath: resolveAuthorityDbPath(rehearsalParentDir),
+      rehearsalCreatedAt: input.now ?? Date.now(),
+      rehearsalSizeBytes: 0,
+      rehearsalDoctor: readAuthorityDoctorSnapshot(),
+      liveRestorePlan,
+      notes,
+      warnings,
+      issues: [
+        ...issues,
+        `备份文件不可读或 integrity_check 失败：${backupInspection.integrityMessage ?? backupPath}`,
+      ],
+    };
+  }
+
+  const rehearsalHomeDir = mkdtempSync(path.join(rehearsalParentDir, "rehearsal-"));
+  const rehearsalDbPath = resolveAuthorityDbPath(rehearsalHomeDir);
+  mkdirSync(path.dirname(rehearsalDbPath), { recursive: true });
+  copyFileSync(backupPath, rehearsalDbPath);
+  removeSqliteSidecars(rehearsalDbPath);
+
+  const rehearsalDoctor = readAuthorityDoctorSnapshot({ homeDir: rehearsalHomeDir });
+  const rehearsalCreatedAt = input.now ?? Date.now();
+  const rehearsalSizeBytes = statSync(rehearsalDbPath).size;
+
+  if (rehearsalDoctor.status === "ready") {
+    notes.push("备份已成功还原到 rehearsal 环境，authority doctor 检查通过。");
+  } else {
+    warnings.push(
+      rehearsalDoctor.issues[0] ??
+        "备份已还原到 rehearsal 环境，但 authority doctor 仍有待处理项。",
+    );
+  }
+
+  if (liveRestorePlan.status === "blocked") {
+    warnings.push("真实库上的 restore plan 当前仍是 blocked；如需回滚，可能还需要显式放权。");
+  } else if (liveRestorePlan.status === "degraded") {
+    warnings.push("真实库上的 restore plan 当前是 degraded；执行恢复前请先核对 warning。");
+  }
+
+  return {
+    status:
+      rehearsalDoctor.status === "blocked"
+        ? "blocked"
+        : rehearsalDoctor.status === "degraded" || liveRestorePlan.status !== "ready"
+          ? "degraded"
+          : "ready",
+    backupPath,
+    rehearsalHomeDir,
+    rehearsalDbPath,
+    rehearsalCreatedAt,
+    rehearsalSizeBytes,
+    rehearsalDoctor,
+    liveRestorePlan,
+    notes,
+    warnings,
+    issues,
+  };
+}
+
 export function readAuthorityRestorePlan(input: {
   backupPath: string;
   homeDir?: string;
@@ -582,10 +842,21 @@ export function readAuthorityRestorePlan(input: {
 
   const backupStat = statSync(backupPath);
   const backupKind = detectAuthorityBackupKind(backupPath);
-  const backupSchemaVersion = readSchemaVersionFromDbPath(backupPath);
+  const backupInspection = inspectSqliteFile(backupPath);
+  const backupSchemaVersion = backupInspection.schemaVersion;
   const dbExists = existsSync(dbPath);
   const dbStat = dbExists ? statSync(dbPath) : null;
   const dbSchemaVersion = dbExists ? readSchemaVersionFromDbPath(dbPath) : null;
+
+  if (backupInspection.integrityStatus === "failed") {
+    issues.push(
+      `备份文件不可读或 integrity_check 失败：${backupInspection.integrityMessage ?? backupPath}；当前不能安全恢复。`,
+    );
+  } else if (backupInspection.integrityStatus === "unknown") {
+    warnings.push(
+      `备份文件完整性无法确认：${backupInspection.integrityMessage ?? backupPath}。`,
+    );
+  }
 
   if (backupSchemaVersion !== null && backupSchemaVersion > AUTHORITY_SCHEMA_VERSION) {
     issues.push(
@@ -661,12 +932,15 @@ export function readAuthorityPreflightSnapshot(input?: {
   const warnings: string[] = [];
   const issues: string[] = [];
   const dbExists = existsSync(dbPath);
-  const schemaVersion = dbExists ? readSchemaVersionFromDbPath(dbPath) : null;
   const standardBackups = listAuthorityBackups({ backupDir }).filter((entry) => entry.kind === "backup");
-  const latestBackupAt = standardBackups[0]?.createdAt ?? null;
+  const latestBackup = standardBackups[0] ?? null;
+  const latestBackupAt = latestBackup?.createdAt ?? null;
   const backupCount = standardBackups.length;
   const backupStaleAfterHours = input?.backupStaleAfterHours ?? 72;
   const backupStaleAfterMs = backupStaleAfterHours * 60 * 60 * 1000;
+  let schemaVersion: number | null = null;
+  let integrityStatus: AuthorityIntegrityStatus = "unknown";
+  let integrityMessage: string | null = null;
 
   try {
     mkdirSync(dataDir, { recursive: true });
@@ -682,6 +956,26 @@ export function readAuthorityPreflightSnapshot(input?: {
 
   if (dbExists) {
     notes.push("Authority SQLite 已存在，启动时会直接复用。");
+    try {
+      const db = new DatabaseSync(dbPath);
+      try {
+        schemaVersion = readSchemaVersion(db);
+        const integrity = readIntegrityCheck(db);
+        integrityStatus = integrity.status;
+        integrityMessage = integrity.message;
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      integrityStatus = "failed";
+      integrityMessage = error instanceof Error ? error.message : String(error);
+      issues.push(`Authority SQLite 无法读取：${integrityMessage}`);
+    }
+    if (integrityStatus === "failed") {
+      issues.push(`Authority SQLite integrity_check 失败：${integrityMessage ?? "未知错误"}`);
+    } else if (integrityStatus === "unknown") {
+      warnings.push(`Authority SQLite integrity_check 无法确认：${integrityMessage ?? "未知错误"}`);
+    }
     if (schemaVersion === null) {
       warnings.push("Authority SQLite 缺少 schemaVersion metadata。建议先运行 authority:migrate。");
     } else if (schemaVersion > AUTHORITY_SCHEMA_VERSION) {
@@ -695,6 +989,23 @@ export function readAuthorityPreflightSnapshot(input?: {
     }
     if (backupCount === 0) {
       warnings.push("Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。");
+    } else if (latestBackup?.integrityStatus === "failed") {
+      issues.push(
+        `最新标准备份不可读或 integrity_check 失败：${latestBackup.integrityMessage ?? latestBackup.fileName}`,
+      );
+    } else if (latestBackup?.integrityStatus === "unknown") {
+      warnings.push(
+        `最新标准备份完整性无法确认：${latestBackup.integrityMessage ?? latestBackup.fileName}`,
+      );
+    } else if (
+      latestBackup?.schemaVersion !== null &&
+      latestBackup.schemaVersion > AUTHORITY_SCHEMA_VERSION
+    ) {
+      warnings.push(
+        `最新标准备份 schemaVersion ${latestBackup.schemaVersion} 高于当前代码 ${AUTHORITY_SCHEMA_VERSION}；恢复时需要更高版本的 authority。`,
+      );
+    } else if (latestBackup?.schemaVersion === null) {
+      warnings.push("最新标准备份缺少 schemaVersion，将按 legacy 备份处理。");
     } else if (latestBackupAt && Date.now() - latestBackupAt > backupStaleAfterMs) {
       warnings.push(`Authority 最新标准备份已超过 ${backupStaleAfterHours} 小时，建议刷新备份。`);
     }
@@ -709,6 +1020,8 @@ export function readAuthorityPreflightSnapshot(input?: {
     backupDir,
     dbExists,
     schemaVersion,
+    integrityStatus,
+    integrityMessage,
     backupCount,
     latestBackupAt,
     notes,
@@ -726,6 +1039,7 @@ export function renderAuthorityDoctorReport(snapshot: AuthorityDoctorSnapshot) {
   const lines = [
     `Authority doctor: ${snapshot.status}`,
     `Schema version: ${snapshot.schemaVersion ?? "n/a"}`,
+    `Integrity: ${snapshot.integrityStatus}${snapshot.integrityMessage ? ` (${snapshot.integrityMessage})` : ""}`,
     `DB path: ${snapshot.dbPath}`,
     `DB size: ${formatSize(snapshot.dbSizeBytes)}`,
     `Backup dir: ${snapshot.backupDir}`,
@@ -752,6 +1066,7 @@ export function renderAuthorityPreflightReport(snapshot: AuthorityPreflightSnaps
   const lines = [
     `Authority preflight: ${snapshot.status}`,
     `Schema version: ${snapshot.schemaVersion ?? "n/a"}`,
+    `Integrity: ${snapshot.integrityStatus}${snapshot.integrityMessage ? ` (${snapshot.integrityMessage})` : ""}`,
     `Data dir: ${snapshot.dataDir}`,
     `DB path: ${snapshot.dbPath}`,
     `Backup dir: ${snapshot.backupDir}`,
@@ -776,6 +1091,17 @@ export function renderAuthorityPreflightReport(snapshot: AuthorityPreflightSnaps
   return lines.join("\n");
 }
 
+export function renderAuthorityGuidanceReport(items: AuthorityHealthGuidanceItem[]) {
+  if (items.length === 0) {
+    return "";
+  }
+  const lines = ["Next actions:"];
+  for (const item of items) {
+    lines.push(`- ${item.title}: ${item.action}${item.command ? ` (${item.command})` : ""}`);
+  }
+  return lines.join("\n");
+}
+
 export function renderAuthorityBackupsReport(entries: AuthorityBackupEntry[]) {
   if (entries.length === 0) {
     return "Authority backups: none";
@@ -788,8 +1114,11 @@ export function renderAuthorityBackupsReport(entries: AuthorityBackupEntry[]) {
         "-",
         entry.fileName,
         `(${entry.kind})`,
+        `schema:${entry.schemaVersion ?? "n/a"}`,
+        `integrity:${entry.integrityStatus}`,
         new Date(entry.createdAt).toISOString(),
         `${(entry.sizeBytes / 1024).toFixed(1)} KB`,
+        entry.integrityMessage ? `msg:${entry.integrityMessage}` : "",
       ].join(" "),
     );
   }
@@ -798,10 +1127,12 @@ export function renderAuthorityBackupsReport(entries: AuthorityBackupEntry[]) {
 
 export function renderAuthorityMigrateReport(result: AuthorityMigrateResult) {
   const lines = [
-    `Authority migrate: ${result.status}`,
+    `Authority migrate${result.mode === "plan" ? " plan" : ""}: ${result.status}`,
     `DB path: ${result.dbPath}`,
     `Previous schema: ${result.previousSchemaVersion ?? "n/a"}`,
     `Current schema: ${result.currentSchemaVersion ?? "n/a"}`,
+    `Target schema: ${result.targetSchemaVersion}`,
+    `Migration required: ${result.migrationRequired ? "yes" : "no"}`,
   ];
 
   if (result.actions.length > 0) {
@@ -843,6 +1174,36 @@ export function renderAuthorityRestorePlanReport(plan: AuthorityRestorePlan) {
   if (plan.issues.length > 0) {
     lines.push("Issues:");
     lines.push(...plan.issues.map((issue) => `- ${issue}`));
+  }
+
+  return lines.join("\n");
+}
+
+export function renderAuthorityRestoreRehearsalReport(result: AuthorityRestoreRehearsalResult) {
+  const lines = [
+    `Authority restore rehearsal: ${result.status}`,
+    `Backup path: ${result.backupPath}`,
+    `Rehearsal home: ${result.rehearsalHomeDir}`,
+    `Rehearsal DB: ${result.rehearsalDbPath}`,
+    `Rehearsal created: ${new Date(result.rehearsalCreatedAt).toISOString()}`,
+    `Rehearsal size: ${(result.rehearsalSizeBytes / 1024).toFixed(1)} KB`,
+    `Rehearsal doctor: ${result.rehearsalDoctor.status}`,
+    `Rehearsal schema: ${result.rehearsalDoctor.schemaVersion ?? "n/a"}`,
+    `Rehearsal integrity: ${result.rehearsalDoctor.integrityStatus}${result.rehearsalDoctor.integrityMessage ? ` (${result.rehearsalDoctor.integrityMessage})` : ""}`,
+    `Live restore plan: ${result.liveRestorePlan.status}`,
+  ];
+
+  if (result.notes.length > 0) {
+    lines.push("Notes:");
+    lines.push(...result.notes.map((note) => `- ${note}`));
+  }
+  if (result.warnings.length > 0) {
+    lines.push("Warnings:");
+    lines.push(...result.warnings.map((warning) => `- ${warning}`));
+  }
+  if (result.issues.length > 0) {
+    lines.push("Issues:");
+    lines.push(...result.issues.map((issue) => `- ${issue}`));
   }
 
   return lines.join("\n");

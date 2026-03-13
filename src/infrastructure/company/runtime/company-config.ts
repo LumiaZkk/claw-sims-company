@@ -18,24 +18,38 @@ import { runtimeStateFromAuthorityBootstrap, runtimeStateFromAuthorityRuntimeSna
 import {
   getAuthorityBootstrap,
   getAuthorityCompanyRuntime,
+  retryAuthorityCompanyProvisioning,
   switchAuthorityCompany,
 } from "../../../application/gateway/authority-control";
 import {
   isSupportRequestActive,
   normalizeSupportRequestRecord,
 } from "../../../domain/delegation/support-request";
+import { normalizeEscalationRecord } from "../../../domain/delegation/escalation";
 
 type RuntimeSet = (partial: Partial<CompanyRuntimeState>) => void;
 type RuntimeGet = () => CompanyRuntimeState;
 
-function upsertTimestampedRecord<T extends { id: string; updatedAt: number }>(
+function normalizeRevision(value: number | null | undefined): number {
+  return Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
+}
+
+function upsertTimestampedRecord<T extends { id: string; updatedAt: number; revision?: number }>(
   existingItems: T[],
   incomingItem: T,
 ): T[] | null {
   const index = existingItems.findIndex((item) => item.id === incomingItem.id);
   if (index >= 0) {
     const existing = existingItems[index];
-    if (incomingItem.updatedAt <= existing.updatedAt) {
+    const hasRevision = existing.revision != null || incomingItem.revision != null;
+    if (
+      (hasRevision && normalizeRevision(incomingItem.revision) < normalizeRevision(existing.revision))
+      || (
+        (hasRevision && normalizeRevision(incomingItem.revision) === normalizeRevision(existing.revision))
+        && incomingItem.updatedAt <= existing.updatedAt
+      )
+      || (!hasRevision && incomingItem.updatedAt <= existing.updatedAt)
+    ) {
       return null;
     }
     const next = [...existingItems];
@@ -46,7 +60,7 @@ function upsertTimestampedRecord<T extends { id: string; updatedAt: number }>(
 }
 
 function filterOpenEscalations(escalations: EscalationRecord[] | null | undefined): EscalationRecord[] {
-  return (escalations ?? []).filter(
+  return (escalations ?? []).map(normalizeEscalationRecord).filter(
     (item) => item.status === "open" || item.status === "acknowledged",
   );
 }
@@ -60,6 +74,7 @@ export function buildCompanyConfigActions(
   | "saveConfig"
   | "switchCompany"
   | "deleteCompany"
+  | "retryCompanyProvisioning"
   | "updateCompany"
   | "upsertTask"
   | "upsertHandoff"
@@ -218,6 +233,32 @@ export function buildCompanyConfigActions(
           loading: false,
           bootstrapPhase: nextActiveCompany ? "ready" : "missing",
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        set({ error: message, loading: false });
+        throw error;
+      }
+    },
+
+    retryCompanyProvisioning: async (id: string) => {
+      const { activeCompany } = get();
+      set({ loading: true, error: null });
+      try {
+        await retryAuthorityCompanyProvisioning(id);
+        if (activeCompany?.id === id) {
+          await get().loadConfig();
+        } else {
+          const bootstrap = await getAuthorityBootstrap();
+          hydrateAuthorityBootstrapCache(bootstrap);
+          const nextState = runtimeStateFromAuthorityBootstrap(bootstrap);
+          set({
+            ...nextState,
+            loading: false,
+            bootstrapPhase: bootstrap.activeCompany ? "ready" : "missing",
+          });
+          return;
+        }
+        set({ loading: false });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         set({ error: message, loading: false });

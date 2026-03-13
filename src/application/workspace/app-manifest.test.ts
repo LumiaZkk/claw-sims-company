@@ -5,6 +5,7 @@ import type { WorkspaceFileRow } from "./index";
 import {
   applyWorkspaceAppManifest,
   buildWorkspaceAppManifestDraft,
+  buildWorkspaceAppManifestTemplate,
   getWorkspaceAppFilesForSection,
   resolveWorkspaceAppManifest,
 } from "./app-manifest";
@@ -127,9 +128,17 @@ function makeArtifact(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord {
   };
 }
 
+function requireManifest<T>(value: T | null): T {
+  expect(value).not.toBeNull();
+  if (value === null) {
+    throw new Error("Expected manifest to be resolved");
+  }
+  return value;
+}
+
 describe("workspace app manifest", () => {
   it("migrates legacy reader-index artifacts into generic app manifests", () => {
-    const manifest = resolveWorkspaceAppManifest({
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
       app: makeReaderApp(),
       artifacts: [
         makeArtifact({
@@ -150,7 +159,7 @@ describe("workspace app manifest", () => {
         }),
       ],
       files: [],
-    });
+    }));
 
     expect(manifest.title).toBe("Legacy Reader");
     expect(manifest.draft).toBe(true);
@@ -160,7 +169,7 @@ describe("workspace app manifest", () => {
   });
 
   it("builds reader manifest drafts from current workspace files", () => {
-    const manifest = buildWorkspaceAppManifestDraft({
+    const manifest = requireManifest(buildWorkspaceAppManifestDraft({
       app: makeReaderApp(),
       title: "小说阅读器 AppManifest 草案",
       sourceLabel: "系统草案",
@@ -186,16 +195,16 @@ describe("workspace app manifest", () => {
           tags: ["qa.report", "company.resource"],
         }),
       ],
-    });
+    }));
 
-    expect(manifest?.draft).toBe(true);
-    expect(manifest?.resources).toHaveLength(3);
-    expect(manifest?.actions?.map((action) => action.id)).toContain("trigger-reader-index");
-    expect(manifest?.actions?.map((action) => action.id)).toContain("report-reader-issue");
+    expect(manifest.draft).toBe(true);
+    expect(manifest.resources).toHaveLength(3);
+    expect(manifest.actions?.map((action) => action.id)).toContain("trigger-reader-index");
+    expect(manifest.actions?.map((action) => action.id)).toContain("report-reader-issue");
   });
 
   it("builds generic viewer drafts from generic resource tags", () => {
-    const manifest = buildWorkspaceAppManifestDraft({
+    const manifest = requireManifest(buildWorkspaceAppManifestDraft({
       app: makeGenericReaderApp(),
       files: [
         makeFile({
@@ -222,10 +231,10 @@ describe("workspace app manifest", () => {
           tags: ["ops.report", "company.resource"],
         }),
       ],
-    });
+    }));
 
-    expect(manifest?.sections.map((section) => section.label)).toEqual(["内容", "参考", "报告"]);
-    expect(manifest?.resources?.map((resource) => resource.slot)).toEqual(["content", "reference", "reports"]);
+    expect(manifest.sections.map((section) => section.label)).toEqual(["内容", "参考", "报告"]);
+    expect(manifest.resources?.map((resource) => resource.slot)).toEqual(["content", "reference", "reports"]);
   });
 
   it("applies manifest resource overrides and selects files by section", () => {
@@ -241,11 +250,11 @@ describe("workspace app manifest", () => {
         tags: ["qa.report", "company.resource"],
       }),
     ];
-    const manifest = resolveWorkspaceAppManifest({
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
       app: makeReaderApp(),
       artifacts: [makeArtifact()],
       files,
-    });
+    }));
 
     const resolved = applyWorkspaceAppManifest(files, manifest);
     expect(resolved[0]?.name).toBe("第一章 开局");
@@ -260,8 +269,82 @@ describe("workspace app manifest", () => {
       files: [],
     });
 
-    expect(manifest.appSlug).toBe("cto-workbench");
+    expect(manifest).toBeNull();
+  });
+
+  it("accepts explicit workbench manifests even when they only declare actions", () => {
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
+      app: makeWorkbenchApp({
+        manifestArtifactId: "artifact:workbench-manifest",
+      }),
+      artifacts: [
+        makeArtifact({
+          id: "artifact:workbench-manifest",
+          title: "workspace-app-manifest.cto-workbench.json",
+          content: JSON.stringify(
+            buildWorkspaceAppManifestTemplate({
+              app: makeWorkbenchApp(),
+              title: "CTO 工具工坊",
+              sourceLabel: "系统基线",
+              actions: [{ id: "open-cto-chat", label: "打开 CTO 会话", actionType: "open_chat", target: "cto" }],
+            }),
+          ),
+        }),
+      ],
+      files: [],
+    }));
+
+    expect(manifest.title).toBe("CTO 工具工坊");
+    expect(manifest.sections).toEqual([]);
     expect(manifest.actions?.map((action) => action.id)).toEqual(["open-cto-chat"]);
+  });
+
+  it("accepts explicit generic manifests even when they only declare resources and actions", () => {
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
+      app: makeReviewConsoleApp({
+        id: "app:simulator",
+        slug: "simulator",
+        title: "游戏模拟器",
+        template: "generic-app",
+        manifestArtifactId: "artifact:simulator-manifest",
+      }),
+      artifacts: [
+        makeArtifact({
+          id: "artifact:simulator-manifest",
+          title: "workspace-app-manifest.simulator.json",
+          content: JSON.stringify({
+            version: 1,
+            appId: "app:simulator",
+            appSlug: "simulator",
+            title: "游戏模拟器",
+            resources: [
+              {
+                id: "state-1",
+                slot: "state",
+                title: "世界状态",
+                sourcePath: "state/world.json",
+                resourceType: "state",
+                tags: ["game.state", "company.resource"],
+              },
+            ],
+            actions: [
+              {
+                id: "step-simulation",
+                label: "推进一回合",
+                actionType: "trigger_skill",
+                target: "simulate.tick",
+              },
+            ],
+          }),
+        }),
+      ],
+      files: [],
+    }));
+
+    expect(manifest.title).toBe("游戏模拟器");
+    expect(manifest.sections).toEqual([]);
+    expect(manifest.resources?.map((resource) => resource.id)).toEqual(["state-1"]);
+    expect(manifest.actions?.map((action) => action.id)).toContain("step-simulation");
   });
 
   it("does not treat inferred manifest files as authoritative manifest sources", () => {
@@ -294,8 +377,7 @@ describe("workspace app manifest", () => {
       ],
     });
 
-    expect(manifest.title).toBe("公司阅读器");
-    expect(manifest.sections.map((section) => section.slot)).toEqual(["content", "reference", "reports"]);
+    expect(manifest).toBeNull();
   });
 
   it("does not treat mirrored workspace artifacts as authoritative manifest sources", () => {
@@ -324,12 +406,11 @@ describe("workspace app manifest", () => {
       files: [],
     });
 
-    expect(manifest.title).toBe("公司阅读器");
-    expect(manifest.sections.map((section) => section.slot)).toEqual(["content", "reference", "reports"]);
+    expect(manifest).toBeNull();
   });
 
   it("keeps standard governance actions even when an explicit manifest defines its own actions", () => {
-    const manifest = resolveWorkspaceAppManifest({
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
       app: makeReviewConsoleApp({
         manifestArtifactId: "artifact:review-console-manifest",
       }),
@@ -361,10 +442,44 @@ describe("workspace app manifest", () => {
         }),
       ],
       files: [],
-    });
+    }));
 
     expect(manifest.actions?.map((action) => action.id)).toEqual([
+      "trigger-review-precheck",
+      "request-review-console",
+      "report-review-precheck-issue",
       "custom-review-export",
+    ]);
+  });
+
+  it("keeps preset governance actions when an explicit manifest omits actions", () => {
+    const manifest = requireManifest(resolveWorkspaceAppManifest({
+      app: makeReviewConsoleApp({
+        manifestArtifactId: "artifact:review-console-manifest-no-actions",
+      }),
+      artifacts: [
+        makeArtifact({
+          id: "artifact:review-console-manifest-no-actions",
+          title: "workspace-app-manifest.review-console.json",
+          content: JSON.stringify({
+            version: 1,
+            appSlug: "review-console",
+            sections: [
+              {
+                id: "review-console-reports",
+                label: "审阅报告",
+                slot: "reports",
+                order: 0,
+                selectors: [{ tags: ["qa.report"] }],
+              },
+            ],
+          }),
+        }),
+      ],
+      files: [],
+    }));
+
+    expect(manifest.actions?.map((action) => action.id)).toEqual([
       "trigger-review-precheck",
       "request-review-console",
       "report-review-precheck-issue",

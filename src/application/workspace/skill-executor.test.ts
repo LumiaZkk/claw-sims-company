@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Company, CompanyWorkspaceApp, SkillDefinition } from "../../domain/org/types";
 import type { ArtifactResourceType } from "../../domain/artifact/types";
 import type { WorkspaceAppManifest } from "./app-manifest";
-import { executeWorkspaceSkill } from "./skill-executor";
+import { executeWorkspaceSkill, listRegisteredSkillExecutionAdapters } from "./skill-executor";
 
 function createCompany(): Company {
   return {
@@ -111,6 +111,26 @@ const genericReaderApp: CompanyWorkspaceApp = {
 };
 
 describe("executeWorkspaceSkill", () => {
+  it("lists registered platform adapters for closeout review", () => {
+    expect(listRegisteredSkillExecutionAdapters()).toEqual([
+      {
+        entryPath: "scripts/build-reader-index.ts",
+        title: "内容索引适配器",
+        summary: "把显式资源聚合成稳定的 AppManifest，供查看器或阅读器消费。",
+      },
+      {
+        entryPath: "scripts/run-consistency-check.ts",
+        title: "规则校验适配器",
+        summary: "围绕显式真相源输出结构化一致性/规则检查报告。",
+      },
+      {
+        entryPath: "scripts/run-review-precheck.ts",
+        title: "交付预检适配器",
+        summary: "根据显式资源与 AppManifest 产出发布前检查结论。",
+      },
+    ]);
+  });
+
   it("builds a stable app manifest artifact for reader index skills", () => {
     const result = executeWorkspaceSkill({
       company: createCompany(),
@@ -250,7 +270,8 @@ describe("executeWorkspaceSkill", () => {
 
     expect(result.artifacts[0]?.kind).toBe("review_precheck");
     expect(result.artifacts[0]?.summary).toContain("阻塞项");
-    expect(result.artifacts[0]?.content).toContain("缺少可发布正文");
+    expect(result.artifacts[0]?.content).toContain("缺少可交付主体内容");
+    expect(result.artifacts[0]?.content).toContain("缺少关键参考资料/真相源");
   });
 
   it("supports generic resource tags outside the novel scenario", () => {
@@ -285,6 +306,45 @@ describe("executeWorkspaceSkill", () => {
     expect(result.artifacts[0]?.content).toContain("主体内容：1 份");
     expect(result.artifacts[0]?.content).toContain("参考资料：1 份");
     expect(result.artifacts[0]?.summary).toContain("阻塞项");
+  });
+
+  it("uses explicit resource tags instead of app title heuristics when building reports", () => {
+    const result = executeWorkspaceSkill({
+      company: createGenericCompany(),
+      skill: createSkill("review.precheck", "执行发布前检查", ["report"]),
+      app: {
+        ...genericReaderApp,
+        title: "章节模拟台",
+        slug: "chapter-simulator",
+      },
+      manifest: null,
+      files: [
+        {
+          key: "content-1",
+          artifactId: "content-1",
+          name: "content/level-overview.md",
+          path: "content/level-overview.md",
+          resourceType: "document",
+          tags: ["content.primary", "company.resource"],
+          resourceOrigin: "declared",
+        },
+        {
+          key: "reference-1",
+          artifactId: "reference-1",
+          name: "docs/simulation-guide.md",
+          path: "docs/simulation-guide.md",
+          resourceType: "document",
+          tags: ["domain.reference", "company.resource"],
+          resourceOrigin: "declared",
+        },
+      ],
+      now: 420,
+    });
+
+    expect(result.artifacts[0]?.content).toContain("主体内容：1 份");
+    expect(result.artifacts[0]?.content).toContain("参考资料：1 份");
+    expect(result.artifacts[0]?.content).not.toContain("正文：1 份");
+    expect(result.artifacts[0]?.content).not.toContain("设定：1 份");
   });
 
   it("builds a generic viewer manifest for non-novel companies", () => {

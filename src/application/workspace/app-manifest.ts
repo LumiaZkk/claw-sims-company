@@ -42,7 +42,15 @@ export type WorkspaceAppManifestResource = {
 export type WorkspaceAppManifestAction = {
   id: string;
   label: string;
-  actionType: "workbench_request" | "open_chat" | "refresh_manifest" | "trigger_skill" | "report_issue";
+  actionType:
+    | "request_capability"
+    | "open_chat"
+    | "refresh_manifest"
+    | "trigger_capability"
+    | "report_issue"
+    | "open_resource"
+    | "workbench_request"
+    | "trigger_skill";
   target: string;
   input?: Record<string, unknown>;
 };
@@ -57,6 +65,13 @@ export type WorkspaceAppManifest = {
   sections: WorkspaceAppManifestSection[];
   resources?: WorkspaceAppManifestResource[];
   actions?: WorkspaceAppManifestAction[];
+};
+
+export type WorkspaceAppManifestRegistrationMeta = {
+  appId?: string;
+  appSlug?: string;
+  title?: string;
+  sourceLabel?: string;
 };
 
 type LegacyReaderManifestResourceKind = "chapter" | "canon" | "review";
@@ -98,7 +113,7 @@ function looksLikeNovelApp(app: Pick<CompanyWorkspaceApp, "template" | "title" |
   return /小说|章节|正文|设定|审校|伏笔|novel|chapter|canon/i.test(haystack);
 }
 
-function buildDefaultSections(
+function buildPresetSections(
   app: Pick<CompanyWorkspaceApp, "template" | "title" | "slug">,
 ): WorkspaceAppManifestSection[] {
   const novelLike = looksLikeNovelApp(app);
@@ -186,12 +201,22 @@ function buildDefaultSections(
           selectors: [{ resourceTypes: ["state", "dataset"] }],
         },
       ];
+    case "generic-app":
+      return [
+        {
+          id: "app-content",
+          label: "资源",
+          slot: "content",
+          order: 0,
+          selectors: [{ resourceTypes: ["document", "report", "dataset", "state", "media"] }],
+        },
+      ];
     default:
       return [];
   }
 }
 
-function buildDefaultActions(
+function buildPresetActions(
   app: Pick<CompanyWorkspaceApp, "template" | "title" | "slug">,
 ): WorkspaceAppManifestAction[] {
   const novelLike = looksLikeNovelApp(app);
@@ -201,7 +226,7 @@ function buildDefaultActions(
         {
           id: "trigger-reader-index",
           label: novelLike ? "重建阅读索引" : "重建内容索引",
-          actionType: "trigger_skill",
+          actionType: "trigger_capability",
           target: "reader.build-index",
         },
         {
@@ -223,13 +248,13 @@ function buildDefaultActions(
         {
           id: "trigger-consistency-check",
           label: "执行一致性检查",
-          actionType: "trigger_skill",
+          actionType: "trigger_capability",
           target: "consistency.check",
         },
         {
           id: "request-consistency-checker",
-          label: novelLike ? "让 CTO 开发一致性工具" : "让 CTO 开发校验工具",
-          actionType: "workbench_request",
+          label: novelLike ? "申请补齐一致性能力" : "申请补齐规则校验能力",
+          actionType: "request_capability",
           target: "consistency-checker",
         },
         {
@@ -245,13 +270,13 @@ function buildDefaultActions(
         {
           id: "trigger-review-precheck",
           label: "执行发布前检查",
-          actionType: "trigger_skill",
+          actionType: "trigger_capability",
           target: "review.precheck",
         },
         {
           id: "request-review-console",
-          label: novelLike ? "让 CTO 补审阅工具" : "让 CTO 补审阅控制台",
-          actionType: "workbench_request",
+          label: novelLike ? "申请补齐审阅能力" : "申请补齐审阅与预检 App",
+          actionType: "request_capability",
           target: "chapter-review-console",
         },
         {
@@ -276,53 +301,91 @@ function buildDefaultActions(
       return [
         { id: "open-cto-chat", label: "打开 CTO 会话", actionType: "open_chat", target: "cto" },
       ];
+    case "generic-app":
+      return [
+        {
+          id: "report-generic-app-issue",
+          label: "反馈 App 问题",
+          actionType: "report_issue",
+          target: "generic-app",
+          input: { type: "runtime_error" },
+        },
+      ];
     default:
       return [];
   }
 }
 
-function mergeManifestActions(
-  baseActions: WorkspaceAppManifestAction[] | undefined,
-  parsedActions: WorkspaceAppManifestAction[] | undefined,
-) {
-  if (!baseActions?.length) {
-    return parsedActions;
-  }
-  if (!parsedActions?.length) {
-    return baseActions;
-  }
-
-  const merged: WorkspaceAppManifestAction[] = [];
-  const seen = new Set<string>();
-
-  for (const action of parsedActions) {
-    if (seen.has(action.id)) {
-      continue;
-    }
-    merged.push(action);
-    seen.add(action.id);
-  }
-
-  for (const action of baseActions) {
-    if (seen.has(action.id)) {
-      continue;
-    }
-    merged.push(action);
-    seen.add(action.id);
-  }
-
-  return merged;
-}
-
-function buildDefaultManifest(app: Pick<CompanyWorkspaceApp, "id" | "slug" | "title" | "template">) {
+export function buildPresetWorkspaceAppManifest(input: {
+  app: Pick<CompanyWorkspaceApp, "id" | "slug" | "title" | "template">;
+  title?: string;
+  sourceLabel?: string;
+  draft?: boolean;
+  sections?: WorkspaceAppManifestSection[];
+  resources?: WorkspaceAppManifestResource[];
+  actions?: WorkspaceAppManifestAction[];
+}) {
+  const sections = input.sections ?? buildPresetSections(input.app);
+  const actions = input.actions ?? buildPresetActions(input.app);
   return {
     version: 1,
-    appId: app.id,
-    appSlug: app.slug,
-    title: app.title,
-    sections: buildDefaultSections(app),
-    actions: buildDefaultActions(app),
+    appId: input.app.id,
+    appSlug: input.app.slug,
+    title: input.title ?? input.app.title,
+    sourceLabel: input.sourceLabel,
+    draft: input.draft,
+    sections,
+    resources: input.resources?.length ? input.resources : undefined,
+    actions: actions.length > 0 ? actions : undefined,
   } satisfies WorkspaceAppManifest;
+}
+
+function mergeWorkspaceManifestActions(
+  presetActions: WorkspaceAppManifestAction[],
+  explicitActions?: WorkspaceAppManifestAction[],
+) {
+  if (!explicitActions?.length) {
+    return presetActions;
+  }
+  const actionOrder: string[] = [];
+  const actionsById = new Map<string, WorkspaceAppManifestAction>();
+
+  for (const action of presetActions) {
+    actionOrder.push(action.id);
+    actionsById.set(action.id, action);
+  }
+  for (const action of explicitActions) {
+    if (!actionsById.has(action.id)) {
+      actionOrder.push(action.id);
+    }
+    actionsById.set(action.id, action);
+  }
+
+  return actionOrder
+    .map((id) => actionsById.get(id) ?? null)
+    .filter((action): action is WorkspaceAppManifestAction => Boolean(action));
+}
+
+export function buildWorkspaceAppManifestTemplate(input: {
+  app: Pick<CompanyWorkspaceApp, "id" | "slug" | "title" | "template">;
+  title?: string;
+  sourceLabel?: string;
+  draft?: boolean;
+  sections?: WorkspaceAppManifestSection[];
+  resources?: WorkspaceAppManifestResource[];
+  actions?: WorkspaceAppManifestAction[];
+}): WorkspaceAppManifest {
+  return {
+    version: 1,
+    appId: input.app.id,
+    appSlug: input.app.slug,
+    title: input.title ?? input.app.title,
+    sourceLabel: input.sourceLabel,
+    draft: input.draft,
+    sections: input.sections ?? [],
+    resources: input.resources?.length ? input.resources : undefined,
+    actions: input.actions?.length ? input.actions : undefined,
+  };
 }
 
 function isManifestArtifactCandidate(input: {
@@ -478,42 +541,54 @@ function parseLegacyReaderManifest(
     if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
       return null;
     }
-    const base = buildDefaultManifest(app);
-    return {
-      ...base,
-      title: typeof parsed.title === "string" ? parsed.title : base.title,
-      sourceLabel:
-        typeof parsed.sourceLabel === "string" && parsed.sourceLabel.trim().length > 0
-          ? parsed.sourceLabel
-          : sourceLabel,
-      draft: parsed.draft === true || parsed.sourceLabel === "系统草案",
-      resources: parsed.items.reduce<WorkspaceAppManifestResource[]>((acc, item, index) => {
-        if (!item || typeof item !== "object" || !item.kind) {
-          return acc;
-        }
-        const descriptor = tagsForLegacyKind(item.kind);
-        acc.push({
-          id: typeof item.id === "string" ? item.id : `reader-resource-${index + 1}`,
-          slot:
-            item.kind === "chapter"
-              ? "content"
-              : item.kind === "canon"
-                ? "reference"
-                : "reports",
-          title: item.title,
-          summary: item.summary,
-          artifactId: item.artifactId,
-          sourcePath: item.sourcePath,
-          sourceName: item.sourceName,
-          resourceType: descriptor.resourceType,
-          tags: descriptor.tags,
-        });
+    const resources = parsed.items.reduce<WorkspaceAppManifestResource[]>((acc, item, index) => {
+      if (!item || typeof item !== "object" || !item.kind) {
         return acc;
-      }, []),
+      }
+      const descriptor = tagsForLegacyKind(item.kind);
+      acc.push({
+        id: typeof item.id === "string" ? item.id : `reader-resource-${index + 1}`,
+        slot:
+          item.kind === "chapter"
+            ? "content"
+            : item.kind === "canon"
+              ? "reference"
+              : "reports",
+        title: item.title,
+        summary: item.summary,
+        artifactId: item.artifactId,
+        sourcePath: item.sourcePath,
+        sourceName: item.sourceName,
+        resourceType: descriptor.resourceType,
+        tags: descriptor.tags,
+      });
+      return acc;
+    }, []);
+    return {
+      ...buildPresetWorkspaceAppManifest({
+        app,
+        title: typeof parsed.title === "string" ? parsed.title : undefined,
+        sourceLabel:
+          typeof parsed.sourceLabel === "string" && parsed.sourceLabel.trim().length > 0
+            ? parsed.sourceLabel
+            : sourceLabel,
+        draft: parsed.draft === true || parsed.sourceLabel === "系统草案",
+        resources,
+      }),
     };
   } catch {
     return null;
   }
+}
+
+function looksLikeExplicitWorkspaceAppManifest(parsed: Partial<WorkspaceAppManifest>) {
+  return (
+    typeof parsed.appId === "string" ||
+    typeof parsed.appSlug === "string" ||
+    Array.isArray(parsed.sections) ||
+    Array.isArray(parsed.resources) ||
+    Array.isArray(parsed.actions)
+  );
 }
 
 function parseWorkspaceAppManifestContent(
@@ -526,42 +601,39 @@ function parseWorkspaceAppManifestContent(
     if (!parsed || typeof parsed !== "object") {
       return null;
     }
-    if (!Array.isArray(parsed.sections) || parsed.sections.length === 0) {
-      return parseLegacyReaderManifest(content, app, sourceLabel);
-    }
-
-    const base = buildDefaultManifest(app);
-    const sections = parsed.sections.reduce<WorkspaceAppManifestSection[]>((acc, section, index) => {
-      if (!section || typeof section !== "object") {
-        return acc;
-      }
-      const candidate = section as Partial<WorkspaceAppManifestSection>;
-      if (typeof candidate.id !== "string" || typeof candidate.label !== "string" || typeof candidate.slot !== "string") {
-        return acc;
-      }
-      acc.push({
-        id: candidate.id,
-        label: candidate.label,
-        slot: candidate.slot,
-        order: typeof candidate.order === "number" ? candidate.order : index,
-        selectors: Array.isArray(candidate.selectors)
-          ? candidate.selectors.filter(Boolean).map((selector) => ({
-              resourceTypes: Array.isArray(selector?.resourceTypes)
-                ? selector.resourceTypes.filter((item): item is ArtifactResourceType => typeof item === "string")
-                : undefined,
-              tags: Array.isArray(selector?.tags)
-                ? selector.tags.filter((item): item is string => typeof item === "string")
-                : undefined,
-            }))
-          : [],
-        emptyState: typeof candidate.emptyState === "string" ? candidate.emptyState : undefined,
-      });
-      return acc;
-    }, []);
-
-    if (sections.length === 0) {
-      return parseLegacyReaderManifest(content, app, sourceLabel);
-    }
+    const sections = Array.isArray(parsed.sections)
+      ? parsed.sections.reduce<WorkspaceAppManifestSection[]>((acc, section, index) => {
+          if (!section || typeof section !== "object") {
+            return acc;
+          }
+          const candidate = section as Partial<WorkspaceAppManifestSection>;
+          if (
+            typeof candidate.id !== "string" ||
+            typeof candidate.label !== "string" ||
+            typeof candidate.slot !== "string"
+          ) {
+            return acc;
+          }
+          acc.push({
+            id: candidate.id,
+            label: candidate.label,
+            slot: candidate.slot,
+            order: typeof candidate.order === "number" ? candidate.order : index,
+            selectors: Array.isArray(candidate.selectors)
+              ? candidate.selectors.filter(Boolean).map((selector) => ({
+                  resourceTypes: Array.isArray(selector?.resourceTypes)
+                    ? selector.resourceTypes.filter((item): item is ArtifactResourceType => typeof item === "string")
+                    : undefined,
+                  tags: Array.isArray(selector?.tags)
+                    ? selector.tags.filter((item): item is string => typeof item === "string")
+                    : undefined,
+                }))
+              : [],
+            emptyState: typeof candidate.emptyState === "string" ? candidate.emptyState : undefined,
+          });
+          return acc;
+        }, [])
+      : [];
 
     const resources = Array.isArray(parsed.resources)
       ? parsed.resources.reduce<WorkspaceAppManifestResource[]>((acc, resource, index) => {
@@ -589,7 +661,7 @@ function parseWorkspaceAppManifestContent(
         }, [])
       : [];
 
-    const actions = Array.isArray(parsed.actions)
+    const explicitActions = Array.isArray(parsed.actions)
       ? parsed.actions.reduce<WorkspaceAppManifestAction[]>((acc, action) => {
           if (!action || typeof action !== "object") {
             return acc;
@@ -613,23 +685,58 @@ function parseWorkspaceAppManifestContent(
           return acc;
         }, [])
       : [];
+    const actions = mergeWorkspaceManifestActions(buildPresetActions(app), explicitActions);
+    const explicitManifest = looksLikeExplicitWorkspaceAppManifest(parsed);
+    if (sections.length === 0) {
+      if (!explicitManifest) {
+        return parseLegacyReaderManifest(content, app, sourceLabel);
+      }
+      return buildWorkspaceAppManifestTemplate({
+        app,
+        title: typeof parsed.title === "string" ? parsed.title : undefined,
+        sourceLabel:
+          typeof parsed.sourceLabel === "string" && parsed.sourceLabel.trim().length > 0
+            ? parsed.sourceLabel
+            : sourceLabel,
+        draft: parsed.draft === true || parsed.sourceLabel === "系统草案",
+        resources,
+        actions,
+      });
+    }
 
-    return {
-      ...base,
-      title: typeof parsed.title === "string" ? parsed.title : base.title,
-      appId: typeof parsed.appId === "string" ? parsed.appId : base.appId,
-      appSlug: typeof parsed.appSlug === "string" ? parsed.appSlug : base.appSlug,
+    return buildWorkspaceAppManifestTemplate({
+      app,
+      title: typeof parsed.title === "string" ? parsed.title : undefined,
       sourceLabel:
         typeof parsed.sourceLabel === "string" && parsed.sourceLabel.trim().length > 0
           ? parsed.sourceLabel
           : sourceLabel,
       draft: parsed.draft === true || parsed.sourceLabel === "系统草案",
       sections,
-      resources: resources.length > 0 ? resources : undefined,
-      actions: mergeManifestActions(base.actions, actions),
-    };
+      resources,
+      actions,
+    });
   } catch {
     return parseLegacyReaderManifest(content, app, sourceLabel);
+  }
+}
+
+export function readWorkspaceAppManifestRegistrationMeta(
+  content: string,
+): WorkspaceAppManifestRegistrationMeta | null {
+  try {
+    const parsed = JSON.parse(content) as Partial<WorkspaceAppManifest>;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return {
+      appId: typeof parsed.appId === "string" ? parsed.appId : undefined,
+      appSlug: typeof parsed.appSlug === "string" ? parsed.appSlug : undefined,
+      title: typeof parsed.title === "string" ? parsed.title : undefined,
+      sourceLabel: typeof parsed.sourceLabel === "string" ? parsed.sourceLabel : undefined,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -667,11 +774,6 @@ export function buildWorkspaceAppManifestDraft(input: {
   title?: string;
   sourceLabel?: string;
 }): WorkspaceAppManifest | null {
-  if (input.app.template !== "reader") {
-    return buildDefaultManifest(input.app);
-  }
-
-  const base = buildDefaultManifest(input.app);
   const resources = input.files.reduce<WorkspaceAppManifestResource[]>((acc, file, index) => {
     if (isManifestArtifactCandidate({ name: file.name, path: file.path })) {
       return acc;
@@ -698,20 +800,20 @@ export function buildWorkspaceAppManifestDraft(input: {
     return null;
   }
 
-  return {
-    ...base,
+  return buildPresetWorkspaceAppManifest({
+    app: input.app,
     title: input.title ?? `${input.app.title} AppManifest 草案`,
     sourceLabel: input.sourceLabel ?? "系统草案",
     draft: true,
     resources,
-  };
+  });
 }
 
 export function resolveWorkspaceAppManifest(input: {
   app: Pick<CompanyWorkspaceApp, "id" | "slug" | "title" | "template" | "manifestArtifactId">;
   artifacts: ArtifactRecord[];
   files: AppManifestWorkspaceFile[];
-}): WorkspaceAppManifest {
+}): WorkspaceAppManifest | null {
   const directArtifact =
     input.app.manifestArtifactId
       ? input.artifacts.find(
@@ -766,7 +868,7 @@ export function resolveWorkspaceAppManifest(input: {
     }
   }
 
-  return buildDefaultManifest(input.app);
+  return null;
 }
 
 export function applyWorkspaceAppManifest<T extends AppManifestWorkspaceFile>(

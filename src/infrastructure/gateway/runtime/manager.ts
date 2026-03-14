@@ -108,6 +108,10 @@ export class BackendManager implements AgentBackend {
     this.currentBackend.connect(url, token);
   }
 
+  stageConnectionDraft(url: string, token?: string): void {
+    this.currentBackend.stageConnectionDraft?.(url, token);
+  }
+
   disconnect(): void {
     this.currentBackend.disconnect();
   }

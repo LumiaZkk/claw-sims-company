@@ -186,6 +186,7 @@ interface GatewayState {
   connectError: NormalizedConnectError | null;
   modelsVersion: number;
   setProvider: (providerId: string) => void;
+  stageConnectionDraft: (url: string, token?: string) => void;
   connect: (url: string, token?: string) => void;
   disconnect: () => void;
   bootstrapAutoConnect: () => void;
@@ -281,6 +282,9 @@ export const useGatewayStore = create<GatewayState>((set) => {
   setActiveBackendProvider(initialProviderId);
   const initialProvider = getActiveBackendProvider();
   migrateLegacyGatewayConfig(initialProvider.id);
+  const initialUrl = loadStoredProviderUrl(initialProvider.id, initialProvider.defaultUrl);
+  const initialToken = loadStoredProviderToken(initialProvider.id);
+  gateway.stageConnectionDraft?.(initialUrl, initialToken);
   const hasEverConnected =
     storage.getItem(GATEWAY_CONNECTED_ONCE_KEY) === '1' ||
     Boolean(loadLegacyGatewayConfig()?.url);
@@ -303,8 +307,8 @@ export const useGatewayStore = create<GatewayState>((set) => {
       providerId: initialProvider.id,
       capabilities: getActiveBackendCapabilities(),
     }),
-    url: loadStoredProviderUrl(initialProvider.id, initialProvider.defaultUrl),
-    token: loadStoredProviderToken(initialProvider.id),
+    url: initialUrl,
+    token: initialToken,
     connected: false,
     connecting: false,
     hello: null,
@@ -327,6 +331,9 @@ export const useGatewayStore = create<GatewayState>((set) => {
       storage.setItem(BACKEND_PROVIDER_KEY, nextProvider.id);
       setActiveBackendProvider(nextProvider.id);
       const activeProvider = getActiveBackendProvider();
+      const nextUrl = loadStoredProviderUrl(activeProvider.id, activeProvider.defaultUrl);
+      const nextToken = loadStoredProviderToken(activeProvider.id);
+      gateway.stageConnectionDraft?.(nextUrl, nextToken);
 
       set({
         providerId: activeProvider.id,
@@ -336,8 +343,8 @@ export const useGatewayStore = create<GatewayState>((set) => {
           providerId: activeProvider.id,
           capabilities: getActiveBackendCapabilities(),
         }),
-        url: loadStoredProviderUrl(activeProvider.id, activeProvider.defaultUrl),
-        token: loadStoredProviderToken(activeProvider.id),
+        url: nextUrl,
+        token: nextToken,
         connected: false,
         connecting: false,
         hello: null,
@@ -349,6 +356,41 @@ export const useGatewayStore = create<GatewayState>((set) => {
         connectError: null,
       });
       void refreshCapabilities();
+    },
+
+    stageConnectionDraft: (url: string, token?: string) => {
+      const normalizedUrl = url.trim();
+      const normalizedToken = (token || '').trim();
+      const snapshot = useGatewayStore.getState();
+      if (!snapshot.connected) {
+        gateway.stageConnectionDraft?.(normalizedUrl, normalizedToken);
+      }
+      storage.setItem(BACKEND_PROVIDER_KEY, snapshot.providerId);
+      storage.setItem(providerUrlKey(snapshot.providerId), normalizedUrl);
+      storage.setItem(providerTokenKey(snapshot.providerId), normalizedToken);
+
+      if (!snapshot.connected) {
+        gateway.disconnect();
+      }
+
+      set((state) => ({
+        providerId: gateway.providerId,
+        url: normalizedUrl,
+        token: normalizedToken,
+        manifest: buildProviderManifest({
+          providerId: gateway.providerId,
+          capabilities: state.capabilities,
+        }),
+        connected: state.connected,
+        connecting: false,
+        hello: state.connected ? state.hello : null,
+        phase: state.connected ? 'connected' : state.hasEverConnected ? 'offline' : 'never',
+        reconnectAttempts: 0,
+        lastCloseReason: null,
+        autoReconnect: false,
+        error: null,
+        connectError: null,
+      }));
     },
     
     connect: (url: string, token?: string) => {

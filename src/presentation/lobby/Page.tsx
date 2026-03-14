@@ -1,10 +1,12 @@
 import { useNavigate } from "react-router-dom";
 import { useLobbyPageCommands, useLobbyPageViewModel } from "../../application/lobby";
+import { useGatewayStore } from "../../application/gateway";
 import { buildActivityInboxSummary } from "../../application/governance/activity-inbox";
+import { buildTakeoverCaseSummary, buildTakeoverCases } from "../../application/delegation/takeover-case";
+import { useTakeoverCaseWorkflow } from "../../application/delegation/use-takeover-case-workflow";
 import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { Badge } from "../../components/ui/badge";
-import { resolveConversationPresentation } from "../../lib/chat-routes";
 import { usePageVisibility } from "../../lib/use-page-visibility";
 import {
   LobbyActionStrip,
@@ -20,6 +22,7 @@ import { LobbyTeamActivitySection } from "./components/LobbyTeamActivitySection"
 import { useLobbyPageState } from "./hooks/useLobbyPageState";
 import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 import { ActivityInboxStrip } from "../shared/ActivityInboxStrip";
+import { TakeoverCasePanel } from "../shared/TakeoverCasePanel";
 
 type CompanyLobbyPageContentProps = Omit<
   ReturnType<typeof useLobbyPageViewModel>,
@@ -51,6 +54,7 @@ function CompanyLobbyPageContent({
   connected,
   pageSurface,
   replaceDispatchRecords,
+  upsertDispatchRecord,
   usageCost,
   updateCompany,
   sessionExecutions,
@@ -58,6 +62,7 @@ function CompanyLobbyPageContent({
   const navigate = useNavigate();
   const isPageVisible = usePageVisibility();
   const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
+  const providerManifest = useGatewayStore((state) => state.manifest);
   const {
     buildBlueprintText,
     syncKnowledge,
@@ -216,11 +221,35 @@ function CompanyLobbyPageContent({
     pendingHumanDecisionCount: ceoSurface.pendingHumanDecisions + ceoSurface.pendingApprovals,
     manualTakeoverCount: visibleManualCount,
   });
+  const takeoverCaseSummary = buildTakeoverCaseSummary(
+    buildTakeoverCases({
+      company: activeCompany,
+      sessions: scopedSessions,
+      sessionExecutions,
+      activeRoomRecords,
+      activeDispatches,
+      sessionKeys:
+        visibleManualCount > 0
+          ? new Set(
+              scopedSessions
+                .filter((session) => sessionExecutions.get(session.key)?.state === "manual_takeover_required")
+                .map((session) => session.key),
+            )
+          : undefined,
+    }),
+  );
+  const { busyCaseId, runTakeoverAction, runTakeoverRedispatch } = useTakeoverCaseWorkflow({
+    activeCompany,
+    updateCompany,
+    providerManifest,
+    upsertDispatchRecord,
+    surface: "lobby",
+  });
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-4 md:p-6 lg:p-8">
       <LobbyHeroSection
-        title="运营大厅"
+        title="Ops"
         description={
           requirementOverview
             ? isStrategicRequirement
@@ -330,7 +359,7 @@ function CompanyLobbyPageContent({
       <CanonicalRuntimeSummaryCard
         summary={runtimeSummary}
         title="统一运行态摘要"
-        description="监控、排障和关注队列统一从 `/runtime` 复用，运营大厅只保留执行摘要和动作入口。"
+        description="监控、排障和关注队列统一从 `/runtime` 复用，Ops 只保留执行摘要和动作入口。"
         compact
       />
 
@@ -365,55 +394,61 @@ function CompanyLobbyPageContent({
         onNavigateHref={(href) => navigate(href)}
       />
 
-      <LobbyAlertStrip
-        visible={visibleManualCount > 0}
-        tone="amber"
-        title="人工接管警报"
-        description={`当前有 ${visibleManualCount} 条执行链路要求人工介入，建议直接进入对应会话复制接管包。`}
-        actionLabel="查看接管包"
-        onAction={() => {
-          const manualSession = scopedSessions.find(
-            (session) => sessionExecutions.get(session.key)?.state === "manual_takeover_required",
-          );
-          if (manualSession) {
-            const route = resolveConversationPresentation({
-              sessionKey: manualSession.key,
-              actorId: manualSession.agentId,
-              rooms: activeRoomRecords,
-              employees: activeCompany.employees,
-            }).route;
+      {takeoverCaseSummary.totalCount > 0 ? (
+        <TakeoverCasePanel
+          summary={takeoverCaseSummary}
+          busyCaseId={busyCaseId}
+          onOpenCase={(caseItem) => {
             void appendOperatorActionAuditEvent({
               companyId: activeCompany.id,
               action: "takeover_route_open",
               surface: "lobby",
               outcome: "succeeded",
               details: {
-                sessionKey: manualSession.key,
-                targetActorId: manualSession.agentId,
-                route,
-                visibleTakeoverCount: visibleManualCount,
+                takeoverCaseId: caseItem.id,
+                sessionKey: caseItem.sourceSessionKey,
+                targetActorId: caseItem.ownerAgentId,
+                route: caseItem.route,
+                visibleTakeoverCount: takeoverCaseSummary.totalCount,
+                takeoverStatus: caseItem.status,
               },
             });
-            navigate(route);
-            return;
+            navigate(caseItem.route);
+          }}
+          onAcknowledgeCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "acknowledge" });
+          }}
+          onAssignCase={(caseItem) => {
+            void runTakeoverAction({
+              caseItem,
+              action: "assign",
+              assigneeAgentId: caseItem.ownerAgentId,
+              assigneeLabel: caseItem.ownerLabel,
+            });
+          }}
+          onStartCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "start" });
+          }}
+          onResolveCase={(caseItem, note) => {
+            void runTakeoverAction({ caseItem, action: "resolve", note });
+          }}
+          onRedispatchCase={
+            providerManifest
+              ? (caseItem, note) => {
+                  void runTakeoverRedispatch({ caseItem, note });
+                }
+              : undefined
           }
-          void appendOperatorActionAuditEvent({
-            companyId: activeCompany.id,
-            action: "takeover_route_open",
-            surface: "lobby",
-            outcome: "failed",
-            error: "没有找到可打开的人工接管会话。",
-            details: {
-              visibleTakeoverCount: visibleManualCount,
-            },
-          });
-        }}
-      />
+          onArchiveCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "archive" });
+          }}
+        />
+      ) : null}
 
       <LobbyAlertStrip
         visible={showOperationalQueues && visibleRequestHealth.active > 0}
         tone="sky"
-        title={primaryWorkItem ? "当前需求请求闭环" : "请求闭环队列"}
+        title={primaryWorkItem ? "当前主线请求闭环" : "请求闭环队列"}
         description={
           primaryWorkItem
             ? `当前这条主线还有 ${visibleRequestHealth.active} 条请求未真正闭环，其中阻塞 ${visibleRequestHealth.blocked} 条；历史请求已隐藏。`
@@ -427,7 +462,7 @@ function CompanyLobbyPageContent({
       <LobbyAlertStrip
         visible={showOperationalQueues && visibleSlaAlerts.length > 0}
         tone="rose"
-        title={primaryWorkItem ? "当前需求超时提醒" : "SLA 升级队列"}
+        title={primaryWorkItem ? "当前主线超时提醒" : "SLA 升级队列"}
         description={
           primaryWorkItem
             ? `当前这条主线有 ${visibleSlaAlerts.length} 条升级提醒，历史超时项已隐藏。`
@@ -477,7 +512,7 @@ function CompanyLobbyPageContent({
         description="只有在需要深挖谁在跑、谁阻塞、最近发生了什么时，再展开这一层。"
         meta={
           requirementOverview
-            ? `当前需求成员 ${scopedEmployeesData.length} · 活动 ${unifiedStream.length}`
+            ? `当前主线成员 ${scopedEmployeesData.length} · 活动 ${unifiedStream.length}`
             : `成员 ${employeesData.length} · 活动 ${unifiedStream.length}`
         }
       >

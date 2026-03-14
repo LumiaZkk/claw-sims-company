@@ -7,7 +7,7 @@ Cyber Company 是一个构建在 OpenClaw 之上的多 Agent 运营控制台。
 ## 产品概览
 
 - `CEO Home` (`/`)：看当前卡点、公司健康度和下一步动作
-- `Operations Hall` (`/ops`)：看异常、恢复动作、快速派单和团队活动
+- `Ops` (`/ops`)：看异常、恢复动作、快速派单和团队活动
 - `Chat` (`/chat/:agentId`)：看角色对话、协作生命周期和需求上下文
 - `Employees` (`/employees`)：看组织结构、员工状态和组织修复
 - `Board` (`/board`)：看跨任务执行状态和阻塞
@@ -99,9 +99,9 @@ npm test
 
 ![CEO Chat](docs/images/ceo-chat.png)
 
-### Operations Hall
+### Ops
 
-![Operations Hall](docs/images/ops.png)
+![Ops](docs/images/ops.png)
 
 ### Board
 

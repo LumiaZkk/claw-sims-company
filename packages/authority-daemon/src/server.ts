@@ -12,26 +12,46 @@ import {
   planManagedExecutorReconcile,
 } from "./company-executor-sync";
 import { CompanyOpsEngine } from "./company-ops-engine";
+import { normalizeCompanyEventsPageRows } from "./company-event-pagination";
+import { createAuthorityCompanyManagementCommands } from "./company-management-commands";
+import type { AuthorityChatCommandRouteDependencies } from "./chat-command-routes";
+import { createAuthorityOperatorActionRunner } from "./operator-actions";
+import type { AuthorityCompanyManagementRouteDependencies } from "./company-management-routes";
+import type { AuthorityCompanyStateRouteDependencies } from "./company-state-routes";
+import type { AuthorityControlRouteDependencies } from "./control-routes";
+import { runAuthorityChatSendCommand } from "./chat-send-command";
+import { runAuthorityExecutorConfigPatch } from "./executor-config-command";
+import { createAuthorityGatewayProxy } from "./gateway-proxy";
+import { runAuthorityRuntimeSessionStatusRepair } from "./runtime-session-status-repair";
+import { handleAuthorityHttpRoute } from "./authority-route-registry";
 import {
-  deleteCompanyStrongConsistency,
+  sendAuthorityCaughtError,
+  sendAuthorityError,
+  sendAuthorityJson,
+} from "./authority-http-route-dispatch";
+import { authorityBadRequest } from "./authority-error";
+import { openAuthoritySqlite } from "./sqlite";
+import {
+  buildAuthorityBootstrapSnapshot,
+  buildAuthorityHealthSnapshot,
+  buildAuthorityExecutorSnapshot,
+} from "./executor-status";
+import {
   removeManagedExecutorCompanyWorkspace,
-  StrongCompanyDeleteError,
   waitForExecutorAgentsAbsent,
 } from "./company-delete";
 import { runAgentWorkspaceEntry } from "./agent-file-runner";
 import { buildCompanyWorkspaceBootstrap } from "./company-workspace-bootstrap";
 import {
   AUTHORITY_SCHEMA_VERSION,
-  readAuthorityDoctorSnapshot,
-  readAuthorityPreflightSnapshot,
+  restoreAuthorityBackup,
 } from "./ops";
 import {
-  mergeAuthorityControlledRuntimeSlices,
   reconcileAuthorityRequirementRuntime,
   runtimeRequirementControlChanged,
 } from "./requirement-control-runtime";
 import { createManagedFileMirrorQueue } from "./managed-file-mirror";
-import { classifyExecutorReconnect, createOpenClawExecutorBridge } from "./openclaw-bridge";
+import { createOpenClawExecutorBridge } from "./openclaw-bridge";
 import { refreshGatewayAuthRuntimeSnapshot, waitForGatewayReconnect } from "./gateway-runtime-refresh";
 import { resolveLocalOpenClawGatewayToken, syncLocalCodexAuthToAgents } from "./openclaw-local-auth";
 import {
@@ -64,6 +84,10 @@ import {
   mergeRoomConversationBindings,
 } from "../../../src/application/delegation/room-records";
 import {
+  applyTakeoverCaseWorkflowAction,
+  takeoverCaseRecordToCase,
+} from "../../../src/application/delegation/takeover-case";
+import {
   buildRequirementWorkflowEvidence,
   buildRequirementWorkflowEvidencePayload,
   resolveRequirementWorkflowEventKind,
@@ -75,8 +99,6 @@ import {
 import { areWorkItemRecordsEquivalent } from "../../../src/application/mission/work-item-equivalence";
 import { isArtifactRequirementTopic } from "../../../src/application/mission/requirement-kind";
 import { reconcileWorkItemRecord } from "../../../src/application/mission/work-item-reconciler";
-import { buildAuthorityHealthGuidance } from "../../../src/infrastructure/authority/health-guidance";
-import { buildAuthorityExecutorReadinessChecks } from "../../../src/infrastructure/authority/executor-readiness";
 import {
   reconcileRequirementAggregateState,
   sanitizeRequirementAggregateRecords,
@@ -120,27 +142,20 @@ import {
 } from "../../../src/domain/org/system-company";
 import type { Company, CyberCompanyConfig, Department, EmployeeRef, QuickPrompt } from "../../../src/domain/org/types";
 import type {
-  AuthorityAppendCompanyEventRequest,
   AuthorityAppendRoomRequest,
-  AuthorityAgentFileRunRequest,
-  AuthorityAgentFileRunResponse,
   AuthorityAgentFilesResponse,
   AuthorityApprovalMutationResponse,
   AuthorityApprovalRequest,
   AuthorityApprovalResolveRequest,
   AuthorityBootstrapSnapshot,
-  AuthorityBatchHireEmployeesRequest,
   AuthorityBatchHireEmployeesResponse,
   AuthorityChatSendRequest,
-  AuthorityChatSendResponse,
   AuthorityCollaborationScopeResponse,
   AuthorityCompanyEventsResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityConversationStateDeleteRequest,
   AuthorityConversationStateUpsertRequest,
   AuthorityCreateCompanyRequest,
-  AuthorityCreateCompanyResponse,
-  AuthorityRetryCompanyProvisioningResponse,
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
@@ -153,7 +168,6 @@ import type {
   AuthorityEvent,
   AuthorityExecutorConfig,
   AuthorityExecutorCapabilitySnapshot,
-  AuthorityExecutorConfigPatch,
   AuthorityExecutorStatus,
   AuthorityHealthSnapshot,
   AuthorityHireEmployeeInput,
@@ -167,10 +181,9 @@ import type {
   AuthorityRoundUpsertRequest,
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
-  AuthorityRuntimeSyncRequest,
   AuthoritySessionHistoryResponse,
   AuthoritySessionListResponse,
-  AuthoritySwitchCompanyRequest,
+  AuthorityTakeoverCaseCommandRequest,
   AuthorityWorkItemDeleteRequest,
   AuthorityWorkItemUpsertRequest,
 } from "../../../src/infrastructure/authority/contract";
@@ -204,7 +217,6 @@ type RuntimeSliceTables =
 const AUTHORITY_PORT = Number.parseInt(process.env.CYBER_COMPANY_AUTHORITY_PORT ?? "19789", 10);
 const DATA_DIR = path.join(os.homedir(), ".cyber-company", "authority");
 const DB_PATH = path.join(DATA_DIR, "authority.sqlite");
-const SQLITE_BUSY_TIMEOUT_MS = 2_000;
 const SQLITE_WRITE_RETRY_DELAYS_MS = [25, 50, 100];
 const DEFAULT_OPENCLAW_URL = "ws://localhost:18789";
 const EXECUTOR_PROVIDER_ID = "openclaw";
@@ -334,27 +346,6 @@ function updateSessionStatusCapability(outcome: "success" | "error", error?: unk
       "OpenClaw executor does not support session_status; Authority runtime repair will stay lifecycle/chat-driven.",
     );
   }
-}
-
-function buildExecutorCapabilitySnapshot(
-  executor: AuthorityExecutorStatus,
-): AuthorityExecutorCapabilitySnapshot {
-  const sessionStatus =
-    executor.state === "ready"
-      ? sessionStatusCapabilityState
-      : ("unknown" as const);
-  const notes: string[] = [];
-  if (sessionStatus === "unsupported") {
-    notes.push("下游执行器不提供 session_status，Authority 会退回 lifecycle/chat 驱动的运行态修复。");
-  } else if (sessionStatus === "unknown" && executor.state === "ready") {
-    notes.push("Authority 尚未确认 session_status 能力，首次探测后会自动切换到真实边界。");
-  }
-
-  return {
-    sessionStatus,
-    processRuntime: "unsupported",
-    notes,
-  };
 }
 
 function normalizeDecisionTicketRevision(value: number | null | undefined): number {
@@ -588,16 +579,6 @@ function isLegacyAgentsDeletePurgeStateError(error: unknown) {
   );
 }
 
-function sendJson(response: import("node:http").ServerResponse, status: number, payload: unknown) {
-  response.statusCode = status;
-  response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(payload));
-}
-
-function sendError(response: import("node:http").ServerResponse, status: number, message: string) {
-  sendJson(response, status, { error: message });
-}
-
 function setCorsHeaders(response: import("node:http").ServerResponse) {
   response.setHeader("Access-Control-Allow-Origin", "*");
   response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -616,11 +597,6 @@ async function readJsonBody<T>(request: import("node:http").IncomingMessage): Pr
   return JSON.parse(raw) as T;
 }
 
-type GatewayProxyRequest = {
-  method: string;
-  params?: unknown;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -631,10 +607,6 @@ function readString(value: unknown): string | null {
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function ageMs(timestamp: number | null | undefined, now: number): number {
-  return Math.max(0, now - (timestamp ?? 0));
 }
 
 function isSqliteBusyError(error: unknown): boolean {
@@ -662,30 +634,18 @@ function sleepSync(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function toPublicExecutorConfig(config: StoredExecutorConfig): AuthorityExecutorConfig {
-  return {
-    type: "openclaw",
-    openclaw: {
-      url: config.openclaw.url,
-      tokenConfigured: Boolean(config.openclaw.token?.trim() || resolveLocalOpenClawGatewayToken()),
-    },
-    connectionState: config.connectionState ?? "idle",
-    lastError: config.lastError ?? null,
-    lastConnectedAt: config.lastConnectedAt ?? null,
-  };
-}
-
 class AuthorityRepository {
-  private readonly db: DatabaseSync;
+  private db: DatabaseSync;
   private readonly startedAt = Date.now();
 
   constructor(private readonly dbPath: string) {
     mkdirSync(DATA_DIR, { recursive: true });
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL;");
-    this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
-    this.db.exec("PRAGMA foreign_keys = ON;");
+    this.db = this.openDbConnection();
     this.initSchema();
+  }
+
+  private openDbConnection() {
+    return openAuthoritySqlite(this.dbPath, { enableWal: true });
   }
 
   private runWriteTransaction<T>(operation: () => T): T {
@@ -720,82 +680,34 @@ class AuthorityRepository {
     throw new Error(`SQLite write retry exhausted for ${label}.`);
   }
 
+  restoreFromBackup(backupPath: string, force = false) {
+    this.db.close();
+    try {
+      return restoreAuthorityBackup({
+        backupPath,
+        dbPath: this.dbPath,
+        force,
+      });
+    } finally {
+      this.db = this.openDbConnection();
+      this.initSchema();
+    }
+  }
   getHealth(input?: {
     executor: AuthorityExecutorStatus;
     executorConfig: AuthorityExecutorConfig;
     executorCapabilities: AuthorityExecutorCapabilitySnapshot;
   }): AuthorityHealthSnapshot {
-    const executorConfig = input?.executorConfig ?? toPublicExecutorConfig(this.loadExecutorConfig());
-    const executor =
-      input?.executor ??
-      {
-        adapter: "openclaw-bridge",
-        state:
-          executorConfig.connectionState === "ready"
-            ? "ready"
-            : executorConfig.connectionState === "blocked"
-              ? "blocked"
-              : "degraded",
-        provider: executorConfig.connectionState === "ready" ? "openclaw" : "none",
-        note:
-          executorConfig.connectionState === "ready"
-            ? "Authority 已接入 OpenClaw。"
-            : executorConfig.lastError ?? "Authority 尚未接入 OpenClaw。",
-      };
-    const doctor = readAuthorityDoctorSnapshot({ dbPath: this.dbPath });
-    const preflight = readAuthorityPreflightSnapshot({ dbPath: this.dbPath });
-    const guidance = buildAuthorityHealthGuidance({
-      doctor,
-      preflight,
-      executor,
+    return buildAuthorityHealthSnapshot({
+      dbPath: this.dbPath,
+      startedAt: this.startedAt,
+      storedConfig: this.loadExecutorConfig(),
+      sessionStatusCapabilityState,
+      resolveLocalToken: resolveLocalOpenClawGatewayToken,
+      executor: input?.executor,
+      executorConfig: input?.executorConfig,
+      executorCapabilities: input?.executorCapabilities,
     });
-    return {
-      ok: true,
-      executor,
-      executorConfig,
-      executorCapabilities: input?.executorCapabilities ?? buildExecutorCapabilitySnapshot(executor),
-      executorReadiness: buildAuthorityExecutorReadinessChecks({
-        executor,
-        executorConfig,
-        executorCapabilities: input?.executorCapabilities ?? buildExecutorCapabilitySnapshot(executor),
-      }),
-      authority: {
-        dbPath: this.dbPath,
-        connected: true,
-        startedAt: this.startedAt,
-        doctor: {
-          status: doctor.status,
-          schemaVersion: doctor.schemaVersion,
-          integrityStatus: doctor.integrityStatus,
-          integrityMessage: doctor.integrityMessage,
-          backupDir: doctor.backupDir,
-          backupCount: doctor.backupCount,
-          latestBackupAt: doctor.latestBackupAt,
-          companyCount: doctor.companyCount,
-          runtimeCount: doctor.runtimeCount,
-          eventCount: doctor.eventCount,
-          latestRuntimeAt: doctor.latestRuntimeAt,
-          latestEventAt: doctor.latestEventAt,
-          activeCompanyId: doctor.activeCompanyId,
-          issues: doctor.issues,
-        },
-        preflight: {
-          status: preflight.status,
-          dataDir: preflight.dataDir,
-          backupDir: preflight.backupDir,
-          dbExists: preflight.dbExists,
-          schemaVersion: preflight.schemaVersion,
-          integrityStatus: preflight.integrityStatus,
-          integrityMessage: preflight.integrityMessage,
-          backupCount: preflight.backupCount,
-          latestBackupAt: preflight.latestBackupAt,
-          notes: preflight.notes,
-          warnings: preflight.warnings,
-          issues: preflight.issues,
-        },
-        guidance,
-      },
-    };
   }
 
   private initSchema() {
@@ -1408,25 +1320,12 @@ class AuthorityRepository {
     executorConfig: AuthorityExecutorConfig;
     executorCapabilities: AuthorityExecutorCapabilitySnapshot;
   }): AuthorityBootstrapSnapshot {
-    const health = this.getHealth(input);
-    const config = this.loadConfig();
-    const activeCompany =
-      config?.companies.find((company) => company.id === config.activeCompanyId) ?? null;
-    const runtime = activeCompany ? this.loadRuntime(activeCompany.id) : null;
-    return {
-      config,
-      activeCompany,
-      runtime,
-      executor: health.executor,
-      executorConfig: health.executorConfig,
-      executorCapabilities: health.executorCapabilities,
-      executorReadiness: health.executorReadiness,
-      authority: {
-        url: `http://127.0.0.1:${AUTHORITY_PORT}`,
-        dbPath: this.dbPath,
-        connected: true,
-      },
-    };
+    return buildAuthorityBootstrapSnapshot({
+      authorityUrl: `http://127.0.0.1:${AUTHORITY_PORT}`,
+      config: this.loadConfig(),
+      loadRuntime: (companyId) => this.loadRuntime(companyId),
+      health: this.getHealth(input),
+    });
   }
 
   switchCompany(companyId: string) {
@@ -1601,6 +1500,86 @@ class AuthorityRepository {
     return {
       bootstrap: this.getBootstrap(),
       approval: nextApproval,
+    };
+  }
+
+  transitionTakeoverCase(input: AuthorityTakeoverCaseCommandRequest) {
+    const config = this.loadConfig();
+    if (!config) {
+      throw new Error("Authority 尚未加载公司配置。");
+    }
+    const company = config.companies.find((item) => item.id === input.companyId) ?? null;
+    if (!company) {
+      throw new Error(`Unknown company: ${input.companyId}`);
+    }
+
+    const nextTakeoverCases = applyTakeoverCaseWorkflowAction({
+      company,
+      caseItem: takeoverCaseRecordToCase(input.caseRecord),
+      action: input.action,
+      actorId: input.actorId,
+      actorLabel: input.actorLabel,
+      assigneeAgentId: input.assigneeAgentId,
+      assigneeLabel: input.assigneeLabel,
+      note: input.note,
+      dispatchId: input.dispatchId,
+      timestamp: input.timestamp,
+    });
+    const nextTakeoverCase =
+      nextTakeoverCases.find((record) => record.id === input.caseRecord.id)
+      ?? nextTakeoverCases.find((record) => record.sourceSessionKey === input.caseRecord.sourceSessionKey)
+      ?? null;
+    if (!nextTakeoverCase) {
+      throw new Error(`Failed to persist takeover case: ${input.caseRecord.id}`);
+    }
+
+    const nextCompany = normalizeCompany({
+      ...company,
+      takeoverCases: nextTakeoverCases,
+    });
+    const nextConfig: CyberCompanyConfig = {
+      ...config,
+      companies: config.companies.map((item) => (item.id === company.id ? nextCompany : item)),
+    };
+    this.saveConfig(nextConfig);
+    this.appendCompanyEvent(
+      createCompanyEvent({
+        companyId: company.id,
+        kind: "takeover_case_updated",
+        dispatchId: input.dispatchId ?? nextTakeoverCase.sourceDispatchId ?? undefined,
+        workItemId: nextTakeoverCase.sourceWorkItemId ?? undefined,
+        topicKey: nextTakeoverCase.sourceTopicKey ?? undefined,
+        roomId: nextTakeoverCase.sourceRoomId ?? undefined,
+        fromActorId: input.actorId ?? "operator:local-user",
+        targetActorId: nextTakeoverCase.assigneeAgentId ?? nextTakeoverCase.ownerAgentId ?? undefined,
+        sessionKey: nextTakeoverCase.sourceSessionKey,
+        createdAt: nextTakeoverCase.updatedAt,
+        payload: {
+          takeoverCaseId: nextTakeoverCase.id,
+          status: nextTakeoverCase.status,
+          action: input.action,
+          title: nextTakeoverCase.title,
+          route: nextTakeoverCase.route,
+          ownerAgentId: nextTakeoverCase.ownerAgentId ?? null,
+          ownerLabel: nextTakeoverCase.ownerLabel ?? null,
+          assigneeAgentId: nextTakeoverCase.assigneeAgentId ?? null,
+          assigneeLabel: nextTakeoverCase.assigneeLabel ?? null,
+          sourceSessionKey: nextTakeoverCase.sourceSessionKey,
+          sourceWorkItemId: nextTakeoverCase.sourceWorkItemId ?? null,
+          sourceTopicKey: nextTakeoverCase.sourceTopicKey ?? null,
+          sourceDispatchId: nextTakeoverCase.sourceDispatchId ?? null,
+          redispatchId: input.dispatchId ?? null,
+          sourceRoomId: nextTakeoverCase.sourceRoomId ?? null,
+          failureSummary: nextTakeoverCase.failureSummary,
+          recommendedNextAction: nextTakeoverCase.recommendedNextAction,
+          note: input.note ?? null,
+          auditTrailLength: nextTakeoverCase.auditTrail?.length ?? 0,
+        },
+      }),
+    );
+    return {
+      bootstrap: this.getBootstrap(),
+      takeoverCase: nextTakeoverCase,
     };
   }
 
@@ -2671,11 +2650,19 @@ class AuthorityRepository {
     );
   }
 
-  listCompanyEvents(companyId: string, cursor?: string | null, since?: number): AuthorityCompanyEventsResponse {
+  listCompanyEvents(
+    companyId: string,
+    cursor?: string | null,
+    since?: number,
+    limit?: number,
+    recent?: boolean,
+  ): AuthorityCompanyEventsResponse {
     const clauses = ["company_id = ?"];
     const args: Array<string | number> = [companyId];
+    const pageLimit =
+      typeof limit === "number" && Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 200;
     if (cursor) {
-      clauses.push("seq > ?");
+      clauses.push(recent ? "seq < ?" : "seq > ?");
       args.push(Number.parseInt(cursor, 10) || 0);
     }
     if (typeof since === "number") {
@@ -2686,16 +2673,21 @@ class AuthorityRepository {
       SELECT seq, payload_json
       FROM event_log
       WHERE ${clauses.join(" AND ")}
-      ORDER BY seq ASC
-      LIMIT 200
+      ORDER BY seq ${recent ? "DESC" : "ASC"}
+      LIMIT ${pageLimit + 1}
     `).all(...args) as Array<{ seq: number; payload_json: string }>;
-    const events = rows
+    const page = normalizeCompanyEventsPageRows({
+      rows,
+      limit: pageLimit,
+      recent,
+    });
+    const events = page.rows
       .map((row) => parseJson<CompanyEvent | null>(row.payload_json, null))
       .filter(isPresent);
     return {
       companyId,
       events,
-      nextCursor: rows.length > 0 ? String(rows[rows.length - 1]!.seq) : cursor ?? null,
+      nextCursor: page.nextCursor,
     };
   }
 
@@ -3881,29 +3873,18 @@ function broadcast(event: AuthorityEvent) {
 
 function getExecutorSnapshot() {
   const current = repository.loadExecutorConfig();
-  const bridgeSnapshot = executorBridge.snapshot();
-  const stored = repository.saveExecutorConfig({
-    ...current,
-    openclaw: {
-      url: bridgeSnapshot.openclaw.url,
-      token: current.openclaw.token ?? "",
-    },
-    connectionState: bridgeSnapshot.connectionState,
-    lastError: bridgeSnapshot.lastError,
-    lastConnectedAt: bridgeSnapshot.lastConnectedAt,
+  const snapshot = buildAuthorityExecutorSnapshot({
+    storedConfig: current,
+    bridgeSnapshot: executorBridge.snapshot(),
+    executorStatus: executorBridge.status(),
+    sessionStatusCapabilityState,
+    resolveLocalToken: resolveLocalOpenClawGatewayToken,
   });
-  const executorStatus = executorBridge.status();
-  const executor =
-    sessionStatusCapabilityState === "unsupported" && executorStatus.state === "ready"
-      ? {
-          ...executorStatus,
-          note: `${executorStatus.note} 当前 OpenClaw 未提供 session_status，Authority 已降级为 lifecycle/chat 修复。`,
-        }
-      : executorStatus;
+  repository.saveExecutorConfig(snapshot.nextStoredConfig as StoredExecutorConfig);
   return {
-    executor,
-    executorConfig: toPublicExecutorConfig(stored),
-    executorCapabilities: buildExecutorCapabilitySnapshot(executor),
+    executor: snapshot.executor,
+    executorConfig: snapshot.executorConfig,
+    executorCapabilities: snapshot.executorCapabilities,
   };
 }
 
@@ -4496,132 +4477,14 @@ function queueManagedExecutorSync(reason: string) {
   return managedExecutorSyncPromise;
 }
 
-async function proxyGatewayRequest<T>(method: string, params?: unknown): Promise<T> {
-  if (method === "sessions.list") {
-    const result = await executorBridge.request<AuthoritySessionListResponse>(method, params ?? {});
-    const requestedAgentId = isRecord(params) ? readString(params.agentId) : null;
-    if (requestedAgentId) {
-      return result as T;
-    }
-    const allowedAgentIds = new Set(repository.getCompanyAgentIds());
-    if (allowedAgentIds.size === 0) {
-      return result as T;
-    }
-    const sessions = (result.sessions ?? []).filter((session) => {
-      const actorId =
-        readString(session.actorId)
-        ?? (typeof session.key === "string" && session.key.startsWith("agent:")
-          ? session.key.split(":")[1] ?? null
-          : null);
-      return actorId ? allowedAgentIds.has(actorId) : false;
-    });
-    const sessionsByCompanyId = new Map<
-      string,
-      Parameters<typeof buildAgentSessionRecordsFromSessions>[0]["sessions"]
-    >();
-    sessions.forEach((session) => {
-      const actorId =
-        readString(session.actorId)
-        ?? (typeof session.key === "string" && session.key.startsWith("agent:")
-          ? session.key.split(":")[1] ?? null
-          : null);
-      const companyId =
-        (typeof session.key === "string"
-          ? repository.getConversationContext(session.key)?.companyId
-          : null)
-        ?? (actorId ? repository.findCompanyIdByAgentId(actorId) : null);
-      if (!companyId) {
-        return;
-      }
-      const existing = sessionsByCompanyId.get(companyId) ?? [];
-      existing.push(session);
-      sessionsByCompanyId.set(companyId, existing);
-    });
-    sessionsByCompanyId.forEach((companySessions, companyId) => {
-      repository.updateRuntimeFromSessionList(companyId, companySessions);
-    });
-    return {
-      ...result,
-      count: sessions.length,
-      sessions,
-    } as T;
-  }
-
-  if (method === "session_status") {
-    if (sessionStatusCapabilityState === "unsupported") {
-      throw new Error("OpenClaw executor does not support session_status.");
-    }
-    try {
-      const result = await executorBridge.request<T>(method, params ?? {});
-      updateSessionStatusCapability("success");
-      const sessionKey = isRecord(params)
-        ? readString(params.sessionKey) ?? readString(params.key)
-        : null;
-      if (sessionKey) {
-        const normalized = normalizeProviderSessionStatus(EXECUTOR_PROVIDER_ID, sessionKey, result);
-        const companyId =
-          repository.getConversationContext(sessionKey)?.companyId
-          ?? (normalized.agentId ? repository.findCompanyIdByAgentId(normalized.agentId) : null);
-        if (companyId) {
-          repository.applyRuntimeSessionStatus(companyId, normalized);
-        }
-      }
-      return result;
-    } catch (error) {
-      updateSessionStatusCapability("error", error);
-      throw error;
-    }
-  }
-
-  if (method === "sessions.resolve") {
-    const sessionKey = isRecord(params) ? readString(params.key) : null;
-    try {
-      return await executorBridge.request<T>(method, params ?? {});
-    } catch (error) {
-      if (
-        sessionKey &&
-        error instanceof Error &&
-        error.message.includes("No session found")
-      ) {
-        return {
-          ok: true,
-          key: sessionKey,
-          error: error.message,
-        } as T;
-      }
-      throw error;
-    }
-  }
-
-  if (method === "sessions.reset") {
-    const sessionKey = isRecord(params) ? readString(params.key) : null;
-    const result = await executorBridge.request<T>(method, params ?? {});
-    if (sessionKey) {
-      repository.resetSession(sessionKey);
-    }
-    return result;
-  }
-
-  if (method === "sessions.delete") {
-    const sessionKey = isRecord(params) ? readString(params.key) : null;
-    const result = await executorBridge.request<T>(method, params ?? {});
-    if (sessionKey) {
-      repository.deleteSession(sessionKey);
-    }
-    return result;
-  }
-
-  if (method === "agents.files.set" && isRecord(params)) {
-    const agentId = readString(params.agentId);
-    const name = readString(params.name);
-    const content = typeof params.content === "string" ? params.content : null;
-    if (agentId && name && content !== null) {
-      repository.setAgentFile(agentId, name, content);
-    }
-  }
-
-  return executorBridge.request<T>(method, params ?? {});
-}
+const proxyGatewayRequest = createAuthorityGatewayProxy({
+  requestExecutor: (method, params) => executorBridge.request(method, params ?? {}),
+  repository,
+  providerId: EXECUTOR_PROVIDER_ID,
+  getSessionStatusCapabilityState: () => sessionStatusCapabilityState,
+  updateSessionStatusCapability,
+  normalizeProviderSessionStatus,
+});
 
 executorBridge.onStateChange(() => {
   const connectionState = executorBridge.snapshot().connectionState;
@@ -4728,121 +4591,30 @@ executorBridge.onEvent((event) => {
   });
 });
 
-async function performRuntimeSessionStatusRepair() {
-  if (executorBridge.status().state !== "ready") {
-    return;
-  }
-  if (sessionStatusCapabilityState === "unsupported") {
-    return;
-  }
-
-  const config = repository.loadConfig();
-  if (!config?.companies?.length) {
-    return;
-  }
-
-  const touchedCompanyIds = new Set<string>();
-
-  for (const company of config.companies) {
-    const runtime = repository.loadRuntime(company.id);
-    const latestSessionByAgentId = new Map<
-      string,
-      NonNullable<typeof runtime.activeAgentSessions>[number]
-    >();
-    for (const session of runtime.activeAgentSessions ?? []) {
-      if (session.agentId && !latestSessionByAgentId.has(session.agentId)) {
-        latestSessionByAgentId.set(session.agentId, session);
-      }
-    }
-
-    const candidateSessionKeys = new Set<string>();
-    const busySessionKeys = new Set(
-      (runtime.activeAgentRuntime ?? []).flatMap((entry) => entry.activeSessionKeys),
-    );
-    for (const session of runtime.activeAgentSessions ?? []) {
-      if (
-        busySessionKeys.has(session.sessionKey) &&
-        ageMs(session.lastStatusSyncAt, Date.now()) >= 10_000
-      ) {
-        candidateSessionKeys.add(session.sessionKey);
-      }
-    }
-
-    const openWorkAgentIds = new Set<string>();
-    for (const workItem of runtime.activeWorkItems ?? []) {
-      if (workItem.status === "completed" || workItem.status === "archived") {
-        continue;
-      }
-      if (workItem.ownerActorId) {
-        openWorkAgentIds.add(workItem.ownerActorId);
-      }
-      if (workItem.batonActorId) {
-        openWorkAgentIds.add(workItem.batonActorId);
-      }
-      workItem.steps
-        .filter((step) => step.status === "active")
-        .forEach((step) => {
-          if (step.assigneeActorId) {
-            openWorkAgentIds.add(step.assigneeActorId);
-          }
-        });
-    }
-    for (const dispatch of runtime.activeDispatches ?? []) {
-      if (dispatch.status === "answered" || dispatch.status === "blocked" || dispatch.status === "superseded") {
-        continue;
-      }
-      dispatch.targetActorIds.forEach((agentId) => openWorkAgentIds.add(agentId));
-    }
-    for (const request of runtime.activeSupportRequests ?? []) {
-      if (
-        request.ownerActorId &&
-        (request.status === "open" || request.status === "acknowledged" || request.status === "in_progress")
-      ) {
-        openWorkAgentIds.add(request.ownerActorId);
-      }
-    }
-
-    for (const agentId of openWorkAgentIds) {
-      const session = latestSessionByAgentId.get(agentId);
-      if (!session) {
-        continue;
-      }
-      if (busySessionKeys.has(session.sessionKey)) {
-        continue;
-      }
-      if (ageMs(session.lastStatusSyncAt, Date.now()) >= 30_000) {
-        candidateSessionKeys.add(session.sessionKey);
-      }
-    }
-
-    for (const sessionKey of [...candidateSessionKeys].slice(0, 24)) {
-      try {
-        const result = await executorBridge.request("session_status", { sessionKey });
-        updateSessionStatusCapability("success");
-        const normalized = normalizeProviderSessionStatus(EXECUTOR_PROVIDER_ID, sessionKey, result);
-        repository.applyRuntimeSessionStatus(company.id, normalized);
-        touchedCompanyIds.add(company.id);
-      } catch (error) {
-        updateSessionStatusCapability("error", error);
-        if (String(sessionStatusCapabilityState) === "unsupported") {
-          break;
-        }
-        console.warn(`Failed runtime read-repair for ${sessionKey}.`, error);
-      }
-    }
-  }
-
-  touchedCompanyIds.forEach((companyId) => {
-    broadcast({
-      type: "company.updated",
-      companyId,
-      timestamp: Date.now(),
-    });
-  });
-}
-
 setInterval(() => {
-  void performRuntimeSessionStatusRepair();
+  const config = repository.loadConfig();
+  void runAuthorityRuntimeSessionStatusRepair({
+    companies: config?.companies ?? [],
+    executorState: executorBridge.status().state,
+    sessionStatusCapabilityState,
+    loadRuntime: (companyId) => repository.loadRuntime(companyId),
+    requestSessionStatus: (sessionKey) => executorBridge.request("session_status", { sessionKey }),
+    updateSessionStatusCapability,
+    getSessionStatusCapabilityState: () => sessionStatusCapabilityState,
+    normalizeProviderSessionStatus,
+    applyRuntimeSessionStatus: (companyId, status) => repository.applyRuntimeSessionStatus(companyId, status),
+    broadcastCompanyUpdated: (companyId) => {
+      broadcast({
+        type: "company.updated",
+        companyId,
+        timestamp: Date.now(),
+      });
+    },
+    providerId: EXECUTOR_PROVIDER_ID,
+    logWarn: (message, error) => {
+      console.warn(message, error);
+    },
+  });
 }, 10_000);
 
 setInterval(() => {
@@ -4858,6 +4630,164 @@ void executorBridge.reconnect().catch((error) => {
 });
 companyOpsEngine.start();
 
+const runAuthorityOperatorAction = createAuthorityOperatorActionRunner({
+  dbPath: DB_PATH,
+  dataDir: DATA_DIR,
+  repository,
+  companyOpsEngine,
+  queueManagedExecutorSync,
+  buildBootstrapSnapshot,
+  getExecutorSnapshot,
+  notifyBootstrapUpdated: () => {
+    broadcast({ type: "bootstrap.updated", timestamp: Date.now() });
+  },
+});
+
+const runtimeCommandRouteDeps = {
+  listActors: () => repository.listActors(),
+  proxyGatewayRequest,
+  runAgentFile: async ({
+    agentId,
+    entryPath,
+    payload,
+    timeoutMs,
+  }: {
+    agentId: string;
+    entryPath: string;
+    payload?: Record<string, unknown>;
+    timeoutMs?: number;
+  }) => {
+    const filesResult = await proxyGatewayRequest<AuthorityAgentFilesResponse>("agents.files.list", { agentId });
+    return runAgentWorkspaceEntry({
+      agentId,
+      workspace: filesResult.workspace,
+      entryPath,
+      payload,
+      timeoutMs,
+    });
+  },
+  requestApproval: (body: AuthorityApprovalRequest) => repository.requestApproval(body),
+  resolveApproval: (body: AuthorityApprovalResolveRequest) => repository.resolveApproval(body),
+  transitionRequirement: (body: AuthorityRequirementTransitionRequest) => repository.transitionRequirement(body),
+  promoteRequirement: (body: AuthorityRequirementPromoteRequest) => repository.promoteRequirement(body),
+  upsertRoom: (body: AuthorityAppendRoomRequest) => repository.upsertRoom(body),
+  deleteRoom: (body: AuthorityRoomDeleteRequest) => repository.deleteRoom(body),
+  upsertRoomBindings: (body: AuthorityRoomBindingsUpsertRequest) => repository.upsertRoomBindings(body),
+  upsertRound: (body: AuthorityRoundUpsertRequest) => repository.upsertRound(body),
+  deleteRound: (body: AuthorityRoundDeleteRequest) => repository.deleteRound(body),
+  upsertMission: (body: AuthorityMissionUpsertRequest) => repository.upsertMission(body),
+  deleteMission: (body: AuthorityMissionDeleteRequest) => repository.deleteMission(body),
+  upsertConversationState: (body: AuthorityConversationStateUpsertRequest) =>
+    repository.upsertConversationState(body),
+  deleteConversationState: (body: AuthorityConversationStateDeleteRequest) =>
+    repository.deleteConversationState(body),
+  upsertWorkItem: (body: AuthorityWorkItemUpsertRequest) => repository.upsertWorkItem(body),
+  deleteWorkItem: (body: AuthorityWorkItemDeleteRequest) => repository.deleteWorkItem(body),
+  upsertDispatch: (body: AuthorityDispatchUpsertRequest) => repository.upsertDispatch(body),
+  deleteDispatch: (body: AuthorityDispatchDeleteRequest) => repository.deleteDispatch(body),
+  upsertArtifact: (body: AuthorityArtifactUpsertRequest) => repository.upsertArtifact(body),
+  syncArtifactMirrors: (body: AuthorityArtifactMirrorSyncRequest) => repository.syncArtifactMirrors(body),
+  deleteArtifact: (body: AuthorityArtifactDeleteRequest) => repository.deleteArtifact(body),
+  upsertDecisionTicket: (body: AuthorityDecisionTicketUpsertRequest) => repository.upsertDecisionTicket(body),
+  resolveDecisionTicket: (body: AuthorityDecisionTicketResolveRequest) =>
+    repository.resolveDecisionTicket(body),
+  cancelDecisionTicket: (body: AuthorityDecisionTicketCancelRequest) =>
+    repository.cancelDecisionTicket(body),
+  deleteDecisionTicket: (body: AuthorityDecisionTicketDeleteRequest) => repository.deleteDecisionTicket(body),
+  transitionTakeoverCase: (body: AuthorityTakeoverCaseCommandRequest) =>
+    repository.transitionTakeoverCase(body),
+  appendCompanyEvent: (event: CompanyEvent) => repository.appendCompanyEvent(event),
+};
+
+const companyManagementCommands = createAuthorityCompanyManagementCommands({
+  repository: {
+    saveConfig: (config) => repository.saveConfig(config),
+    loadConfig: () => repository.loadConfig(),
+    saveRuntime: (runtime) => repository.saveRuntime(runtime),
+    loadRuntime: (companyId) => repository.loadRuntime(companyId),
+    switchCompany: (companyId) => repository.switchCompany(companyId),
+    deleteCompany: (companyId) => repository.deleteCompany(companyId),
+    clearManagedExecutorAgentsForCompany: (companyId) =>
+      repository.clearManagedExecutorAgentsForCompany(companyId),
+    hasCompany: (companyId) => repository.hasCompany(companyId),
+  },
+  buildCompanyDefinition,
+  runManagedExecutorMutation,
+  ensureManagedCompanyExecutorProvisionedBestEffort,
+  ensureManagedCompanyExecutorProvisioned,
+  updateCompanyExecutorProvisioning,
+  listManagedProvisioningAgentIds,
+  resolveProvisioningFailureState,
+  stringifyError,
+  hireCompanyEmployeeStrongConsistency,
+  hireCompanyEmployeesStrongConsistency,
+  buildBootstrapSnapshot,
+  getExecutorState: () => executorBridge.status().state,
+  deleteManagedAgentFromExecutor,
+  listExecutorAgentIds,
+  cleanupCompanyWorkspace: (companyId) =>
+    removeManagedExecutorCompanyWorkspace({ companyId }),
+  logWarn: (message, error) => {
+    console.warn(message, error);
+  },
+});
+
+const authorityControlRouteDeps: AuthorityControlRouteDependencies = {
+  buildHealthSnapshot,
+  buildBootstrapSnapshot,
+  runAuthorityOperatorAction,
+  getExecutorConfig: () => getExecutorSnapshot().executorConfig,
+  patchExecutorConfig: (body) =>
+    runAuthorityExecutorConfigPatch({
+      body,
+      deps: {
+        loadExecutorConfig: () => repository.loadExecutorConfig(),
+        saveExecutorConfig: (config) => repository.saveExecutorConfig(config),
+        patchExecutorBridgeConfig: (config) => executorBridge.patchConfig(config),
+        broadcastExecutorStatus,
+        queueManagedExecutorSync,
+        getExecutorSnapshotConfig: () => getExecutorSnapshot().executorConfig,
+      },
+    }),
+  proxyGatewayRequest: async (method, params) => {
+    if (!method || !method.trim()) {
+      throw authorityBadRequest("Gateway proxy method is required.");
+    }
+    return proxyGatewayRequest(method.trim(), params);
+  },
+};
+
+const authorityCompanyStateRouteDeps: AuthorityCompanyStateRouteDependencies = {
+  loadRuntime: (companyId) => repository.loadRuntime(companyId),
+  saveRuntime: (snapshot) => repository.saveRuntime(snapshot),
+  listCompanyEvents: (companyId, cursor, since, limit, recent) =>
+    repository.listCompanyEvents(companyId, cursor, since, limit, recent),
+  getCollaborationScope: (companyId, agentId) =>
+    repository.getCollaborationScope(companyId, agentId),
+};
+
+const authorityCompanyManagementRouteDeps: AuthorityCompanyManagementRouteDependencies = {
+  saveConfig: companyManagementCommands.saveConfig,
+  createCompany: companyManagementCommands.createCompany,
+  retryCompanyProvisioning: companyManagementCommands.retryCompanyProvisioning,
+  hireEmployee: companyManagementCommands.hireEmployee,
+  batchHireEmployees: companyManagementCommands.batchHireEmployees,
+  deleteCompany: companyManagementCommands.deleteCompany,
+  switchCompany: companyManagementCommands.switchCompany,
+};
+
+const authorityChatCommandRouteDeps: AuthorityChatCommandRouteDependencies = {
+  runChatSendCommand: ({ body }) =>
+    runAuthorityChatSendCommand({
+      body,
+      deps: {
+        repository,
+        proxyGatewayRequest,
+        providerId: EXECUTOR_PROVIDER_ID,
+      },
+    }),
+};
+
 const server = createServer(async (request, response) => {
   setCorsHeaders(response);
   if (request.method === "OPTIONS") {
@@ -4868,71 +4798,6 @@ const server = createServer(async (request, response) => {
 
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
   try {
-    if (request.method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, buildHealthSnapshot());
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/bootstrap") {
-      sendJson(response, 200, buildBootstrapSnapshot());
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/executor") {
-      sendJson(response, 200, getExecutorSnapshot().executorConfig);
-      return;
-    }
-
-    if (request.method === "PATCH" && url.pathname === "/executor") {
-      const body = await readJsonBody<AuthorityExecutorConfigPatch>(request);
-      const current = repository.loadExecutorConfig();
-      const desired = repository.saveExecutorConfig({
-        ...current,
-        openclaw: {
-          url:
-            typeof body.openclaw?.url === "string" && body.openclaw.url.trim().length > 0
-              ? body.openclaw.url.trim()
-              : current.openclaw.url,
-          token:
-            body.openclaw?.token !== undefined
-              ? body.openclaw.token ?? ""
-              : (current.openclaw.token ?? ""),
-        },
-      });
-      try {
-        try {
-          await executorBridge.patchConfig({
-            openclaw: {
-              url: desired.openclaw.url,
-              token: desired.openclaw.token ?? "",
-            },
-            reconnect: body.reconnect ?? Boolean(body.openclaw),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          const classified = classifyExecutorReconnect(message);
-          if (!classified.shouldRetry) {
-            throw error;
-          }
-        }
-      } finally {
-        broadcastExecutorStatus();
-      }
-      await queueManagedExecutorSync("executor.patch");
-      sendJson(response, 200, getExecutorSnapshot().executorConfig);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/gateway/request") {
-      const body = await readJsonBody<GatewayProxyRequest>(request);
-      if (!body.method || !body.method.trim()) {
-        sendError(response, 400, "Gateway proxy method is required.");
-        return;
-      }
-      sendJson(response, 200, await proxyGatewayRequest(body.method.trim(), body.params));
-      return;
-    }
-
     const companyCodexAuthMatch = request.method === "POST"
       ? /^\/companies\/([^/]+)\/codex-auth\/sync$/u.exec(url.pathname)
       : null;
@@ -4941,7 +4806,7 @@ const server = createServer(async (request, response) => {
         const companyId = decodeURIComponent(companyCodexAuthMatch[1] ?? "");
         const source = url.searchParams.get("source") === "gateway" ? "gateway" : "cli";
         const result = await syncCompanyCodexAuth(companyId, source);
-        sendJson(response, 200, {
+        sendAuthorityJson(response, 200, {
           ok: true,
           companyId,
           source,
@@ -4952,627 +4817,39 @@ const server = createServer(async (request, response) => {
           ...(result.accountId ? { accountId: result.accountId } : {}),
         });
       } catch (error) {
-        sendError(response, 400, stringifyError(error));
+        sendAuthorityError(response, 400, stringifyError(error));
       }
       return;
     }
 
-    if (request.method === "PUT" && url.pathname === "/config") {
-      const body = await readJsonBody<{ config: CyberCompanyConfig }>(request);
-      repository.saveConfig(body.config);
-      companyOpsEngine.schedule("config.save");
-      await queueManagedExecutorSync("config.save");
-      sendJson(response, 200, buildBootstrapSnapshot());
-      broadcast({ type: "bootstrap.updated", timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/companies") {
-      const body = await readJsonBody<AuthorityCreateCompanyRequest>(request);
-      const { company, runtime: seededRuntime } = buildCompanyDefinition(body);
-      const existingConfig = repository.loadConfig();
-      const nextConfig: CyberCompanyConfig = existingConfig
-        ? {
-            ...existingConfig,
-            companies: [...existingConfig.companies, company],
-            activeCompanyId: company.id,
-          }
-        : {
-            version: 1,
-            companies: [company],
-            activeCompanyId: company.id,
-            preferences: { theme: "classic", locale: "zh-CN" },
-          };
-      let provisioningFailure: unknown = null;
-      let provisionedCompany: Company | null = null;
-      await runManagedExecutorMutation(async () => {
-        repository.saveConfig(nextConfig);
-        repository.saveRuntime(seededRuntime);
-        try {
-          await ensureManagedCompanyExecutorProvisionedBestEffort(
-            company,
-            repository.loadRuntime(company.id),
-            "company.create",
-          );
-          provisionedCompany = updateCompanyExecutorProvisioning({
-            companyId: company.id,
-            state: "ready",
-            pendingAgentIds: [],
-            lastError: null,
-            activeCompanyId: company.id,
-          });
-        } catch (error) {
-          provisioningFailure = error;
-          const pendingAgentIds = listManagedProvisioningAgentIds(company);
-          provisionedCompany = updateCompanyExecutorProvisioning({
-            companyId: company.id,
-            state: resolveProvisioningFailureState(),
-            pendingAgentIds,
-            lastError: stringifyError(error),
-            activeCompanyId: company.id,
-          });
-          console.warn(
-            `Managed OpenClaw provisioning for ${company.id} degraded during company create.`,
-            error,
-          );
-        }
-      });
-      const payload: AuthorityCreateCompanyResponse = {
-        company: provisionedCompany ?? repository.loadConfig()?.companies.find((item) => item.id === company.id) ?? company,
-        config: repository.loadConfig()!,
-        runtime: repository.loadRuntime(company.id),
-        warnings:
-          provisioningFailure
-            ? [
-                `执行器仍在补齐：${stringifyError(provisioningFailure)}`,
-              ]
-            : [],
-      };
-      companyOpsEngine.schedule("company.create", company.id);
-      sendJson(response, 200, payload);
-      void queueManagedExecutorSync(provisioningFailure ? "company.create.degraded" : "company.create");
-      broadcast({ type: "bootstrap.updated", companyId: company.id, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId: company.id, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && /\/companies\/[^/]+\/provisioning\/retry$/.test(url.pathname)) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      const company = repository.loadConfig()?.companies.find((item) => item.id === companyId) ?? null;
-      if (!company) {
-        sendError(response, 404, `Unknown company: ${companyId}`);
-        return;
-      }
-      const runtime = repository.loadRuntime(companyId);
-      let provisioningFailure: unknown = null;
-      let nextCompany: Company | null = null;
-      await runManagedExecutorMutation(async () => {
-        try {
-          await ensureManagedCompanyExecutorProvisioned(company, runtime, "company.provisioning.retry");
-          nextCompany = updateCompanyExecutorProvisioning({
-            companyId,
-            state: "ready",
-            pendingAgentIds: [],
-            lastError: null,
-          });
-        } catch (error) {
-          provisioningFailure = error;
-          nextCompany = updateCompanyExecutorProvisioning({
-            companyId,
-            state: resolveProvisioningFailureState(),
-            pendingAgentIds: listManagedProvisioningAgentIds(company),
-            lastError: stringifyError(error),
-          });
-        }
-      });
-      const payload: AuthorityRetryCompanyProvisioningResponse = {
-        company: nextCompany ?? repository.loadConfig()?.companies.find((item) => item.id === companyId) ?? company,
-        config: repository.loadConfig()!,
-        runtime: repository.loadRuntime(companyId),
-        warnings:
-          provisioningFailure
-            ? [`执行器仍在补齐：${stringifyError(provisioningFailure)}`]
-            : [],
-      };
-      sendJson(response, 200, payload);
-      void queueManagedExecutorSync(
-        provisioningFailure ? "company.provisioning.retry.degraded" : "company.provisioning.retry",
-      );
-      broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && /\/companies\/[^/]+\/employees$/.test(url.pathname)) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      const body = await readJsonBody<AuthorityHireEmployeeRequest>(request);
-      const payload = await hireCompanyEmployeeStrongConsistency({
-        ...body,
-        companyId,
-      });
-      companyOpsEngine.schedule("company.employee.hire", companyId);
-      sendJson(response, 200, payload);
-      broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && /\/companies\/[^/]+\/employees\/batch$/.test(url.pathname)) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      const body = await readJsonBody<AuthorityBatchHireEmployeesRequest>(request);
-      const payload = await hireCompanyEmployeesStrongConsistency({
-        companyId,
-        hires: Array.isArray(body.hires) ? body.hires : [],
-      });
-      companyOpsEngine.schedule("company.employee.batch_hire", companyId);
-      sendJson(response, 200, payload);
-      broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "DELETE" && url.pathname.startsWith("/companies/")) {
-      const companyId = decodeURIComponent(url.pathname.slice("/companies/".length));
-      try {
-        const bootstrap = await runManagedExecutorMutation(() =>
-          deleteCompanyStrongConsistency({
-            companyId,
-            currentConfig: repository.loadConfig(),
-            executorState: executorBridge.status().state,
-            loadRuntime: (targetCompanyId) => repository.loadRuntime(targetCompanyId),
-            deleteManagedAgentFromExecutor,
-            listExecutorAgentIds,
-            ensureManagedCompanyExecutorProvisioned,
-            deleteCompanyLocally: (targetCompanyId) => repository.deleteCompany(targetCompanyId),
-            clearManagedExecutorAgentsForCompany: (targetCompanyId) =>
-              repository.clearManagedExecutorAgentsForCompany(targetCompanyId),
-            restoreLocalCompany: (config, runtime) => {
-              repository.saveConfig(config);
-              repository.saveRuntime(runtime);
-            },
-            hasCompany: (targetCompanyId) => repository.hasCompany(targetCompanyId),
-            cleanupCompanyWorkspace: (targetCompanyId) =>
-              removeManagedExecutorCompanyWorkspace({ companyId: targetCompanyId }),
-            buildResult: buildBootstrapSnapshot,
-            logWarn: (message, error) => {
-              console.warn(message, error);
-            },
-          }),
-        );
-        sendJson(response, 200, bootstrap);
-      } catch (error) {
-        if (error instanceof StrongCompanyDeleteError) {
-          sendError(response, error.status, error.message);
-          return;
-        }
-        sendError(response, 500, error instanceof Error ? error.message : String(error));
-        return;
-      }
-      companyOpsEngine.schedule("company.delete");
-      broadcast({ type: "bootstrap.updated", companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/company/switch") {
-      const body = await readJsonBody<AuthoritySwitchCompanyRequest>(request);
-      repository.switchCompany(body.companyId);
-      companyOpsEngine.schedule("company.switch", body.companyId);
-      sendJson(response, 200, buildBootstrapSnapshot());
-      broadcast({ type: "bootstrap.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/companies/") && url.pathname.endsWith("/runtime")) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      sendJson(response, 200, repository.loadRuntime(companyId));
-      return;
-    }
-
-    if (request.method === "PUT" && url.pathname.startsWith("/companies/") && url.pathname.endsWith("/runtime")) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      const body = await readJsonBody<AuthorityRuntimeSyncRequest>(request);
-      const currentRuntime = repository.loadRuntime(companyId);
-      const mergedSnapshot = mergeAuthorityControlledRuntimeSlices({
-        currentRuntime,
-        incomingRuntime: { ...body.snapshot, companyId },
-      });
-      sendJson(response, 200, repository.saveRuntime(mergedSnapshot));
-      companyOpsEngine.schedule("runtime.sync", companyId);
-      broadcast({ type: "company.updated", companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/companies/") && url.pathname.endsWith("/events")) {
-      const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
-      const cursor = url.searchParams.get("cursor");
-      const since = url.searchParams.has("since")
-        ? Number.parseInt(url.searchParams.get("since") ?? "", 10)
-        : undefined;
-      sendJson(response, 200, repository.listCompanyEvents(companyId, cursor, since));
-      return;
-    }
-
-    const collaborationScopeMatch = url.pathname.match(
-      /^\/companies\/([^/]+)\/collaboration-scope\/([^/]+)$/,
-    );
-    if (request.method === "GET" && collaborationScopeMatch) {
-      const companyId = decodeURIComponent(collaborationScopeMatch[1] ?? "");
-      const agentId = decodeURIComponent(collaborationScopeMatch[2] ?? "");
-      sendJson(response, 200, repository.getCollaborationScope(companyId, agentId));
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/actors") {
-      sendJson(response, 200, repository.listActors());
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/sessions") {
-      const agentId = url.searchParams.get("agentId");
-      const limit = url.searchParams.has("limit")
-        ? Number.parseInt(url.searchParams.get("limit") ?? "", 10)
-        : undefined;
-      const search = readString(url.searchParams.get("search"));
-      sendJson(
+    if (
+      await handleAuthorityHttpRoute({
         response,
-        200,
-        await proxyGatewayRequest<AuthoritySessionListResponse>("sessions.list", {
-          ...(agentId ? { agentId } : {}),
-          ...(typeof limit === "number" && Number.isFinite(limit) ? { limit } : {}),
-          ...(search ? { search } : {}),
-        }),
-      );
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/sessions/") && url.pathname.endsWith("/history")) {
-      const sessionKey = decodeURIComponent(url.pathname.replace(/^\/sessions\//, "").replace(/\/history$/, ""));
-      const limit = url.searchParams.has("limit")
-        ? Number.parseInt(url.searchParams.get("limit") ?? "", 10)
-        : undefined;
-      sendJson(
-        response,
-        200,
-        await proxyGatewayRequest<AuthoritySessionHistoryResponse>("chat.history", {
-          sessionKey,
-          ...(typeof limit === "number" && Number.isFinite(limit) ? { limit } : {}),
-        }),
-      );
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/sessions/") && url.pathname.endsWith("/reset")) {
-      const sessionKey = decodeURIComponent(url.pathname.replace(/^\/sessions\//, "").replace(/\/reset$/, ""));
-      sendJson(response, 200, await proxyGatewayRequest("sessions.reset", { key: sessionKey }));
-      broadcast({ type: "conversation.updated", timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "DELETE" && url.pathname.startsWith("/sessions/")) {
-      const sessionKey = decodeURIComponent(url.pathname.replace(/^\/sessions\//, ""));
-      sendJson(response, 200, await proxyGatewayRequest("sessions.delete", { key: sessionKey }));
-      broadcast({ type: "conversation.updated", timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/agents/") && url.pathname.endsWith("/files")) {
-      const agentId = decodeURIComponent(url.pathname.replace(/^\/agents\//, "").replace(/\/files$/, ""));
-      sendJson(response, 200, await proxyGatewayRequest("agents.files.list", { agentId }));
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname.startsWith("/agents/") && url.pathname.includes("/files/")) {
-      const [, , agentId, , ...nameParts] = url.pathname.split("/");
-      sendJson(
-        response,
-        200,
-        await proxyGatewayRequest("agents.files.get", {
-          agentId: decodeURIComponent(agentId),
-          name: decodeURIComponent(nameParts.join("/")),
-        }),
-      );
-      return;
-    }
-
-    if (request.method === "PUT" && url.pathname.startsWith("/agents/") && url.pathname.includes("/files/")) {
-      const [, , agentId, , ...nameParts] = url.pathname.split("/");
-      const body = await readJsonBody<{ content: string }>(request);
-      sendJson(
-        response,
-        200,
-        await proxyGatewayRequest("agents.files.set", {
-          agentId: decodeURIComponent(agentId),
-          name: decodeURIComponent(nameParts.join("/")),
-          content: body.content,
-        }),
-      );
-      broadcast({ type: "artifact.updated", timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname.startsWith("/agents/") && url.pathname.endsWith("/run")) {
-      const agentId = decodeURIComponent(url.pathname.replace(/^\/agents\//, "").replace(/\/run$/, ""));
-      const body = await readJsonBody<Omit<AuthorityAgentFileRunRequest, "agentId">>(request);
-      if (!body.entryPath) {
-        throw new Error("agent file run requires entryPath");
-      }
-      const filesResult = await proxyGatewayRequest<AuthorityAgentFilesResponse>("agents.files.list", { agentId });
-      const runResult = await runAgentWorkspaceEntry({
-        agentId,
-        workspace: filesResult.workspace,
-        entryPath: body.entryPath,
-        payload: body.payload,
-        timeoutMs: body.timeoutMs,
-      });
-      sendJson(response, 200, runResult satisfies AuthorityAgentFileRunResponse);
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/approval.request") {
-      const body = await readJsonBody<AuthorityApprovalRequest>(request);
-      const result = repository.requestApproval(body);
-      sendJson(response, 200, result);
-      broadcast({ type: "bootstrap.updated", companyId: body.companyId, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/approval.resolve") {
-      const body = await readJsonBody<AuthorityApprovalResolveRequest>(request);
-      const result = repository.resolveApproval(body);
-      sendJson(response, 200, result);
-      broadcast({ type: "bootstrap.updated", companyId: body.companyId, timestamp: Date.now() });
-      broadcast({ type: "company.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/chat.send") {
-      const body = await readJsonBody<AuthorityChatSendRequest>(request);
-      if (!repository.hasCompany(body.companyId)) {
-        throw new Error(`Unknown company: ${body.companyId}`);
-      }
-      const dispatch = repository.beginChatDispatch(body);
-      const gatewayAck = await proxyGatewayRequest<Omit<AuthorityChatSendResponse, "sessionKey">>("chat.send", {
-        sessionKey: dispatch.sessionKey,
-        message: body.message,
-        deliver: false,
-        ...(typeof body.thinkingLevel === "string" && body.thinkingLevel.trim().length > 0
-          ? { thinking: body.thinkingLevel.trim() }
-          : {}),
-        ...(typeof body.timeoutMs === "number" ? { timeoutMs: body.timeoutMs } : {}),
-        ...(body.attachments ? { attachments: body.attachments } : {}),
-        idempotencyKey: crypto.randomUUID(),
-      });
-      const result: AuthorityChatSendResponse = {
-        ...gatewayAck,
-        sessionKey: dispatch.sessionKey,
-      };
-      repository.createExecutorRun({
-        runId: result.runId,
-        companyId: body.companyId,
-        actorId: body.actorId,
-        sessionKey: dispatch.sessionKey,
-        startedAt: dispatch.now,
-        thinkingLevel: body.thinkingLevel ?? null,
-        payload: {
-          request: body.message,
-          attachments: body.attachments ?? [],
+        method: request.method,
+        url,
+        request,
+        readJsonBody,
+        deps: {
+          control: authorityControlRouteDeps,
+          companyState: authorityCompanyStateRouteDeps,
+          runtimeCommands: runtimeCommandRouteDeps,
+          companyManagement: authorityCompanyManagementRouteDeps,
+          chatCommands: authorityChatCommandRouteDeps,
+          sideEffects: {
+            schedule: (reason, companyId) => companyOpsEngine.schedule(reason, companyId),
+            broadcast,
+            queueManagedExecutorSync,
+          },
         },
-      });
-      const runtimeEvent: ProviderRuntimeEvent = {
-        providerId: EXECUTOR_PROVIDER_ID,
-        agentId: body.actorId,
-        sessionKey: dispatch.sessionKey,
-        runId: result.runId,
-        streamKind: "lifecycle",
-        runState: "accepted",
-        timestamp: dispatch.now,
-        raw: result,
-      };
-      sendJson(response, 200, result);
-      broadcastAgentRuntimeEvent(body.companyId, runtimeEvent);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      void queueExecutorProjectionPersist(`accepted:${result.runId}`, () => {
-        repository.applyRuntimeEvent(body.companyId, runtimeEvent);
-      });
+      })
+    ) {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/commands/requirement.transition") {
-      const body = await readJsonBody<AuthorityRequirementTransitionRequest>(request);
-      sendJson(response, 200, repository.transitionRequirement(body));
-      companyOpsEngine.schedule("requirement.transition", body.companyId);
-      broadcast({ type: "requirement.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/requirement.promote") {
-      const body = await readJsonBody<AuthorityRequirementPromoteRequest>(request);
-      sendJson(response, 200, repository.promoteRequirement(body));
-      companyOpsEngine.schedule("requirement.promote", body.companyId);
-      broadcast({ type: "requirement.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/room.append") {
-      const body = await readJsonBody<AuthorityAppendRoomRequest>(request);
-      sendJson(response, 200, repository.upsertRoom(body));
-      companyOpsEngine.schedule("room.append", body.companyId);
-      broadcast({ type: "room.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/room.delete") {
-      const body = await readJsonBody<AuthorityRoomDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteRoom(body));
-      companyOpsEngine.schedule("room.delete", body.companyId);
-      broadcast({ type: "room.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/room-bindings.upsert") {
-      const body = await readJsonBody<AuthorityRoomBindingsUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertRoomBindings(body));
-      companyOpsEngine.schedule("room-bindings.upsert", body.companyId);
-      broadcast({ type: "room.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/round.upsert") {
-      const body = await readJsonBody<AuthorityRoundUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertRound(body));
-      companyOpsEngine.schedule("round.upsert", body.companyId);
-      broadcast({ type: "round.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/round.delete") {
-      const body = await readJsonBody<AuthorityRoundDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteRound(body));
-      companyOpsEngine.schedule("round.delete", body.companyId);
-      broadcast({ type: "round.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/mission.upsert") {
-      const body = await readJsonBody<AuthorityMissionUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertMission(body));
-      companyOpsEngine.schedule("mission.upsert", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/mission.delete") {
-      const body = await readJsonBody<AuthorityMissionDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteMission(body));
-      companyOpsEngine.schedule("mission.delete", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/conversation-state.upsert") {
-      const body = await readJsonBody<AuthorityConversationStateUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertConversationState(body));
-      companyOpsEngine.schedule("conversation-state.upsert", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/conversation-state.delete") {
-      const body = await readJsonBody<AuthorityConversationStateDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteConversationState(body));
-      companyOpsEngine.schedule("conversation-state.delete", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/work-item.upsert") {
-      const body = await readJsonBody<AuthorityWorkItemUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertWorkItem(body));
-      companyOpsEngine.schedule("work-item.upsert", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/work-item.delete") {
-      const body = await readJsonBody<AuthorityWorkItemDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteWorkItem(body));
-      companyOpsEngine.schedule("work-item.delete", body.companyId);
-      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/dispatch.create") {
-      const body = await readJsonBody<AuthorityDispatchUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertDispatch(body));
-      companyOpsEngine.schedule("dispatch.create", body.companyId);
-      broadcast({ type: "dispatch.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/dispatch.delete") {
-      const body = await readJsonBody<AuthorityDispatchDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteDispatch(body));
-      companyOpsEngine.schedule("dispatch.delete", body.companyId);
-      broadcast({ type: "dispatch.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/artifact.upsert") {
-      const body = await readJsonBody<AuthorityArtifactUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertArtifact(body));
-      companyOpsEngine.schedule("artifact.upsert", body.companyId);
-      broadcast({ type: "artifact.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/artifact.sync-mirror") {
-      const body = await readJsonBody<AuthorityArtifactMirrorSyncRequest>(request);
-      sendJson(response, 200, repository.syncArtifactMirrors(body));
-      companyOpsEngine.schedule("artifact.sync-mirror", body.companyId);
-      broadcast({ type: "artifact.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/artifact.delete") {
-      const body = await readJsonBody<AuthorityArtifactDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteArtifact(body));
-      companyOpsEngine.schedule("artifact.delete", body.companyId);
-      broadcast({ type: "artifact.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/decision.upsert") {
-      const body = await readJsonBody<AuthorityDecisionTicketUpsertRequest>(request);
-      sendJson(response, 200, repository.upsertDecisionTicket(body));
-      companyOpsEngine.schedule("decision.upsert", body.companyId);
-      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/decision.resolve") {
-      const body = await readJsonBody<AuthorityDecisionTicketResolveRequest>(request);
-      sendJson(response, 200, repository.resolveDecisionTicket(body));
-      companyOpsEngine.schedule("decision.resolve", body.companyId);
-      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/decision.cancel") {
-      const body = await readJsonBody<AuthorityDecisionTicketCancelRequest>(request);
-      sendJson(response, 200, repository.cancelDecisionTicket(body));
-      companyOpsEngine.schedule("decision.cancel", body.companyId);
-      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/decision.delete") {
-      const body = await readJsonBody<AuthorityDecisionTicketDeleteRequest>(request);
-      sendJson(response, 200, repository.deleteDecisionTicket(body));
-      companyOpsEngine.schedule("decision.delete", body.companyId);
-      broadcast({ type: "decision.updated", companyId: body.companyId, timestamp: Date.now() });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/commands/company-event.append") {
-      const body = await readJsonBody<AuthorityAppendCompanyEventRequest>(request);
-      const result = repository.appendCompanyEvent(body.event);
-      sendJson(response, 200, result);
-      broadcast({ type: "company.updated", companyId: body.event.companyId, timestamp: Date.now() });
-      if (
-        body.event.kind.startsWith("dispatch_") ||
-        body.event.kind.startsWith("report_") ||
-        body.event.kind.startsWith("subtask_")
-      ) {
-        broadcast({ type: "dispatch.updated", companyId: body.event.companyId, timestamp: Date.now() });
-      }
-      return;
-    }
-
-    sendError(response, 404, `Unknown route: ${request.method} ${url.pathname}`);
+    sendAuthorityError(response, 404, `Unknown route: ${request.method} ${url.pathname}`);
   } catch (error) {
     console.error("Authority request failed", error);
-    sendError(response, 500, error instanceof Error ? error.message : String(error));
+    sendAuthorityCaughtError(response, error);
   }
 });
 

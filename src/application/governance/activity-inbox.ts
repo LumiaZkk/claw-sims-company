@@ -47,8 +47,8 @@ export function buildActivityInboxSummary(input: ActivityInboxInput): ActivityIn
       summary: `${input.scopeLabel} 当前还有 ${pluralizeCount("条人类决策", pendingHumanDecisionCount)} 没有正式拍板，这会直接拖慢后续执行与交接闭环。`,
       detail:
         criticalAttentionCount - pendingHumanDecisionCount > 0
-          ? `除此之外，还有 ${pluralizeCount("条执行异常", criticalAttentionCount - pendingHumanDecisionCount)} 正在堆积。建议先去运营大厅处理，再回到主线页继续推进。`
-          : "建议先去运营大厅处理，再回到主线页继续推进。",
+          ? `除此之外，还有 ${pluralizeCount("条执行异常", criticalAttentionCount - pendingHumanDecisionCount)} 正在堆积。建议先去 Ops 处理，再回到主线页继续推进。`
+          : "建议先去 Ops 处理，再回到主线页继续推进。",
       metrics: [
         { label: "待拍板", value: String(pendingHumanDecisionCount) },
         { label: "接管", value: String(manualTakeoverCount) },
@@ -66,8 +66,8 @@ export function buildActivityInboxSummary(input: ActivityInboxInput): ActivityIn
       summary: `${input.scopeLabel} 当前有 ${pluralizeCount("条需人工介入或升级的异常", manualTakeoverCount + escalationCount + blockerCount)}，继续堆积会把主线重新拉回排障。`,
       detail:
         unresolvedCoordinationCount > 0
-          ? `另外还有 ${pluralizeCount("条请求或交接待收口", unresolvedCoordinationCount)}。建议先去运营大厅处理，再回到当前页面继续推进。`
-          : "建议先去运营大厅处理，再回到当前页面继续推进。",
+          ? `另外还有 ${pluralizeCount("条请求或交接待收口", unresolvedCoordinationCount)}。建议先去 Ops 处理，再回到当前页面继续推进。`
+          : "建议先去 Ops 处理，再回到当前页面继续推进。",
       metrics: [
         { label: "待拍板", value: String(pendingHumanDecisionCount) },
         { label: "接管", value: String(manualTakeoverCount) },

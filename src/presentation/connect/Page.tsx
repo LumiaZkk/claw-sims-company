@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Zap, HardDrive, Terminal, RotateCw } from "lucide-react";
 import {
   buildAuthorityGuidanceItems,
+  buildAuthorityOperatorControlPlaneModel,
   collectAuthorityRepairSteps,
   resolveAuthorityControlState,
   resolveAuthorityStorageState,
@@ -11,8 +12,12 @@ import { useGatewayStore } from "../../application/gateway";
 import { toast } from "../../components/system/toast-store";
 import { formatTime } from "../../lib/utils";
 import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/contract";
-import { probeAuthorityHealth } from "../../infrastructure/authority/client";
+import {
+  probeAuthorityHealth,
+  runAuthorityOperatorActionAt,
+} from "../../infrastructure/authority/client";
 import { ConnectionDiagnosisSummary } from "../shared/ConnectionDiagnosisSummary";
+import { AuthorityOperatorControlPlaneCard } from "../shared/AuthorityOperatorControlPlaneCard";
 
 type GatewayStoreSnapshot = ReturnType<typeof useGatewayStore.getState>;
 
@@ -20,6 +25,8 @@ type ConnectFormProps = Pick<
   GatewayStoreSnapshot,
   | "providers"
   | "connect"
+  | "stageConnectionDraft"
+  | "connected"
   | "connecting"
   | "error"
   | "connectError"
@@ -53,6 +60,8 @@ type AuthorityProbeState =
 function ConnectForm({
   providers,
   connect,
+  stageConnectionDraft,
+  connected,
   connecting,
   error,
   connectError,
@@ -73,6 +82,14 @@ function ConnectForm({
   });
   const authorityOnly = providers.length <= 1;
 
+  const refreshAuthorityProbe = async (targetUrl: string, commit = true) => {
+    const health = await probeAuthorityHealth(targetUrl);
+    if (commit) {
+      setAuthorityProbe({ status: "ready", health, error: null });
+    }
+    return health;
+  };
+
   useEffect(() => {
     const normalized = url.trim();
     if (!normalized) {
@@ -83,7 +100,7 @@ function ConnectForm({
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setAuthorityProbe({ status: "loading", health: null, error: null });
-      void probeAuthorityHealth(normalized)
+      void refreshAuthorityProbe(normalized, false)
         .then((health) => {
           if (!cancelled) {
             setAuthorityProbe({ status: "ready", health, error: null });
@@ -114,6 +131,25 @@ function ConnectForm({
     connect(url, token);
   };
 
+  const handleAuthorityOperatorAction = async (
+    entry: ReturnType<typeof buildAuthorityOperatorControlPlaneModel>["entries"][number],
+  ) => {
+    const normalized = url.trim();
+    if (!normalized) {
+      throw new Error("请先输入 Authority 地址，再执行控制面动作。");
+    }
+    const result = await runAuthorityOperatorActionAt(normalized, { id: entry.id });
+    if (result.state === "blocked") {
+      toast.error(result.title, result.summary);
+    } else if (result.state === "degraded") {
+      toast.warning(result.title, result.summary);
+    } else {
+      toast.success(result.title, result.summary);
+    }
+    await refreshAuthorityProbe(normalized);
+    return result;
+  };
+
   const isFailed = phase === "failed";
   const authorityProbeState =
     authorityProbe.status === "ready"
@@ -135,6 +171,9 @@ function ConnectForm({
     authorityProbe.status === "ready" ? buildAuthorityGuidanceItems(authorityProbe.health, 3) : [];
   const authorityExecutorReadiness =
     authorityProbe.status === "ready" ? authorityProbe.health.executorReadiness ?? [] : [];
+  const authorityOperatorControlPlane = buildAuthorityOperatorControlPlaneModel(
+    authorityProbe.status === "ready" ? authorityProbe.health : null,
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -194,7 +233,13 @@ function ConnectForm({
                   id="gateway-url"
                   type="text"
                   value={url}
-                  onChange={(event) => setUrl(event.target.value)}
+                  onChange={(event) => {
+                    const nextUrl = event.target.value;
+                    setUrl(nextUrl);
+                    if (!connected) {
+                      stageConnectionDraft(nextUrl, token);
+                    }
+                  }}
                   className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow sm:text-sm outline-none"
                   placeholder={currentProvider?.defaultUrl || ""}
                   required
@@ -217,7 +262,13 @@ function ConnectForm({
                   id="gateway-token"
                   type="password"
                   value={token}
-                  onChange={(event) => setToken(event.target.value)}
+                  onChange={(event) => {
+                    const nextToken = event.target.value;
+                    setToken(nextToken);
+                    if (!connected) {
+                      stageConnectionDraft(url, nextToken);
+                    }
+                  }}
                   className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow sm:text-sm outline-none"
                   placeholder={currentProvider?.tokenPlaceholder || ""}
                 />
@@ -354,6 +405,11 @@ function ConnectForm({
               </div>
             ) : null}
 
+            <AuthorityOperatorControlPlaneCard
+              model={authorityOperatorControlPlane}
+              onExecuteEntry={handleAuthorityOperatorAction}
+            />
+
             <button
               type="submit"
               disabled={connecting}
@@ -398,6 +454,7 @@ export function ConnectPresentationPage() {
     providerId,
     providers,
     connect,
+    stageConnectionDraft,
     connected,
     connecting,
     error,
@@ -433,9 +490,11 @@ export function ConnectPresentationPage() {
 
   return (
     <ConnectForm
-      key={`${providerId}:${savedUrl}:${savedToken}`}
+      key={providerId}
       providers={providers}
       connect={connect}
+      stageConnectionDraft={stageConnectionDraft}
+      connected={connected}
       connecting={connecting}
       error={error}
       connectError={connectError}

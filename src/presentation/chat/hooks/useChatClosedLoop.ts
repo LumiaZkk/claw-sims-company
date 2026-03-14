@@ -1,13 +1,15 @@
 import { useCallback } from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { syncDelegationClosedLoopState } from "../../../application/delegation/closed-loop";
-import { readConversationWorkspaceState } from "../../../application/mission";
+import type { ArtifactRecord } from "../../../domain/artifact/types";
 import type { DispatchRecord } from "../../../domain/delegation/types";
 import type { Company } from "../../../domain/org/types";
 import type { RequirementSessionSnapshot } from "../../../domain/mission/requirement-snapshot";
 
 export function useChatClosedLoop(input: {
   activeCompany: Company | null;
+  activeArtifacts: ArtifactRecord[];
+  activeDispatches: DispatchRecord[];
   previousSnapshotsRef: RefObject<RequirementSessionSnapshot[]>;
   setCompanySessionSnapshots: Dispatch<SetStateAction<RequirementSessionSnapshot[]>>;
   replaceDispatchRecords: (dispatches: DispatchRecord[]) => void;
@@ -15,6 +17,8 @@ export function useChatClosedLoop(input: {
 }) {
   const {
     activeCompany,
+    activeArtifacts,
+    activeDispatches,
     previousSnapshotsRef,
     replaceDispatchRecords,
     setCompanySessionSnapshots,
@@ -28,7 +32,6 @@ export function useChatClosedLoop(input: {
         return null;
       }
 
-      const { activeArtifacts, activeDispatches } = readConversationWorkspaceState();
       const { companyPatch, dispatches, sessionSnapshots, summary } =
         await syncDelegationClosedLoopState({
           company: activeCompany,
@@ -52,6 +55,14 @@ export function useChatClosedLoop(input: {
       }
       return summary;
     },
-    [activeCompany, previousSnapshotsRef, replaceDispatchRecords, setCompanySessionSnapshots, updateCompany],
+    [
+      activeArtifacts,
+      activeCompany,
+      activeDispatches,
+      previousSnapshotsRef,
+      replaceDispatchRecords,
+      setCompanySessionSnapshots,
+      updateCompany,
+    ],
   );
 }

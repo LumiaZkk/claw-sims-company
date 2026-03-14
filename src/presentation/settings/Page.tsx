@@ -27,7 +27,9 @@ export function SettingsPresentationPage() {
     channels,
     skills,
     configSnapshot,
+    companyEvents,
     loading,
+    warning,
     error,
     companyCount,
     codexModels,
@@ -56,6 +58,7 @@ export function SettingsPresentationPage() {
     handleExecutorReconnect,
     handleToggleOrgAutopilot,
     handleUpdateAutonomyPolicy,
+    handleUpdateHeartbeatPolicy,
     handleUpdateCollaborationPolicy,
     handleUpdateWorkspacePolicy,
     telegramSaving,
@@ -68,6 +71,7 @@ export function SettingsPresentationPage() {
     executorSaving,
     orgAutopilotSaving,
     autonomyPolicySaving,
+    heartbeatPolicySaving,
     collaborationPolicySaving,
     workspacePolicySaving,
   } = useGatewaySettingsCommands(query);
@@ -75,6 +79,7 @@ export function SettingsPresentationPage() {
   const [telegramDialogOpen, setTelegramDialogOpen] = useState(false);
   const [executorDialogOpen, setExecutorDialogOpen] = useState(false);
   const [automationBudgetDialogOpen, setAutomationBudgetDialogOpen] = useState(false);
+  const [heartbeatDialogOpen, setHeartbeatDialogOpen] = useState(false);
   const [workspacePolicyDialogOpen, setWorkspacePolicyDialogOpen] = useState(false);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -157,24 +162,36 @@ export function SettingsPresentationPage() {
         runCommand={runCommand}
       />
 
+      {warning && !error ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {warning}
+        </div>
+      ) : null}
+
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      <SettingsDoctorSection doctorBaseline={doctorBaseline} authorityHealth={authorityHealth} />
+      <SettingsDoctorSection
+        doctorBaseline={doctorBaseline}
+        authorityHealth={authorityHealth}
+        refreshRuntime={refreshRuntime}
+      />
 
       <SettingsGatewayCompanySection
         token={token}
         connected={connected}
         companyConfig={companyConfig}
         activeCompany={activeCompany}
+        companyEvents={companyEvents}
         loading={loading}
         companyCount={companyCount}
         orgAutopilotEnabled={orgAutopilotEnabled}
         orgAutopilotSaving={orgAutopilotSaving}
         autonomyPolicySaving={autonomyPolicySaving}
+        heartbeatPolicySaving={heartbeatPolicySaving}
         collaborationPolicySaving={collaborationPolicySaving}
         workspacePolicySaving={workspacePolicySaving}
         switchCompany={switchCompany}
@@ -184,6 +201,7 @@ export function SettingsPresentationPage() {
         handleToggleOrgAutopilot={handleToggleOrgAutopilot}
         handleUpdateCollaborationPolicy={handleUpdateCollaborationPolicy}
         setAutomationBudgetDialogOpen={setAutomationBudgetDialogOpen}
+        setHeartbeatDialogOpen={setHeartbeatDialogOpen}
         setWorkspacePolicyDialogOpen={setWorkspacePolicyDialogOpen}
         runCommand={runCommand}
       />
@@ -228,10 +246,13 @@ export function SettingsPresentationPage() {
         setExecutorDialogOpen={setExecutorDialogOpen}
         automationBudgetDialogOpen={automationBudgetDialogOpen}
         setAutomationBudgetDialogOpen={setAutomationBudgetDialogOpen}
+        heartbeatDialogOpen={heartbeatDialogOpen}
+        setHeartbeatDialogOpen={setHeartbeatDialogOpen}
         workspacePolicyDialogOpen={workspacePolicyDialogOpen}
         setWorkspacePolicyDialogOpen={setWorkspacePolicyDialogOpen}
         activeCompany={activeCompany}
         autonomyPolicySaving={autonomyPolicySaving}
+        heartbeatPolicySaving={heartbeatPolicySaving}
         workspacePolicySaving={workspacePolicySaving}
         executorConfig={executorConfig}
         telegramDialogOpen={telegramDialogOpen}
@@ -248,6 +269,7 @@ export function SettingsPresentationPage() {
         addProviderSaving={addProviderSaving}
         handleExecutorConfigSubmit={handleExecutorConfigSubmit}
         handleUpdateAutonomyPolicy={handleUpdateAutonomyPolicy}
+        handleUpdateHeartbeatPolicy={handleUpdateHeartbeatPolicy}
         handleUpdateWorkspacePolicy={handleUpdateWorkspacePolicy}
         handleTelegramSubmit={handleTelegramSubmit}
         onProviderKeySubmit={onProviderKeySubmit}

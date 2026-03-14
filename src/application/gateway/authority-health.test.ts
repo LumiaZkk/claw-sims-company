@@ -3,6 +3,8 @@ import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/con
 import {
   buildAuthorityBannerModel,
   buildAuthorityGuidanceItems,
+  buildAuthorityOperatorControlPlaneModel,
+  buildAuthorityRuntimeSyncDiagnosticsModel,
   collectExecutorReadinessIssues,
   collectAuthorityGuidance,
   collectAuthorityRepairSteps,
@@ -228,6 +230,32 @@ describe("authority health helpers", () => {
     expect(issues[0]?.id).toBe("session-status");
   });
 
+  it("surfaces sqlite lock conflicts as a dedicated authority guidance item", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        preflight: {
+          ...base.authority.preflight,
+          status: "blocked",
+          integrityStatus: "failed",
+          integrityMessage: "database is locked",
+          issues: [
+            "Authority SQLite 当前被另一 authority 实例占用。请先停止另一实例，或改用标准备份启动隔离 authority。",
+          ],
+        },
+      },
+    });
+
+    const guidance = buildAuthorityGuidanceItems(health);
+    expect(guidance[0]).toMatchObject({
+      id: "authority-db-locked",
+      state: "blocked",
+      title: "Authority SQLite 正被另一实例占用",
+    });
+    expect(collectAuthorityRepairSteps(health)[0]).toContain("停止另一份 authority");
+  });
+
   it("recommends migrate plan when schema metadata is missing", () => {
     const base = createHealthSnapshot();
     const health = createHealthSnapshot({
@@ -385,5 +413,110 @@ describe("authority health helpers", () => {
     });
     expect(resolveAuthorityExecutorOnboardingIssue(blocked)).toBe("executor-blocked");
     expect(requiresAuthorityExecutorOnboarding(blocked)).toBe(true);
+  });
+
+  it("builds an operator control plane model that keeps restore and manual recovery in Connect/Settings", () => {
+    const model = buildAuthorityOperatorControlPlaneModel(createHealthSnapshot());
+
+    expect(model.title).toBe("恢复 / 导入 / 手工修复入口");
+    expect(model.summary).toContain("Connect 或 Settings Doctor");
+    expect(model.entries.map((entry) => entry.command)).toEqual([
+      "npm run authority:doctor",
+      "npm run authority:backup",
+      "npm run authority:restore -- --latest --plan",
+      "npm run authority:restore -- --latest --force",
+      "npm run authority:rehearse -- --latest",
+    ]);
+    expect(model.entries[3]).toMatchObject({
+      id: "restore-apply",
+      actionLabel: "正式恢复 latest 备份",
+      confirmationText: "RESTORE",
+    });
+  });
+
+  it("prioritizes backup and migrate guidance in the operator control plane when metadata or backups are missing", () => {
+    const base = createHealthSnapshot();
+    const health = createHealthSnapshot({
+      authority: {
+        ...base.authority,
+        doctor: {
+          ...base.authority.doctor,
+          schemaVersion: null,
+          backupCount: 0,
+          latestBackupAt: null,
+        },
+        preflight: {
+          ...base.authority.preflight,
+          schemaVersion: null,
+          backupCount: 0,
+          warnings: ["Authority 已有 SQLite，但还没有标准备份。建议先运行 authority:backup。"],
+        },
+      },
+    });
+
+    const model = buildAuthorityOperatorControlPlaneModel(health);
+    expect(model.entries[1]).toMatchObject({
+      id: "migrate-plan",
+      command: "npm run authority:migrate -- --plan",
+      actionLabel: "查看 migration plan",
+    });
+    expect(model.entries[2]).toMatchObject({
+      id: "backup",
+      title: "先补第一份标准备份",
+    });
+  });
+
+  it("builds runtime sync diagnostics for command-preferred mode", () => {
+    const diagnostics = buildAuthorityRuntimeSyncDiagnosticsModel({
+      compatibilityPathEnabled: false,
+      commandRoutes: ["requirement.transition", "artifact.upsert"],
+      mode: "command_preferred",
+      lastSnapshotUpdatedAt: 5_000,
+      lastAppliedSignature: "sig-1",
+      lastAppliedSource: "command",
+      lastAppliedAt: 5_100,
+      lastPushAt: null,
+      lastPullAt: 5_000,
+      lastCommandAt: 5_100,
+      pushCount: 0,
+      pullCount: 2,
+      commandCount: 4,
+      lastError: null,
+      lastErrorAt: null,
+      lastErrorOperation: null,
+    });
+
+    expect(diagnostics.state).toBe("ready");
+    expect(diagnostics.summary).toContain("command 写入");
+    expect(diagnostics.metrics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "command", value: "4" }),
+        expect.objectContaining({ label: "compat", value: "off" }),
+      ]),
+    );
+  });
+
+  it("surfaces last sync error in diagnostics", () => {
+    const diagnostics = buildAuthorityRuntimeSyncDiagnosticsModel({
+      compatibilityPathEnabled: true,
+      commandRoutes: ["requirement.transition"],
+      mode: "command_preferred",
+      lastSnapshotUpdatedAt: 5_000,
+      lastAppliedSignature: "sig-1",
+      lastAppliedSource: "pull",
+      lastAppliedAt: 5_100,
+      lastPushAt: null,
+      lastPullAt: 5_100,
+      lastCommandAt: null,
+      pushCount: 0,
+      pullCount: 1,
+      commandCount: 1,
+      lastError: "network timeout",
+      lastErrorAt: 5_200,
+      lastErrorOperation: "pull",
+    });
+
+    expect(diagnostics.state).toBe("degraded");
+    expect(diagnostics.warning).toBe("pull：network timeout");
   });
 });

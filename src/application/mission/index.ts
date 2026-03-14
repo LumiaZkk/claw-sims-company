@@ -14,6 +14,7 @@ export function useMissionBoardQuery() {
 export function useMissionBoardApp() {
   const {
     replaceDispatchRecords,
+    upsertDispatchRecord,
     upsertTask,
     updateCompany,
     applyRequirementTransition,
@@ -24,6 +25,7 @@ export function useMissionBoardApp() {
   } = useCompanyRuntimeCommands();
   return {
     replaceDispatchRecords,
+    upsertDispatchRecord,
     upsertTask,
     updateCompany,
     applyRequirementTransition,
@@ -52,20 +54,13 @@ export function useConversationWorkspaceChatPageQuery() {
       activeRequirementEvidence: state.activeRequirementEvidence,
       primaryRequirementId: state.primaryRequirementId,
       activeRoundRecords: state.activeRoundRecords,
+      activeArtifacts: state.activeArtifacts,
       activeDispatches: state.activeDispatches,
       activeRoomBindings: state.activeRoomBindings,
       activeDecisionTickets: state.activeDecisionTickets,
       activeAgentRuntime: state.activeAgentRuntime,
     })),
   );
-}
-
-export function useConversationArtifacts() {
-  return useCompanyRuntimeStore((state) => state.activeArtifacts);
-}
-
-export function useConversationDispatches() {
-  return useCompanyRuntimeStore((state) => state.activeDispatches);
 }
 
 export function useConversationWorkspaceApp() {

@@ -193,6 +193,71 @@ export interface RequestRecord {
   updatedAt: number;
 }
 
+export type TakeoverCaseStatus =
+  | "detected"
+  | "acknowledged"
+  | "assigned"
+  | "in_progress"
+  | "resolved"
+  | "archived";
+
+export type TakeoverCaseWorkflowAction =
+  | "acknowledge"
+  | "assign"
+  | "start"
+  | "resolve"
+  | "redispatch"
+  | "archive";
+
+export type TakeoverCaseAuditAction =
+  | "detected"
+  | "acknowledged"
+  | "assigned"
+  | "started"
+  | "resolved"
+  | "redispatched"
+  | "archived";
+
+export interface TakeoverCaseAuditEntry {
+  id: string;
+  action: TakeoverCaseAuditAction;
+  actorId: string;
+  actorLabel: string;
+  status: TakeoverCaseStatus;
+  timestamp: number;
+  note?: string | null;
+  assigneeAgentId?: string | null;
+  assigneeLabel?: string | null;
+  dispatchId?: string | null;
+}
+
+export interface TakeoverCaseRecord {
+  id: string;
+  title: string;
+  route: string;
+  sourceSessionKey: string;
+  sourceWorkItemId?: string | null;
+  sourceTopicKey?: string | null;
+  sourceDispatchId?: string | null;
+  sourceRoomId?: string | null;
+  ownerAgentId?: string | null;
+  ownerLabel?: string | null;
+  assigneeAgentId?: string | null;
+  assigneeLabel?: string | null;
+  failureSummary: string;
+  recommendedNextAction: string;
+  status: TakeoverCaseStatus;
+  createdAt: number;
+  updatedAt: number;
+  detectedAt: number;
+  acknowledgedAt?: number | null;
+  assignedAt?: number | null;
+  startedAt?: number | null;
+  resolvedAt?: number | null;
+  archivedAt?: number | null;
+  auditTrail?: TakeoverCaseAuditEntry[];
+}
+
 export type SupportRequestStatus =
   | "open"
   | "acknowledged"

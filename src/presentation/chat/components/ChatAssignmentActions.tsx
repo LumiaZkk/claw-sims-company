@@ -3,8 +3,8 @@ import { Users } from "lucide-react";
 import { appendOperatorActionAuditEvent } from "../../../application/governance/operator-action-audit";
 import { buildRequirementRoomRouteFromCompanyContext } from "../../../application/delegation/room-routing";
 import { inferMissionTopicKey, inferRequestTopicKey } from "../../../application/delegation/request-topic";
-import { readConversationWorkspaceState } from "../../../application/mission";
 import { Avatar, AvatarImage } from "../../../components/ui/avatar";
+import type { RequirementRoomRecord } from "../../../domain/delegation/types";
 import type { EmployeeRef } from "../../../domain/org/types";
 import { buildCompanyChatRoute } from "../../../lib/chat-routes";
 import { resolveTaskTitle } from "../view-models/task-tracker";
@@ -24,6 +24,7 @@ type ChatAssignmentActionsProps = {
   conversationMissionRecordId: string | null;
   persistedWorkItemId: string | null;
   groupWorkItemId: string | null;
+  activeRoomRecords: RequirementRoomRecord[];
   onNavigateToRoute: (route: string) => void;
 };
 
@@ -92,7 +93,7 @@ export const ChatAssignmentActions = memo(function ChatAssignmentActions(input: 
                   input.groupWorkItemId ??
                   null,
                 preferredInitiatorAgentId: input.targetAgentId,
-                existingRooms: readConversationWorkspaceState().activeRoomRecords,
+                existingRooms: input.activeRoomRecords,
               });
               if (groupRoute) {
                 void appendOperatorActionAuditEvent({

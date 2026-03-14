@@ -5,6 +5,7 @@ import type {
   HandoffRecord,
   RequestRecord,
   SupportRequestRecord,
+  TakeoverCaseRecord,
 } from "../delegation/types";
 import type { TrackedTask } from "../mission/types";
 import type { RetrospectiveRecord } from "../governance/types";
@@ -38,6 +39,7 @@ export interface Company {
   capabilityIssues?: CapabilityIssueRecord[];
   capabilityAuditEvents?: CapabilityAuditEventRecord[];
   tasks?: TrackedTask[];
+  takeoverCases?: TakeoverCaseRecord[];
   handoffs?: HandoffRecord[];
   requests?: RequestRecord[];
   supportRequests?: SupportRequestRecord[];
@@ -76,6 +78,7 @@ export interface CompanyOrgSettings {
   lastAutoCalibrationActions?: string[];
   autonomyPolicy?: CompanyAutonomyPolicy;
   autonomyState?: CompanyAutonomyState;
+  heartbeatPolicy?: CompanyHeartbeatPolicy;
   collaborationPolicy?: CompanyCollaborationPolicy;
   workspacePolicy?: CompanyWorkspacePolicy;
 }
@@ -101,9 +104,20 @@ export interface CompanyDepartmentAutonomyCounter {
   updatedAt: number;
 }
 
+export interface CompanyHeartbeatPolicy {
+  enabled?: boolean;
+  paused?: boolean;
+  intervalMinutes?: number;
+  sourceOfTruth?: "cyber_company";
+  syncTarget?: "openclaw" | "none";
+}
+
 export interface CompanyAutonomyState {
   lastEngineRunAt?: number;
   lastEngineActions?: string[];
+  lastHeartbeatCheckAt?: number;
+  lastHeartbeatTrigger?: "interval" | "event";
+  lastHeartbeatSkipReason?: string | null;
   departmentCounters?: CompanyDepartmentAutonomyCounter[];
 }
 

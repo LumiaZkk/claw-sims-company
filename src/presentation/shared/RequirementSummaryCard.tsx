@@ -9,13 +9,13 @@ function getVariantCopy(variant: RequirementSummaryVariant) {
     return {
       eyebrow: "主线执行摘要",
       tone: "border-indigo-200 bg-gradient-to-br from-indigo-50 via-white to-white shadow-sm",
-      hint: "这里只保留主线执行顺序需要的信息，验收和完整排障留在需求中心与运营大厅。",
+      hint: "这里只保留主线执行顺序需要的信息，验收和完整排障留在需求中心与 Ops。",
     };
   }
   return {
     eyebrow: "当前主线摘要",
     tone: "border-sky-200 bg-gradient-to-br from-sky-50 via-white to-white shadow-sm",
-    hint: "这里只保留当前主线的最小事实，完整任务顺序和异常恢复分别留给看板与运营大厅。",
+    hint: "这里只保留当前主线的最小事实，完整任务顺序和异常恢复分别留给看板与 Ops。",
   };
 }
 

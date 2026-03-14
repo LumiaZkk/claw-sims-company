@@ -1,6 +1,7 @@
 import type {
   Company,
   CompanyAutonomyPolicy,
+  CompanyHeartbeatPolicy,
   CompanyCollaborationPolicy,
   CompanyDepartmentAutonomyCounter,
   CompanyOrgSettings,
@@ -36,6 +37,14 @@ export const DEFAULT_WORKSPACE_POLICY: Required<CompanyWorkspacePolicy> = {
   executorWriteTarget: "agent_workspace",
 };
 
+export const DEFAULT_HEARTBEAT_POLICY: Required<CompanyHeartbeatPolicy> = {
+  enabled: true,
+  paused: false,
+  intervalMinutes: 5,
+  sourceOfTruth: "cyber_company",
+  syncTarget: "openclaw",
+};
+
 function normalizeDepartmentCounters(
   counters: CompanyDepartmentAutonomyCounter[] | null | undefined,
 ): CompanyDepartmentAutonomyCounter[] {
@@ -66,9 +75,17 @@ export function buildDefaultOrgSettings(
     autonomyState: {
       lastEngineRunAt: orgSettings?.autonomyState?.lastEngineRunAt,
       lastEngineActions: orgSettings?.autonomyState?.lastEngineActions ?? [],
+      lastHeartbeatCheckAt: orgSettings?.autonomyState?.lastHeartbeatCheckAt,
+      lastHeartbeatTrigger: orgSettings?.autonomyState?.lastHeartbeatTrigger,
+      lastHeartbeatSkipReason: orgSettings?.autonomyState?.lastHeartbeatSkipReason ?? null,
       departmentCounters: normalizeDepartmentCounters(
         orgSettings?.autonomyState?.departmentCounters,
       ),
+    },
+    heartbeatPolicy: {
+      ...DEFAULT_HEARTBEAT_POLICY,
+      ...(orgSettings?.heartbeatPolicy ?? {}),
+      sourceOfTruth: "cyber_company",
     },
     collaborationPolicy: {
       ...DEFAULT_COLLABORATION_POLICY,
@@ -83,6 +100,65 @@ export function buildDefaultOrgSettings(
       ...(orgSettings?.workspacePolicy ?? {}),
     },
   };
+}
+
+export function resolveHeartbeatPolicy(
+  orgSettings?: CompanyOrgSettings | null,
+): Required<CompanyHeartbeatPolicy> {
+  return {
+    ...DEFAULT_HEARTBEAT_POLICY,
+    ...(orgSettings?.heartbeatPolicy ?? {}),
+    sourceOfTruth: "cyber_company",
+  };
+}
+
+export function getHeartbeatIntervalMs(orgSettings?: CompanyOrgSettings | null): number {
+  const minutes = resolveHeartbeatPolicy(orgSettings).intervalMinutes;
+  return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+export function evaluateHeartbeatSchedule(input: {
+  orgSettings?: CompanyOrgSettings | null;
+  lastHeartbeatCheckAt?: number | null;
+  now: number;
+}) {
+  const policy = resolveHeartbeatPolicy(input.orgSettings);
+  const intervalMs = getHeartbeatIntervalMs(input.orgSettings);
+
+  if (!policy.enabled) {
+    return {
+      shouldRun: false,
+      intervalMs,
+      skipReason: "heartbeat_disabled",
+    } as const;
+  }
+
+  if (policy.paused) {
+    return {
+      shouldRun: false,
+      intervalMs,
+      skipReason: "heartbeat_paused",
+    } as const;
+  }
+
+  if (
+    typeof input.lastHeartbeatCheckAt === "number"
+    && Number.isFinite(input.lastHeartbeatCheckAt)
+    && input.lastHeartbeatCheckAt > 0
+    && input.now - input.lastHeartbeatCheckAt < intervalMs
+  ) {
+    return {
+      shouldRun: false,
+      intervalMs,
+      skipReason: "heartbeat_not_due",
+    } as const;
+  }
+
+  return {
+    shouldRun: true,
+    intervalMs,
+    skipReason: null,
+  } as const;
 }
 
 export function applyCompanyAutonomyDefaults(company: Company): Company {

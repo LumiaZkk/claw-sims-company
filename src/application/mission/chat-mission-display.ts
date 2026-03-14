@@ -134,7 +134,7 @@ export function resolveDisplaySurface(input: BuildChatMissionSurfaceInput): Disp
     actionHint: input.isRequirementBootstrapPending
       ? "稍等片刻；如果长时间没有恢复，再手动点“同步当前阻塞”。"
       : input.isFreshConversation
-        ? "直接提这次的新需求；如果你是想继续旧任务，再去工作看板或运营大厅查看当前主线。"
+        ? "直接提这次的新需求；如果你是想继续旧任务，再去工作看板或 Ops 查看当前主线。"
         : input.stableDisplayPrimaryView?.actionHint ||
           (input.isCeoSession ? input.strategicDirectParticipantView?.actionHint : null) ||
           input.requirementOverview?.nextAction ||

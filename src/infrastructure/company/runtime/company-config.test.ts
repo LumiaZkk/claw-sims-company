@@ -4,9 +4,11 @@ import { buildCompanyConfigActions } from "./company-config";
 import { createEmptyProductState } from "./bootstrap";
 import type { CompanyRuntimeState } from "./types";
 import { deleteCompanyCascade, saveCompanyConfig } from "../persistence/persistence";
+import { peekCachedCompanyConfig } from "../persistence/persistence";
 
 vi.mock("../persistence/persistence", () => ({
   deleteCompanyCascade: vi.fn(),
+  peekCachedCompanyConfig: vi.fn(),
   saveCompanyConfig: vi.fn(),
 }));
 
@@ -227,5 +229,59 @@ describe("buildCompanyConfigActions platform middle office records", () => {
     expect(state.activeCompany?.capabilityAuditEvents).toHaveLength(1);
     expect(state.activeCompany?.capabilityAuditEvents?.[0]?.summary).toContain("能力草稿");
     expect(vi.mocked(saveCompanyConfig)).toHaveBeenCalled();
+  });
+});
+
+describe("buildCompanyConfigActions saveConfig", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("replaces local config with the cached canonical config after save", async () => {
+    const config = createConfig();
+    const canonicalConfig: CyberCompanyConfig = {
+      ...config,
+      companies: config.companies.map((company) =>
+        company.id === "company-1"
+          ? {
+              ...company,
+              orgSettings: {
+                heartbeatPolicy: {
+                  enabled: true,
+                  paused: false,
+                  intervalMinutes: 9,
+                  sourceOfTruth: "cyber_company",
+                  syncTarget: "openclaw",
+                },
+              },
+            }
+          : company,
+      ),
+    };
+    let state = {
+      config,
+      activeCompany: config.companies[0] ?? null,
+      ...createEmptyProductState(),
+      loading: false,
+      error: null,
+      bootstrapPhase: "ready",
+    } as CompanyRuntimeState;
+
+    const set = (partial: Partial<CompanyRuntimeState>) => {
+      state = { ...state, ...partial };
+    };
+    const get = () => state;
+
+    vi.mocked(saveCompanyConfig).mockResolvedValue(true as never);
+    vi.mocked(peekCachedCompanyConfig).mockReturnValue(canonicalConfig);
+
+    const actions = buildCompanyConfigActions(set, get);
+    state = { ...state, ...actions };
+
+    await actions.saveConfig();
+
+    expect(state.config).toEqual(canonicalConfig);
+    expect(state.activeCompany?.orgSettings?.heartbeatPolicy?.intervalMinutes).toBe(9);
+    expect(state.loading).toBe(false);
   });
 });

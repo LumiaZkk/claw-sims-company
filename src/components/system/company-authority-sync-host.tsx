@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { MutableRefObject } from "react";
 import { gateway, useGatewayStore } from "../../application/gateway";
 import {
   getAuthorityCompanyRuntime,
@@ -6,6 +7,7 @@ import {
 } from "../../application/gateway/authority-control";
 import type { AuthorityCompanyRuntimeSnapshot } from "../../infrastructure/authority/contract";
 import { applyAuthorityRuntimeSnapshotToStore } from "../../infrastructure/authority/runtime-command";
+import { refreshAuthorityBootstrapSilently } from "../../infrastructure/authority/bootstrap-command";
 import {
   buildAuthorityRuntimeSignature,
   getLastAppliedAuthorityRuntimeSignature,
@@ -75,9 +77,9 @@ function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
 
 export function CompanyAuthoritySyncHost() {
   const connected = useGatewayStore((state) => state.connected);
-  const flushTimerRef = useRef<number | null>(null);
-  const inFlightRef = useRef(false);
-  const pullInFlightRef = useRef(false);
+  const compatibilityPathEnabled = useAuthorityRuntimeSyncStore(
+    (state) => state.compatibilityPathEnabled,
+  );
   const authorityHydratedRef = useRef(false);
   const lastSyncWarningRef = useRef<{
     push: string | null;
@@ -87,17 +89,54 @@ export function CompanyAuthoritySyncHost() {
     pull: null,
   });
 
+  return (
+    <>
+      <CompanyAuthorityRecoveryBridge
+        connected={connected}
+        authorityHydratedRef={authorityHydratedRef}
+        lastSyncWarningRef={lastSyncWarningRef}
+      />
+      <CompanyAuthorityCompatibilitySync
+        connected={connected}
+        compatibilityPathEnabled={compatibilityPathEnabled}
+        authorityHydratedRef={authorityHydratedRef}
+        lastSyncWarningRef={lastSyncWarningRef}
+      />
+    </>
+  );
+}
+
+function CompanyAuthorityCompatibilitySync(props: {
+  connected: boolean;
+  compatibilityPathEnabled: boolean;
+  authorityHydratedRef: MutableRefObject<boolean>;
+  lastSyncWarningRef: MutableRefObject<{
+    push: string | null;
+    pull: string | null;
+  }>;
+}) {
+  const { connected, compatibilityPathEnabled, authorityHydratedRef, lastSyncWarningRef } = props;
+  const flushTimerRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+
   useEffect(() => {
     if (!connected) {
       return;
     }
+
+    const clearFlushTimer = () => {
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+    };
 
     const flush = () => {
       flushTimerRef.current = null;
       if (inFlightRef.current) {
         return;
       }
-      if (!useAuthorityRuntimeSyncStore.getState().compatibilityPathEnabled) {
+      if (!compatibilityPathEnabled) {
         return;
       }
       const snapshot = buildSnapshot();
@@ -139,6 +178,48 @@ export function CompanyAuthoritySyncHost() {
         });
     };
 
+    const unsubscribeStore = compatibilityPathEnabled
+      ? useCompanyRuntimeStore.subscribe((state) => {
+          if (!state.activeCompany) {
+            return;
+          }
+          if (
+            !authorityHydratedRef.current &&
+            state.activeAgentStatuses.length > 0 &&
+            state.activeAgentStatusHealth.coverage !== "fallback"
+          ) {
+            authorityHydratedRef.current = true;
+          }
+          clearFlushTimer();
+          flushTimerRef.current = window.setTimeout(flush, 250);
+        })
+      : () => undefined;
+
+    return () => {
+      unsubscribeStore();
+      clearFlushTimer();
+    };
+  }, [compatibilityPathEnabled, connected]);
+
+  return null;
+}
+
+function CompanyAuthorityRecoveryBridge(props: {
+  connected: boolean;
+  authorityHydratedRef: MutableRefObject<boolean>;
+  lastSyncWarningRef: MutableRefObject<{
+    push: string | null;
+    pull: string | null;
+  }>;
+}) {
+  const { connected, authorityHydratedRef, lastSyncWarningRef } = props;
+  const pullInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (!connected) {
+      return;
+    }
+
     const refreshRemoteRuntime = () => {
       if (pullInFlightRef.current) {
         return;
@@ -174,22 +255,21 @@ export function CompanyAuthoritySyncHost() {
         });
     };
 
-    const unsubscribeStore = useCompanyRuntimeStore.subscribe((state) => {
-      if (!state.activeCompany) {
-        return;
-      }
-      if (
-        !authorityHydratedRef.current &&
-        state.activeAgentStatuses.length > 0 &&
-        state.activeAgentStatusHealth.coverage !== "fallback"
-      ) {
-        authorityHydratedRef.current = true;
-      }
-      if (flushTimerRef.current !== null) {
-        window.clearTimeout(flushTimerRef.current);
-      }
-      flushTimerRef.current = window.setTimeout(flush, 250);
-    });
+    const refreshBootstrap = () => {
+      void refreshAuthorityBootstrapSilently()
+        .then((snapshot) => {
+          lastSyncWarningRef.current.pull = null;
+          authorityHydratedRef.current = Boolean(snapshot.runtime);
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (lastSyncWarningRef.current.pull !== message) {
+            console.warn("Failed to refresh authority bootstrap snapshot", error);
+            lastSyncWarningRef.current.pull = message;
+          }
+          recordAuthorityRuntimeSyncError("pull", error);
+        });
+    };
 
     const unsubscribeAuthority = gateway.subscribe("*", (raw) => {
       if (!raw || typeof raw !== "object") {
@@ -207,7 +287,7 @@ export function CompanyAuthoritySyncHost() {
         return;
       }
       if (eventName === "bootstrap.updated") {
-        void useCompanyRuntimeStore.getState().loadConfig();
+        refreshBootstrap();
         return;
       }
       if (eventName === "agent.runtime.updated" && isStreamingRuntimeRefreshEvent(raw)) {
@@ -231,11 +311,7 @@ export function CompanyAuthoritySyncHost() {
     refreshRemoteRuntime();
 
     return () => {
-      unsubscribeStore();
       unsubscribeAuthority();
-      if (flushTimerRef.current !== null) {
-        window.clearTimeout(flushTimerRef.current);
-      }
     };
   }, [connected]);
 

@@ -224,6 +224,7 @@ export interface BackendCore {
   readonly isConnected: boolean;
   readonly capabilities: BackendCapabilities;
 
+  stageConnectionDraft?(url: string, token?: string): void;
   connect(url: string, token?: string): void;
   disconnect(): void;
   probeCapabilities(): Promise<BackendCapabilities>;
@@ -360,6 +361,7 @@ export interface AgentBackend extends BackendCore {
     since?: number;
     cursor?: string;
     limit?: number;
+    recent?: boolean;
   }): Promise<CompanyEventsListResult>;
   listCron(): Promise<CronListResult>;
   addCron(job: Record<string, unknown>): Promise<unknown>;

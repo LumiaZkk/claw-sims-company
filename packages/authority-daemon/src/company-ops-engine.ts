@@ -25,6 +25,7 @@ import type {
 import {
   buildDefaultOrgSettings,
   DEFAULT_AUTONOMY_POLICY,
+  evaluateHeartbeatSchedule,
 } from "../../../src/domain/org/autonomy-policy";
 import type {
   Company,
@@ -57,6 +58,16 @@ type CompanyOpsEngineOptions = {
   onRuntimeChanged?: (companyId: string, actions: string[]) => void;
 };
 
+type HeartbeatCycleAuditEventInput = {
+  companyId: string;
+  createdAt: number;
+  trigger: "interval" | "event";
+  ran: boolean;
+  skipReason: string | null;
+  reasons: string[];
+  actions: string[];
+};
+
 function clamp(value: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -77,6 +88,28 @@ function normalizeRevision(value: number | null | undefined): number {
   return Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
 }
 
+function applyHeartbeatStateUpdate(input: {
+  company: Company;
+  now: number;
+  trigger: "interval" | "event";
+  skipReason: string | null;
+}): Company {
+  const orgSettings = buildDefaultOrgSettings(input.company.orgSettings);
+  const nextAutonomyState = {
+    ...(orgSettings.autonomyState ?? {}),
+    lastHeartbeatCheckAt: input.now,
+    lastHeartbeatTrigger: input.trigger,
+    lastHeartbeatSkipReason: input.skipReason,
+  };
+  return normalizeCompany({
+    ...input.company,
+    orgSettings: {
+      ...orgSettings,
+      autonomyState: nextAutonomyState,
+    },
+  });
+}
+
 function recordsChangedById<T extends { id: string }>(input: {
   previous: T[];
   next: T[];
@@ -94,6 +127,23 @@ function recordsDeletedById<T extends { id: string }>(input: {
 }): T[] {
   const nextIds = new Set(input.next.map((record) => record.id));
   return input.previous.filter((record) => !nextIds.has(record.id));
+}
+
+export function createHeartbeatCycleAuditEvent(input: HeartbeatCycleAuditEventInput): CompanyEvent {
+  return createCompanyEvent({
+    companyId: input.companyId,
+    kind: "heartbeat_cycle_checked",
+    fromActorId: "system:company-ops-engine",
+    createdAt: input.createdAt,
+    payload: {
+      trigger: input.trigger,
+      ran: input.ran,
+      skipReason: input.skipReason,
+      reasons: input.reasons,
+      actions: input.actions,
+      actionCount: input.actions.length,
+    },
+  });
 }
 
 export function buildCompanyOpsAuditEvents(input: {
@@ -1056,6 +1106,7 @@ export function runCompanyOpsCycle(input: {
 export class CompanyOpsEngine {
   private readonly intervalMs: number;
   private readonly pendingCompanyIds = new Set<string>();
+  private readonly pendingReasons = new Set<string>();
   private running = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private scheduled = false;
@@ -1084,6 +1135,7 @@ export class CompanyOpsEngine {
   }
 
   schedule(_reason: string, companyId?: string | null) {
+    this.pendingReasons.add(_reason);
     if (companyId) {
       this.pendingCompanyIds.add(companyId);
     }
@@ -1107,6 +1159,9 @@ export class CompanyOpsEngine {
       if (!config) {
         return;
       }
+      const reasons = [...this.pendingReasons];
+      this.pendingReasons.clear();
+      const intervalOnly = reasons.length > 0 && reasons.every((reason) => reason === "interval");
       const targetIds =
         this.pendingCompanyIds.size > 0
           ? [...this.pendingCompanyIds]
@@ -1119,12 +1174,84 @@ export class CompanyOpsEngine {
         if (!company) {
           continue;
         }
+        const currentCompany = buildDefaultOrgSettings(company.orgSettings).heartbeatPolicy
+          ? normalizeCompany({
+              ...company,
+              orgSettings: buildDefaultOrgSettings(company.orgSettings),
+            })
+          : normalizeCompany(company);
+        const cycleStartedAt = Date.now();
+        const trigger = intervalOnly ? "interval" : "event";
+        const auditReasons = intervalOnly ? ["interval"] : reasons.filter((reason) => reason !== "interval");
+        if (intervalOnly) {
+          const heartbeatSchedule = evaluateHeartbeatSchedule({
+            orgSettings: currentCompany.orgSettings,
+            lastHeartbeatCheckAt:
+              currentCompany.orgSettings?.autonomyState?.lastHeartbeatCheckAt
+                ?? currentCompany.orgSettings?.autonomyState?.lastEngineRunAt
+                ?? null,
+            now: cycleStartedAt,
+          });
+          if (!heartbeatSchedule.shouldRun) {
+            const skippedCompany = applyHeartbeatStateUpdate({
+              company: currentCompany,
+              now: cycleStartedAt,
+              trigger: "interval",
+              skipReason: heartbeatSchedule.skipReason,
+            });
+            this.repository.appendCompanyEvent(
+              createHeartbeatCycleAuditEvent({
+                companyId,
+                createdAt: cycleStartedAt,
+                trigger,
+                ran: false,
+                skipReason: heartbeatSchedule.skipReason,
+                reasons: auditReasons,
+                actions: [],
+              }),
+            );
+            if (JSON.stringify(skippedCompany) !== JSON.stringify(company)) {
+              nextConfig = {
+                ...nextConfig,
+                companies: nextConfig.companies.map((item) =>
+                  item.id === companyId ? skippedCompany : item,
+                ),
+              };
+            }
+            continue;
+          }
+        }
         const runtime = this.repository.loadRuntime(companyId);
         const result = runCompanyOpsCycle({
-          company,
+          company: currentCompany,
           runtime,
         });
+        const nextCompany = applyHeartbeatStateUpdate({
+          company: result.company,
+          now: cycleStartedAt,
+          trigger,
+          skipReason: null,
+        });
+        this.repository.appendCompanyEvent(
+          createHeartbeatCycleAuditEvent({
+            companyId,
+            createdAt: cycleStartedAt,
+            trigger,
+            ran: true,
+            skipReason: null,
+            reasons: auditReasons,
+            actions: result.actions,
+          }),
+        );
         if (!result.changed) {
+          if (JSON.stringify(nextCompany) !== JSON.stringify(company)) {
+            nextConfig = {
+              ...nextConfig,
+              companies: nextConfig.companies.map((item) =>
+                item.id === companyId ? nextCompany : item,
+              ),
+            };
+          }
           continue;
         }
         if (result.runtimeChanged) {
@@ -1144,10 +1271,17 @@ export class CompanyOpsEngine {
           nextConfig = {
             ...nextConfig,
             companies: nextConfig.companies.map((item) =>
-              item.id === companyId ? result.company : item,
+              item.id === companyId ? nextCompany : item,
             ),
           };
           this.options.onCompanyChanged?.(companyId, result.actions);
+        } else if (JSON.stringify(nextCompany) !== JSON.stringify(company)) {
+          nextConfig = {
+            ...nextConfig,
+            companies: nextConfig.companies.map((item) =>
+              item.id === companyId ? nextCompany : item,
+            ),
+          };
         }
       }
       if (nextConfig !== config) {

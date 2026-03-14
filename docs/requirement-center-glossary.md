@@ -3,6 +3,17 @@
 Status: Draft  
 Last updated: 2026-03-10
 
+## 标准命名
+
+- `需求中心`
+  - 英文对照：`Requirement Center`
+  - 含义：当前主线的默认中枢页
+- `当前主线`
+  - 在高信号 UI 中，不再混用 `当前需求 / 主线需求 / 目标` 指代同一条 primary requirement
+- `Ops`
+  - 在主路径文案中，不再混用 `Operations Hall / 运营大厅`
+  - 含义：异常与排障中心
+
 ## 主线需求
 
 当前系统唯一正在推进的 primary requirement。  

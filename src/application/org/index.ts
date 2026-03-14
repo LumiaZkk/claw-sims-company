@@ -5,6 +5,8 @@ import { useShallow } from "zustand/react/shallow";
 export { useOrgDirectoryQuery } from "./directory-query";
 export { useOrgDirectoryCommands } from "./page-commands";
 export * from "./directory-commands";
+export * from "./company-heartbeat";
+export * from "./company-heartbeat-history";
 export * from "./organization-commands";
 
 export function useOrgQuery() {

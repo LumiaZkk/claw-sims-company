@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCompanyShellCommands, useCompanyShellQuery } from "../company/shell";
 import { useOrgApp } from "../org";
+import { getRecentCompanyEventsSince, RECENT_COMPANY_EVENTS_LIMIT } from "../org/company-events-query";
 import { isOrgAutopilotEnabled } from "../assignment/org-fit";
 import { gateway, type GatewayModelChoice, useGatewayStore } from "./index";
+import type { CompanyEvent } from "../../domain/delegation/events";
 import { useAuthorityRuntimeSyncStore } from "../../infrastructure/authority/runtime-sync-store";
 import {
   listAuthorityOwnedRuntimeSliceLabels,
@@ -10,13 +12,16 @@ import {
 } from "../../infrastructure/authority/runtime-slice-ownership";
 import type {
   CompanyAutonomyPolicy,
+  CompanyHeartbeatPolicy,
   CompanyCollaborationPolicy,
   CompanyWorkspacePolicy,
 } from "../../domain/org/types";
 import {
+  buildAuthorityRuntimeSyncDiagnosticsModel,
   collectAuthorityGuidance,
   extractAuthorityHealthSnapshot,
   resolveAuthorityStorageState,
+  type AuthorityRuntimeSyncDiagnosticsModel,
 } from "./authority-health";
 import {
   formatCodexAuthCompletionDescription,
@@ -32,6 +37,36 @@ import { patchAuthorityExecutorConfig } from "./authority-control";
 import { authorityClient } from "../../infrastructure/authority/client";
 
 type JsonMap = Record<string, unknown>;
+type GatewayRefreshRequestId =
+  | "health"
+  | "status"
+  | "channels"
+  | "skills"
+  | "configSnapshot"
+  | "models"
+  | "companyEvents";
+type GatewayRefreshFailure = {
+  id: GatewayRefreshRequestId;
+  label: string;
+  message: string;
+  required: boolean;
+};
+type GatewayRefreshIssue = {
+  severity: "warning" | "error";
+  message: string;
+  failures: GatewayRefreshFailure[];
+};
+
+const GATEWAY_REFRESH_REQUEST_LABELS: Record<GatewayRefreshRequestId, string> = {
+  health: "Authority 健康快照",
+  status: "Authority 状态",
+  channels: "渠道状态",
+  skills: "技能状态",
+  configSnapshot: "配置快照",
+  models: "模型目录",
+  companyEvents: "最近巡检审计",
+};
+
 export type GatewayDoctorLayerState = "ready" | "degraded" | "blocked";
 export type GatewayDoctorLayer = {
   id: "gateway" | "authority" | "executor" | "runtime";
@@ -51,6 +86,7 @@ export type GatewayDoctorBaseline = {
   authorityOwnedSlices: string[];
   commandRoutes: string[];
   lastError: string | null;
+  runtimeSync: AuthorityRuntimeSyncDiagnosticsModel;
 };
 export type GatewayConfigSnapshot = Awaited<ReturnType<typeof gateway.getConfigSnapshot>>;
 export type GatewayProviderConfig = {
@@ -74,6 +110,84 @@ function foldLayerStates(states: GatewayDoctorLayerState[]): GatewayDoctorLayerS
   return "ready";
 }
 
+function readSettledValue<T>(
+  result: PromiseSettledResult<T>,
+  onRejected: (message: string) => void,
+): T | null {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+  const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+  onRejected(message);
+  return null;
+}
+
+function normalizeGatewayRefreshFailureMessage(message: string) {
+  const trimmed = message.trim();
+  const scopeMatch = trimmed.match(/missing scope:\s*([a-zA-Z0-9._-]+)/i);
+  if (scopeMatch) {
+    return `下游 OpenClaw 尚未授予 ${scopeMatch[1]} 权限。`;
+  }
+  if (trimmed.startsWith("{") && trimmed.includes("\"error\"")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: unknown };
+      if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+        return normalizeGatewayRefreshFailureMessage(parsed.error);
+      }
+    } catch {
+      // Keep the original message when the payload is not valid JSON.
+    }
+  }
+  return trimmed;
+}
+
+function isGatewayPermissionFailureMessage(message: string) {
+  return message.includes("下游 OpenClaw 尚未授予");
+}
+
+export function buildGatewayRefreshIssue(
+  failures: GatewayRefreshFailure[],
+): GatewayRefreshIssue | null {
+  if (failures.length === 0) {
+    return null;
+  }
+
+  const normalizedFailures = failures.map((failure) => ({
+    ...failure,
+    message: normalizeGatewayRefreshFailureMessage(failure.message),
+  }));
+  const requiredFailures = normalizedFailures.filter((failure) => failure.required);
+  const optionalFailures = normalizedFailures.filter((failure) => !failure.required);
+
+  if (requiredFailures.length > 0) {
+    const requiredPermissionFailures = requiredFailures.filter((failure) =>
+      isGatewayPermissionFailureMessage(failure.message),
+    );
+    const labels = requiredFailures.map((failure) => failure.label).join("、");
+    const detail = requiredFailures[0]?.message ?? "未知错误";
+    if (requiredPermissionFailures.length === requiredFailures.length) {
+      return {
+        severity: "warning",
+        message: `部分核心诊断受当前 OpenClaw 权限限制：${labels}。${detail}`,
+        failures: normalizedFailures,
+      };
+    }
+    return {
+      severity: "error",
+      message: `设置页核心数据刷新失败：${labels}。${detail}`,
+      failures: normalizedFailures,
+    };
+  }
+
+  const labels = optionalFailures.map((failure) => failure.label).join("、");
+  const detail = optionalFailures[0]?.message ?? "未知错误";
+  return {
+    severity: "warning",
+    message: `部分扩展诊断暂时不可用：${labels}。${detail}`,
+    failures: normalizedFailures,
+  };
+}
+
 async function refreshAvailableModels() {
   const modelsResult = await gateway.listModels();
   return modelsResult.models ?? [];
@@ -93,6 +207,7 @@ export function useGatewaySettingsQuery() {
   const { connected, error: gatewayError, modelsVersion, phase, token, url } = useGatewayStore();
   const { config: companyConfig, activeCompany } = useCompanyShellQuery();
   const previousModelsVersionRef = useRef(modelsVersion);
+  const refreshRequestIdRef = useRef(0);
   const runtimeSync = useAuthorityRuntimeSyncStore();
 
   const [status, setStatus] = useState<JsonMap | null>(null);
@@ -101,69 +216,153 @@ export function useGatewaySettingsQuery() {
   const [skills, setSkills] = useState<JsonMap | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState<GatewayConfigSnapshot | null>(null);
   const [availableModels, setAvailableModels] = useState<GatewayModelChoice[]>([]);
+  const [companyEvents, setCompanyEvents] = useState<CompanyEvent[]>([]);
   const [loading, setLoading] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const activeCompanyId = activeCompany?.id ?? null;
 
   const refreshRuntime = useCallback(async () => {
     if (!gateway.isConnected) {
+      setHealth(null);
+      setCompanyEvents([]);
       return null;
     }
 
+    const requestId = refreshRequestIdRef.current + 1;
+    refreshRequestIdRef.current = requestId;
     setLoading(true);
+    setWarning(null);
+    setError(null);
     try {
-      const {
+      const failures: GatewayRefreshFailure[] = [];
+      const recordFailure = (
+        id: GatewayRefreshRequestId,
+        message: string,
+        required = false,
+      ) => {
+        failures.push({
+          id,
+          label: GATEWAY_REFRESH_REQUEST_LABELS[id],
+          message,
+          required,
+        });
+      };
+      const [
         healthResult,
         statusResult,
         channelsResult,
         skillsResult,
         snapshotResult,
         modelsResult,
-      } = await retryTransientAuthorityOperation({
-        operation: async () => {
-          const [healthResult, statusResult, channelsResult, skillsResult, snapshotResult, modelsResult] = await Promise.all([
-            gateway.getHealth(),
-            gateway.getStatus(),
-            gateway.getChannelsStatus(),
-            gateway.getSkillsStatus(),
-            gateway.getConfigSnapshot(),
-            gateway.listModels(),
-          ]);
-          return {
-            healthResult,
-            statusResult,
-            channelsResult,
-            skillsResult,
-            snapshotResult,
-            modelsResult,
-          };
-        },
-      });
-      setHealth(healthResult);
-      setStatus(statusResult);
-      setChannels(channelsResult);
-      setSkills(skillsResult);
-      setConfigSnapshot(snapshotResult);
-      setAvailableModels(modelsResult.models ?? []);
-      setError(null);
+        companyEventsResult,
+      ] = await Promise.allSettled([
+        retryTransientAuthorityOperation({
+          operation: () => gateway.getHealth(),
+        }),
+        retryTransientAuthorityOperation({
+          operation: () => gateway.getStatus(),
+        }),
+        retryTransientAuthorityOperation({
+          operation: () => gateway.getChannelsStatus(),
+        }),
+        retryTransientAuthorityOperation({
+          operation: () => gateway.getSkillsStatus(),
+        }),
+        retryTransientAuthorityOperation({
+          operation: () => gateway.getConfigSnapshot(),
+        }),
+        retryTransientAuthorityOperation({
+          operation: () => gateway.listModels(),
+        }),
+        activeCompanyId
+          ? retryTransientAuthorityOperation({
+              operation: () =>
+                gateway.listCompanyEvents({
+                  companyId: activeCompanyId,
+                  since: getRecentCompanyEventsSince(),
+                  limit: RECENT_COMPANY_EVENTS_LIMIT,
+                  recent: true,
+                }),
+            })
+          : Promise.resolve(null),
+      ]);
+      const healthValue = readSettledValue(healthResult, (message) =>
+        recordFailure("health", message, true),
+      );
+      const statusValue = readSettledValue(statusResult, (message) =>
+        recordFailure("status", message, true),
+      );
+      const channelsValue = readSettledValue(channelsResult, (message) =>
+        recordFailure("channels", message),
+      );
+      const skillsValue = readSettledValue(skillsResult, (message) =>
+        recordFailure("skills", message),
+      );
+      const snapshotValue = readSettledValue(snapshotResult, (message) =>
+        recordFailure("configSnapshot", message, true),
+      );
+      const modelsValue = readSettledValue(modelsResult, (message) =>
+        recordFailure("models", message),
+      );
+      const companyEventsValue = readSettledValue(companyEventsResult, (message) =>
+        recordFailure("companyEvents", message),
+      );
+
+      if (requestId !== refreshRequestIdRef.current) {
+        return null;
+      }
+
+      setHealth(healthValue);
+      setStatus(statusValue);
+      setChannels(channelsValue);
+      setSkills(skillsValue);
+      setConfigSnapshot(snapshotValue);
+      setAvailableModels(modelsValue?.models ?? []);
+      setCompanyEvents(activeCompanyId ? companyEventsValue?.events ?? [] : []);
+
+      const issue = buildGatewayRefreshIssue(failures);
+      if (issue?.severity === "warning") {
+        setWarning(issue.message);
+      }
+      if (issue?.severity === "error") {
+        setError(issue.message);
+        throw new Error(issue.message);
+      }
       return {
-        health: healthResult,
-        status: statusResult,
-        channels: channelsResult,
-        skills: skillsResult,
-        configSnapshot: snapshotResult,
-        availableModels: modelsResult.models ?? [],
+        health: healthValue,
+        status: statusValue,
+        channels: channelsValue,
+        skills: skillsValue,
+        configSnapshot: snapshotValue,
+        availableModels: modelsValue?.models ?? [],
+        companyEvents: companyEventsValue?.events ?? [],
+        warning: issue?.severity === "warning" ? issue.message : null,
       };
     } catch (runtimeError) {
       const message = runtimeError instanceof Error ? runtimeError.message : String(runtimeError);
-      setError(message);
+      if (requestId === refreshRequestIdRef.current) {
+        setError(message);
+      }
       throw runtimeError;
     } finally {
-      setLoading(false);
+      if (requestId === refreshRequestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [activeCompanyId]);
+
+  useEffect(() => {
+    setWarning(null);
+    setError(null);
+    setCompanyEvents([]);
+  }, [activeCompanyId]);
 
   useEffect(() => {
     if (!connected) {
+      setWarning(null);
+      setError(null);
+      setCompanyEvents([]);
       return;
     }
     void refreshRuntime().catch(() => undefined);
@@ -312,6 +511,7 @@ export function useGatewaySettingsQuery() {
       authorityOwnedSlices: listAuthorityOwnedRuntimeSliceLabels(),
       commandRoutes: runtimeSync.commandRoutes,
       lastError: runtimeSync.lastError,
+      runtimeSync: buildAuthorityRuntimeSyncDiagnosticsModel(runtimeSync),
     };
   }, [authorityHealth, connected, executorConfig, executorStatus, gatewayError, phase, runtimeSync]);
 
@@ -325,7 +525,9 @@ export function useGatewaySettingsQuery() {
     channels,
     skills,
     configSnapshot,
+    companyEvents,
     loading,
+    warning,
     error,
     companyCount,
     codexModels,
@@ -362,6 +564,7 @@ export function useGatewaySettingsCommands(input: {
   const [executorSaving, setExecutorSaving] = useState(false);
   const [orgAutopilotSaving, setOrgAutopilotSaving] = useState(false);
   const [autonomyPolicySaving, setAutonomyPolicySaving] = useState(false);
+  const [heartbeatPolicySaving, setHeartbeatPolicySaving] = useState(false);
   const [collaborationPolicySaving, setCollaborationPolicySaving] = useState(false);
   const [workspacePolicySaving, setWorkspacePolicySaving] = useState(false);
 
@@ -790,6 +993,40 @@ export function useGatewaySettingsCommands(input: {
     [input.activeCompany, updateCompany, workspacePolicySaving],
   );
 
+  const handleUpdateHeartbeatPolicy = useCallback(
+    async (heartbeatPolicy: CompanyHeartbeatPolicy) => {
+      if (!input.activeCompany || heartbeatPolicySaving) {
+        return null;
+      }
+
+      setHeartbeatPolicySaving(true);
+      try {
+        await updateCompany({
+          orgSettings: {
+            ...(input.activeCompany.orgSettings ?? {}),
+            heartbeatPolicy,
+          },
+        });
+        const intervalMinutes =
+          typeof heartbeatPolicy.intervalMinutes === "number" && Number.isFinite(heartbeatPolicy.intervalMinutes)
+            ? Math.max(1, Math.floor(heartbeatPolicy.intervalMinutes))
+            : 5;
+        return {
+          title: "CEO heartbeat 策略已更新",
+          description:
+            !heartbeatPolicy.enabled
+              ? "已关闭后台定时巡检，系统只保留事件驱动同步。"
+              : heartbeatPolicy.paused
+                ? `已暂停后台定时巡检；恢复后仍按 ${intervalMinutes} 分钟周期继续。`
+                : `已保存 heartbeat 策略，系统会按 ${intervalMinutes} 分钟周期巡检，并继续以 Cyber Company 为单一权威源。`,
+        };
+      } finally {
+        setHeartbeatPolicySaving(false);
+      }
+    },
+    [heartbeatPolicySaving, input.activeCompany, updateCompany],
+  );
+
   return {
     switchCompany,
     loadConfig,
@@ -806,6 +1043,7 @@ export function useGatewaySettingsCommands(input: {
     handleExecutorReconnect,
     handleToggleOrgAutopilot,
     handleUpdateAutonomyPolicy,
+    handleUpdateHeartbeatPolicy,
     handleUpdateCollaborationPolicy,
     handleUpdateWorkspacePolicy,
     telegramSaving,
@@ -818,6 +1056,7 @@ export function useGatewaySettingsCommands(input: {
     executorSaving,
     orgAutopilotSaving,
     autonomyPolicySaving,
+    heartbeatPolicySaving,
     collaborationPolicySaving,
     workspacePolicySaving,
   };

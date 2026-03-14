@@ -11,6 +11,7 @@ export type CompanyShellState = {
   loading: boolean;
   error: string | null;
   bootstrapPhase: CompanyBootstrapPhase;
+  hasPrimaryRequirement: boolean;
 };
 
 export function useCompanyShellQuery() {

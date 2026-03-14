@@ -4,9 +4,12 @@ import {
   readLiveChatSession,
   subscribeLiveChatSession,
 } from "../../../application/chat/live-session-cache";
-import { useConversationDispatches } from "../../../application/mission";
 import { Avatar, AvatarFallback, AvatarImage } from "../../../components/ui/avatar";
-import type { DecisionTicketRecord, DispatchRecord } from "../../../domain/delegation/types";
+import type {
+  DecisionTicketRecord,
+  DispatchRecord,
+  RequirementRoomRecord,
+} from "../../../domain/delegation/types";
 import type { ChatDisplayItem } from "../view-models/messages";
 import {
   extractTextFromMessage,
@@ -91,6 +94,8 @@ type ChatMessageFeedProps = {
   conversationMissionRecordId: string | null;
   persistedWorkItemId: string | null;
   groupWorkItemId: string | null;
+  activeDispatches: DispatchRecord[];
+  activeRoomRecords: RequirementRoomRecord[];
   openRequirementDecisionTicket: DecisionTicketRecord | null;
   showLegacyDecisionCard: boolean;
   decisionSubmittingOptionId: string | null;
@@ -174,7 +179,6 @@ function extractTextFromRenderableBlocks(content: unknown): string | null {
 }
 
 const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProps) {
-  const activeDispatches = useConversationDispatches();
   const employeesByAgentId = useMemo(() => {
     const records = new Map<string, EmployeeRef>();
     input.employees.forEach((employee) => {
@@ -195,7 +199,7 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
 
   const dispatchByRoomMessageId = useMemo(() => {
     const records = new Map<string, DispatchRecord>();
-    activeDispatches.forEach((dispatch) => {
+    input.activeDispatches.forEach((dispatch) => {
       if (dispatch.sourceMessageId?.trim()) {
         const current = records.get(dispatch.sourceMessageId);
         if (!current || dispatch.updatedAt >= current.updatedAt) {
@@ -210,7 +214,7 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
       }
     });
     return records;
-  }, [activeDispatches]);
+  }, [input.activeDispatches]);
 
   const inlineDecisionAnchorId = useMemo(
     () =>
@@ -580,6 +584,7 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
                       conversationMissionRecordId={input.conversationMissionRecordId}
                       persistedWorkItemId={input.persistedWorkItemId}
                       groupWorkItemId={input.groupWorkItemId}
+                      activeRoomRecords={input.activeRoomRecords}
                       onNavigateToRoute={input.onNavigateToRoute}
                     />
                   ) : null}
@@ -815,6 +820,8 @@ export const ChatMessageFeed = memo(function ChatMessageFeed(input: ChatMessageF
         conversationMissionRecordId={input.conversationMissionRecordId}
         persistedWorkItemId={input.persistedWorkItemId}
         groupWorkItemId={input.groupWorkItemId}
+        activeDispatches={input.activeDispatches}
+        activeRoomRecords={input.activeRoomRecords}
         openRequirementDecisionTicket={input.openRequirementDecisionTicket}
         showLegacyDecisionCard={input.showLegacyDecisionCard}
         decisionSubmittingOptionId={input.decisionSubmittingOptionId}

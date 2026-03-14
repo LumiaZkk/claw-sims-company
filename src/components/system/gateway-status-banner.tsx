@@ -5,7 +5,7 @@ export function GatewayStatusBanner() {
     useGatewayStore();
   const currentProvider = providers.find((provider) => provider.id === providerId);
 
-  if (connected || !hasEverConnected) {
+  if (connected || !hasEverConnected || phase === "offline" || phase === "never") {
     return null;
   }
 

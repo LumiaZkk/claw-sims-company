@@ -2,23 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import type {
   CanonicalAgentStatusRecord,
   AgentRuntimeRecord,
-  AgentSessionRecord,
-} from "../../../application/agent-runtime";
-import { gateway, type ChatMessage, type GatewaySessionRow } from "../../../application/gateway";
-import { readPageSnapshot, writePageSnapshot } from "../../../application/company/page-snapshots";
-import { stripTruthInternalMonologue } from "../../../application/mission/message-truth";
-import { resolveExecutionState, type ResolvedExecutionState } from "../../../application/mission/execution-state";
-import { buildManualTakeoverPack, type ManualTakeoverPack } from "../../../application/delegation/takeover-pack";
-import { parseTaskBoardMd } from "../../../application/mission/task-board-parser";
-import type { Company } from "../../../domain/org/types";
-import type { ArtifactRecord } from "../../../domain/artifact/types";
-import type { TrackedTask } from "../../../domain/mission/types";
+} from "../agent-runtime";
+import { gateway, type ChatMessage, type GatewaySessionRow } from "../gateway";
+import { readPageSnapshot, writePageSnapshot } from "../company/page-snapshots";
+import { stripTruthInternalMonologue } from "./message-truth";
+import { resolveExecutionState, type ResolvedExecutionState } from "./execution-state";
+import { buildManualTakeoverPack, type ManualTakeoverPack } from "../delegation/takeover-pack";
+import { parseTaskBoardMd } from "./task-board-parser";
+import type { Company } from "../../domain/org/types";
+import type { ArtifactRecord } from "../../domain/artifact/types";
+import type { TrackedTask } from "../../domain/mission/types";
 import {
   createRequirementMessageSnapshots,
   REQUIREMENT_SNAPSHOT_MESSAGE_LIMIT,
   type RequirementSessionSnapshot,
-} from "../../../domain/mission/requirement-snapshot";
-import { resolveSessionActorId, resolveSessionUpdatedAt } from "../../../lib/sessions";
+} from "../../domain/mission/requirement-snapshot";
+import { resolveSessionActorId, resolveSessionUpdatedAt } from "../../lib/sessions";
 
 export type BoardPageSnapshot = {
   sessions: GatewaySessionRow[];
@@ -58,7 +57,6 @@ function extractText(message: ChatMessage): string {
 
 export function useBoardRuntimeState(params: {
   activeCompany: Company;
-  activeAgentSessions: AgentSessionRecord[];
   activeAgentRuntime: AgentRuntimeRecord[];
   activeAgentStatuses: CanonicalAgentStatusRecord[];
   activeArtifacts: ArtifactRecord[];
@@ -68,7 +66,6 @@ export function useBoardRuntimeState(params: {
 }) {
   const {
     activeCompany,
-    activeAgentSessions,
     activeAgentRuntime,
     activeAgentStatuses,
     activeArtifacts,
@@ -110,7 +107,6 @@ export function useBoardRuntimeState(params: {
     writePageSnapshot<BoardPageSnapshot>(boardSnapshotKey, {
       sessions,
       sessionMetaEntries: [...sessionMeta.entries()],
-      // Execution state is authority-driven now; keep the field for compatibility only.
       sessionStateEntries: [],
       sessionTakeoverPackEntries: [...sessionTakeoverPacks.entries()],
       fileTasks,
@@ -184,9 +180,6 @@ export function useBoardRuntimeState(params: {
   const agentStatusByAgentId = new Map(
     activeAgentStatuses.map((status) => [status.agentId, status] as const),
   );
-  const sessionRuntimeByKey = new Map(
-    activeAgentSessions.map((session) => [session.sessionKey, session] as const),
-  );
 
   useEffect(() => {
     if (!isPageVisible || sessions.length === 0) {
@@ -258,104 +251,68 @@ export function useBoardRuntimeState(params: {
             });
           }
           fetchedKeysRef.current.add(key);
-        } catch {
-          entries.push([key, { topic: "(加载失败)", msgCount: 0 }]);
-          fetchedKeysRef.current.add(key);
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            console.error(`Failed to load chat history for ${key}:`, error);
+          }
         }
       });
-      await Promise.allSettled(promises);
-      if (!controller.signal.aborted) {
+      await Promise.all(promises);
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (entries.length > 0) {
         setSessionMeta((previous) => {
           const next = new Map(previous);
-          for (const [key, value] of entries) {
-            next.set(key, value);
-          }
+          entries.forEach(([key, meta]) => next.set(key, meta));
           return next;
         });
-        if (snapshots.length > 0) {
-          setCompanySessionSnapshots((previous) => {
-            const activeSessionKeys = new Set(sessions.map((session) => session.key));
-            const bySessionKey = new Map(previous.map((snapshot) => [snapshot.sessionKey, snapshot]));
-            snapshots.forEach((snapshot) => {
-              bySessionKey.set(snapshot.sessionKey, snapshot);
-            });
-            return [...bySessionKey.values()]
-              .filter((snapshot) => activeSessionKeys.has(snapshot.sessionKey))
-              .sort((left, right) => right.updatedAt - left.updatedAt)
-              .slice(0, 12);
-          });
-        }
+      }
+      if (snapshots.length > 0) {
+        setCompanySessionSnapshots((previous) => {
+          const snapshotBySessionKey = new Map(
+            previous.map((snapshot) => [snapshot.sessionKey, snapshot] as const),
+          );
+          snapshots.forEach((snapshot) => snapshotBySessionKey.set(snapshot.sessionKey, snapshot));
+          return [...snapshotBySessionKey.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+        });
       }
     })();
     return () => controller.abort();
-  }, [activeCompany.employees, agentRuntimeByAgentId, agentStatusByAgentId, isPageVisible, sessions]);
+  }, [
+    activeCompany,
+    agentRuntimeByAgentId,
+    agentStatusByAgentId,
+    isPageVisible,
+    sessions,
+  ]);
 
   useEffect(() => {
-    const activeKeys = new Set(sessions.map((session) => session.key));
-    fetchedKeysRef.current = new Set([...fetchedKeysRef.current].filter((key) => activeKeys.has(key)));
-    queueMicrotask(() => {
-      setSessionMeta((previous) => {
-        const next = new Map([...previous.entries()].filter(([key]) => activeKeys.has(key)));
-        return next.size === previous.size ? previous : next;
-      });
-      setSessionTakeoverPacks((previous) => {
-        const next = new Map([...previous.entries()].filter(([key]) => activeKeys.has(key)));
-        return next.size === previous.size ? previous : next;
-      });
-      setCompanySessionSnapshots((previous) => {
-        const next = previous.filter((snapshot) => activeKeys.has(snapshot.sessionKey));
-        return next.length === previous.length ? previous : next;
-      });
-    });
-  }, [sessions]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(Date.now());
-    }, 60_000);
+    const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const resolvedSessionStates = new Map(
-    companySessions.map((session) => [
-      session.key,
-      resolveExecutionState({
-        agentRuntime: agentRuntimeByAgentId.get(session.agentId) ?? null,
-        canonicalStatus: agentStatusByAgentId.get(session.agentId) ?? null,
-        session,
-        evidenceTexts: [session.lastMessagePreview, session.derivedTitle],
-        now: currentTime,
-      }),
-    ]),
-  );
-
-  const activeSessions = companySessions.filter((session) => {
-    const runtime = sessionRuntimeByKey.get(session.key);
-    const canonicalStatus = agentStatusByAgentId.get(session.agentId) ?? null;
-    if (runtime) {
-      return runtime.sessionState === "running" || runtime.sessionState === "streaming";
-    }
-    if (canonicalStatus?.coordinationState === "executing" || canonicalStatus?.runtimeState === "busy") {
-      return true;
-    }
-    return false;
+  const sessionStates = new Map<string, ResolvedExecutionState>();
+  companySessions.forEach((session) => {
+    const actorId = session.agentId;
+    const execution = resolveExecutionState({
+      agentRuntime: agentRuntimeByAgentId.get(actorId) ?? null,
+      canonicalStatus: agentStatusByAgentId.get(actorId) ?? null,
+      session,
+      now: currentTime,
+    });
+    sessionStates.set(session.key, execution);
   });
-  const archivedSessions = companySessions.filter(
-    (session) => !activeSessions.some((candidate) => candidate.key === session.key),
-  );
 
   return {
-    setSessions,
     setCompanySessionSnapshots,
     sessions,
     currentTime,
     sessionMeta,
-    sessionStates: resolvedSessionStates,
     sessionTakeoverPacks,
     fileTasks,
     companySessionSnapshots,
     companySessions,
-    activeSessions,
-    archivedSessions,
+    sessionStates,
   };
 }

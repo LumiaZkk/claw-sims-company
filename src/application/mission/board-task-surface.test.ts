@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildBoardTaskSurface } from "./board-task-surface";
 import type { Company } from "../../domain/org/types";
 import type { TrackedTask } from "../../domain/mission/types";
+import type { ManualTakeoverPack } from "../delegation/takeover-pack";
 
 function createCompany(overrides: Partial<Company> = {}): Company {
   return {
@@ -119,5 +120,59 @@ describe("buildBoardTaskSurface", () => {
 
     expect(surface.taskSequence[0]?.execution.state).toBe("completed");
     expect(surface.taskSequence[0]?.execution.label).toBe("已完成");
+  });
+
+  it("hides takeover and request recovery counters for strategic requirements", () => {
+    const fileTask = createFileTask();
+    const takeoverPack = {
+      title: "人工接管",
+      ownerLabel: "CTO",
+      sourceSessionKey: fileTask.sessionKey,
+      failureSummary: "当前链路需要人工接管。",
+      lastSuccessfulStep: null,
+      failedStep: "等待外部处理",
+      recommendedNextAction: "请人工继续推进。",
+      urls: [],
+      filePaths: [],
+      operatorNote: "请人工继续推进。",
+    } satisfies ManualTakeoverPack;
+
+    const surface = buildBoardTaskSurface({
+      activeCompany: createCompany({
+        handoffs: [
+          {
+            id: "handoff-1",
+            status: "waiting",
+            updatedAt: 2_000,
+          } as any,
+        ],
+        requests: [
+          {
+            id: "request-1",
+            status: "blocked",
+            updatedAt: 2_000,
+          } as any,
+        ],
+      }),
+      companySessions: [],
+      currentTime: 3_000,
+      fileTasks: [fileTask],
+      sessionStates: new Map(),
+      sessionTakeoverPacks: new Map([[fileTask.sessionKey, takeoverPack]]),
+      requirementScope: null,
+      currentWorkItem: null,
+      activeWorkItem: null,
+      requirementOverview: null,
+      strategicRequirementOverview: {
+        aggregateId: "requirement-1",
+      } as any,
+      isStrategicRequirement: true,
+      requirementSyntheticTask: null,
+    });
+
+    expect(surface.visibleTakeoverCount).toBe(0);
+    expect(surface.visiblePendingHandoffs).toEqual([]);
+    expect(surface.visibleSlaAlerts).toEqual([]);
+    expect(surface.visibleRequestHealth.active).toBe(0);
   });
 });

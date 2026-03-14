@@ -330,7 +330,7 @@ export function LobbyStatusStrip(props: {
           ) : null}
           {visibleManualCount > 0 ? (
             <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700">
-              当前需求需人工介入 {visibleManualCount} 项
+              当前主线需人工介入 {visibleManualCount} 项
             </span>
           ) : null}
         </>
@@ -477,7 +477,7 @@ export function LobbyActionStrip(props: {
               className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition-colors hover:bg-slate-100"
               onClick={onOpenBoard}
             >
-              <div className="text-sm font-medium text-slate-900">查看当前需求看板</div>
+              <div className="text-sm font-medium text-slate-900">查看当前主线看板</div>
               <div className="mt-1 text-xs leading-5 text-slate-600">只看这条主线的任务顺序、当前步骤和下一棒。</div>
               <div className="mt-2 text-[11px] font-medium text-slate-500">进入工作看板</div>
             </button>
@@ -494,7 +494,7 @@ export function LobbyActionStrip(props: {
             <div className="mt-1 text-xs leading-5 text-slate-600">
               重扫这条主线的请求、交接和回复，清掉过期卡点。
             </div>
-            <div className="mt-2 text-[11px] font-medium text-slate-500">只同步当前需求</div>
+            <div className="mt-2 text-[11px] font-medium text-slate-500">只同步当前主线</div>
           </button>
         </div>
       ) : topActions.length > 0 && onNavigateHref ? (

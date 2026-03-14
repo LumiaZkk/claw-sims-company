@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo } from "react";
-import { useConversationArtifacts, useConversationDispatches } from "../../../application/mission";
 import { buildConversationWorkItemTruth } from "../../../application/mission/conversation-truth";
 import { areWorkItemRecordsEquivalent } from "../../../application/mission/work-item-equivalence";
 import type { RequirementExecutionOverview } from "../../../application/mission/requirement-overview";
-import type { RequirementRoomRecord } from "../../../domain/delegation/types";
+import type { ArtifactRecord } from "../../../domain/artifact/types";
+import type { DispatchRecord, RequirementRoomRecord } from "../../../domain/delegation/types";
 import type {
   ConversationMissionRecord,
   WorkItemRecord,
@@ -21,6 +21,8 @@ type ChatConversationWorkItemSyncProps = {
   requirementOverview: RequirementExecutionOverview | null;
   sessionKey: string | null;
   shouldPersistConversationTruth: boolean;
+  activeArtifacts: ArtifactRecord[];
+  activeDispatches: DispatchRecord[];
   upsertWorkItemRecord: (workItem: WorkItemRecord) => void;
   setConversationCurrentWorkKey: (
     conversationId: string,
@@ -44,11 +46,11 @@ export const ChatConversationWorkItemSync = memo(function ChatConversationWorkIt
     requirementOverview,
     sessionKey,
     shouldPersistConversationTruth,
+    activeArtifacts,
+    activeDispatches,
     upsertWorkItemRecord,
     setConversationCurrentWorkKey,
   } = input;
-  const activeArtifacts = useConversationArtifacts();
-  const activeDispatches = useConversationDispatches();
 
   const reconciledConversationWorkItem = useMemo(
     () =>

@@ -240,7 +240,7 @@ export function CEOHomePageScreen() {
                 </Button>
                 <Button variant="outline" onClick={() => navigate("/ops")}>
                   <Layers3 className="mr-2 h-4 w-4" />
-                  打开运营大厅
+                  打开 Ops
                 </Button>
                 <Button variant="outline" onClick={() => navigate("/runtime")}>
                   <Activity className="mr-2 h-4 w-4" />

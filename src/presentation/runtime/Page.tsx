@@ -576,6 +576,26 @@ function getSourceBadgeClass(source: RuntimeInspectorStatusSource): string {
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+function getStatusSourceBadgeLabel(source: RuntimeInspectorStatusSource): string {
+  if (source === "authority_complete") {
+    return "Authority canonical";
+  }
+  if (source === "authority_partial") {
+    return "Authority partial";
+  }
+  return "Recovery / compat";
+}
+
+function getStatusSourceInlineLabel(source: RuntimeInspectorStatusSource): string {
+  if (source === "authority_complete") {
+    return "完整权威状态机";
+  }
+  if (source === "authority_partial") {
+    return "局部权威 + 恢复/兼容来源";
+  }
+  return "恢复/兼容投影";
+}
+
 function FocusHero(props: {
   agent: RuntimeInspectorAgentSurface | null;
   actions: RuntimeInspectorRecommendedAction[];
@@ -647,7 +667,7 @@ function FocusHero(props: {
             <div className="mt-1 text-xs text-white/60">S / R {agent.activeSessionCount} / {agent.activeRunCount}</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/50">当前目标</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/50">当前指令</div>
             <div className="mt-2 line-clamp-3 text-sm leading-5 text-white/80">{agent.currentObjective}</div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
@@ -682,11 +702,7 @@ function TheaterStatusBar(props: {
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/45">Theater Feed</div>
           <Badge variant="outline" className={cn("border-white/10 bg-white/8", getSourceBadgeClass(statusSource))}>
-            {statusSource === "authority_complete"
-              ? "Authority"
-              : statusSource === "authority_partial"
-                ? "Authority Partial"
-                : "Fallback"}
+            {getStatusSourceBadgeLabel(statusSource)}
           </Badge>
         </div>
         <div className="mt-2 flex items-center gap-2">
@@ -2166,11 +2182,7 @@ export function RuntimeInspectorPageScreen() {
                   lifecycle-first
                 </Badge>
                 <Badge variant="outline" className={getSourceBadgeClass(statusSource)}>
-                  {statusSource === "authority_complete"
-                    ? "Authority canonical"
-                    : statusSource === "authority_partial"
-                      ? "Authority partial"
-                      : "Fallback recomputed"}
+                  {getStatusSourceBadgeLabel(statusSource)}
                 </Badge>
               </div>
               <h1 className="mt-2 text-xl font-black tracking-tight text-slate-950 md:text-2xl">
@@ -2181,12 +2193,7 @@ export function RuntimeInspectorPageScreen() {
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                 <span>
-                  当前来源：
-                  {statusSource === "authority_complete"
-                    ? "完整权威状态机"
-                    : statusSource === "authority_partial"
-                      ? "局部权威 + 局部 fallback"
-                      : "前端 fallback 重算"}
+                  当前来源：{getStatusSourceInlineLabel(statusSource)}
                 </span>
                 <span>{surface.statusCoverage.detail}</span>
                 {authoritySync.lastPullAt ? <span>最近拉取 {formatTime(authoritySync.lastPullAt)}</span> : null}
@@ -2205,11 +2212,16 @@ export function RuntimeInspectorPageScreen() {
               >
                 {surface.statusCoverage.detail}
               </div>
+              {statusSource !== "authority_complete" ? (
+                <div className="mt-2 text-[11px] leading-5 text-slate-500">
+                  恢复/兼容来源只用于补齐观察面和排障，不代表新的业务主写入路径。
+                </div>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => navigate("/ops")}>
-                运营大厅
+                Ops
               </Button>
               <Button variant="outline" onClick={() => navigate("/board")}>
                 工作看板

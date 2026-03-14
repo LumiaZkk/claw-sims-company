@@ -5,7 +5,6 @@ import {
 } from "../../../application/assignment/dispatch-planning";
 import type { ProviderManifest } from "../../../application/gateway";
 import type { FocusProgressEvent } from "../../../application/governance/chat-progress";
-import { useConversationDispatches } from "../../../application/mission";
 import type { TaskPlanOverview } from "../../../application/mission/chat-mission-surface";
 import { useChatAutoDispatch } from "../hooks/useChatAutoDispatch";
 import type { DispatchRecord } from "../../../domain/delegation/types";
@@ -14,6 +13,7 @@ import type { Company } from "../../../domain/org/types";
 type ChatAutoDispatchControllerProps = {
   company: Company | null;
   providerManifest: ProviderManifest;
+  activeDispatches: DispatchRecord[];
   fromActorId: string | null;
   workItemId: string | null;
   topicKey?: string | null;
@@ -33,12 +33,11 @@ type ChatAutoDispatchControllerProps = {
 export const ChatAutoDispatchController = memo(function ChatAutoDispatchController(
   input: ChatAutoDispatchControllerProps,
 ) {
-  const activeDispatches = useConversationDispatches();
   const autoDispatchPlan = useMemo(
     () =>
       buildAutoDispatchPlan({
         company: input.company,
-        dispatches: activeDispatches,
+        dispatches: input.activeDispatches,
         workItemId: input.workItemId,
         currentActorId: input.fromActorId,
         workTitle: input.workTitle,
@@ -60,8 +59,8 @@ export const ChatAutoDispatchController = memo(function ChatAutoDispatchControll
           input.shouldDispatchPublish || shouldDelegateToNextBaton(input.currentStep?.title),
       }),
     [
-      activeDispatches,
       input.actionHint,
+      input.activeDispatches,
       input.company,
       input.currentStep,
       input.fromActorId,

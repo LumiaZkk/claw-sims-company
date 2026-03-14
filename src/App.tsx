@@ -12,7 +12,7 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
 import { ApprovalModalHost } from "./components/system/approval-modal-host";
 import { AuthorityHealthBanner } from "./components/system/authority-health-banner";
@@ -28,6 +28,10 @@ import {
 } from "./application/chat/live-session-cache";
 import { parseChatEventPayload } from "./application/delegation/chat-dispatch";
 import { gateway } from "./application/gateway";
+import {
+  extractAuthorityHealthSnapshot,
+  requiresAuthorityExecutorOnboarding,
+} from "./application/gateway/authority-health";
 import { useCompanyShellCommands, useCompanyShellQuery } from "./application/company/shell";
 import { useGatewayStore } from "./application/gateway";
 import { peekCachedCompanyConfig } from "./infrastructure/company/persistence/persistence";
@@ -75,6 +79,9 @@ const EmployeeList = lazy(() =>
 );
 const EmployeeProfile = lazy(() =>
   import("./pages/EmployeeProfile").then((module) => ({ default: module.EmployeeProfile })),
+);
+const ExecutorSetupPage = lazy(() =>
+  import("./pages/ExecutorSetupPage").then((module) => ({ default: module.ExecutorSetupPage })),
 );
 const RequirementCenterPage = lazy(() =>
   import("./pages/RequirementCenterPage").then((module) => ({
@@ -197,7 +204,20 @@ export default function App() {
   const previousConnectedRef = useRef(connected);
   const hasSeenStableConnectionRef = useRef(connected);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [authorityHealth, setAuthorityHealth] = useState<ReturnType<typeof extractAuthorityHealthSnapshot>>(null);
   const currentProvider = providers.find((provider) => provider.id === providerId);
+  const refreshAuthorityHealth = useCallback(async () => {
+    if (!connected) {
+      setAuthorityHealth(null);
+      return;
+    }
+    try {
+      const status = await gateway.getStatus();
+      setAuthorityHealth(extractAuthorityHealthSnapshot(status));
+    } catch {
+      setAuthorityHealth(null);
+    }
+  }, [connected]);
 
   useEffect(() => {
     bootstrapAutoConnect();
@@ -208,6 +228,21 @@ export default function App() {
       void loadConfig();
     }
   }, [connected, loadConfig]);
+
+  useEffect(() => {
+    if (!connected) {
+      setAuthorityHealth(null);
+      return;
+    }
+    void refreshAuthorityHealth();
+    const handleFocus = () => {
+      void refreshAuthorityHealth();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [connected, refreshAuthorityHealth]);
 
   useEffect(() => {
     if (!activeCompany || !connected) {
@@ -305,7 +340,18 @@ export default function App() {
     );
   }
 
-  const isFullScreenRoute = ["/select", "/create", "/connect", "/oauth/codex/callback"].includes(
+  const executorSetupRequired = authorityHealth ? requiresAuthorityExecutorOnboarding(authorityHealth) : false;
+  if (
+    connected &&
+    executorSetupRequired &&
+    location.pathname !== "/executor-setup" &&
+    location.pathname !== "/oauth/codex/callback"
+  ) {
+    const returnTo = `${location.pathname}${location.search}${location.hash}`;
+    return <Navigate to={`/executor-setup?returnTo=${encodeURIComponent(returnTo)}`} replace />;
+  }
+
+  const isFullScreenRoute = ["/select", "/create", "/connect", "/executor-setup", "/oauth/codex/callback"].includes(
     location.pathname,
   );
   let content: ReactNode;
@@ -318,6 +364,7 @@ export default function App() {
             <Routes>
               <Route path="/select" element={<CompanySelect />} />
               <Route path="/connect" element={<ConnectPage />} />
+              <Route path="/executor-setup" element={<ExecutorSetupPage />} />
               <Route path="/create" element={<CompanyCreate />} />
               <Route path="/oauth/codex/callback" element={<CodexOAuthCallbackPage />} />
             </Routes>
@@ -569,6 +616,7 @@ export default function App() {
                   <Route path="/automation" element={<AutomationPage />} />
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
+                  <Route path="/executor-setup" element={<ExecutorSetupPage />} />
                   <Route path="/oauth/codex/callback" element={<CodexOAuthCallbackPage />} />
                   <Route path="*" element={<Navigate to="/runtime" replace />} />
                 </Routes>

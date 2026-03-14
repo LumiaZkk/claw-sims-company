@@ -28,6 +28,10 @@ export function parseChatEventPayload(payload: unknown): ChatEventPayload | null
     seq: typeof candidate.seq === "number" ? candidate.seq : 0,
     message: candidate.message,
     errorMessage: typeof candidate.errorMessage === "string" ? candidate.errorMessage : undefined,
+    thinkingLevel:
+      typeof candidate.thinkingLevel === "string" && candidate.thinkingLevel.trim().length > 0
+        ? candidate.thinkingLevel.trim()
+        : undefined,
   };
 }
 

@@ -16,6 +16,25 @@ import { readCachedAuthorityRuntimeSnapshot } from "../../infrastructure/authori
 import { buildAuthorityCompatibilityRuntimeSnapshot } from "../../infrastructure/authority/runtime-compatibility-snapshot";
 import { useCompanyRuntimeStore } from "../../infrastructure/company/runtime/store";
 
+function isStreamingRuntimeRefreshEvent(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") {
+    return false;
+  }
+
+  const payload = "payload" in raw ? raw.payload : null;
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const runtimeEvent = "event" in payload ? payload.event : null;
+  if (!runtimeEvent || typeof runtimeEvent !== "object") {
+    return false;
+  }
+
+  const runState = "runState" in runtimeEvent ? runtimeEvent.runState : null;
+  return runState === "streaming";
+}
+
 function buildSnapshot(): AuthorityCompanyRuntimeSnapshot | null {
   const state = useCompanyRuntimeStore.getState();
   const companyId = state.activeCompany?.id ?? null;
@@ -189,6 +208,9 @@ export function CompanyAuthoritySyncHost() {
       }
       if (eventName === "bootstrap.updated") {
         void useCompanyRuntimeStore.getState().loadConfig();
+        return;
+      }
+      if (eventName === "agent.runtime.updated" && isStreamingRuntimeRefreshEvent(raw)) {
         return;
       }
       if (

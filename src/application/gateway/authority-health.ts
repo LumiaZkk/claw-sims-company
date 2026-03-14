@@ -15,6 +15,11 @@ export type AuthorityBannerModel = {
   steps: string[];
 };
 
+export type AuthorityExecutorOnboardingIssue =
+  | "missing-token"
+  | "executor-blocked"
+  | "missing-scope";
+
 export function extractAuthorityHealthSnapshot(value: unknown): AuthorityHealthSnapshot | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -155,4 +160,25 @@ export function buildAuthorityBannerModel(
     detail: detailParts.join(" · "),
     steps,
   };
+}
+
+export function resolveAuthorityExecutorOnboardingIssue(
+  health: AuthorityHealthSnapshot,
+): AuthorityExecutorOnboardingIssue | null {
+  if (!health.executorConfig.openclaw.tokenConfigured) {
+    return "missing-token";
+  }
+  if ((health.executorConfig.lastError ?? "").includes("必需权限")) {
+    return "missing-scope";
+  }
+  if (health.executor.state === "blocked") {
+    return "executor-blocked";
+  }
+  return null;
+}
+
+export function requiresAuthorityExecutorOnboarding(
+  health: AuthorityHealthSnapshot,
+): boolean {
+  return resolveAuthorityExecutorOnboardingIssue(health) !== null;
 }

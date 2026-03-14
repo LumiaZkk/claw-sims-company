@@ -120,4 +120,27 @@ describe("backend runtime helpers", () => {
       expect.objectContaining({ targetActorIds: ["co-ceo"] }),
     );
   });
+
+  it("passes thinking level through to backend sends", async () => {
+    const core = createCore("openclaw");
+    const manifest = buildProviderManifest({
+      providerId: "openclaw",
+      capabilities: createBackendCapabilities({ sessionHistory: true }),
+    });
+
+    await sendTurnToCompanyActor({
+      backend: core,
+      manifest,
+      company: createCompany(),
+      actorId: "co-cto",
+      message: "给我一个一句话总结",
+      thinkingLevel: "minimal",
+    });
+
+    expect(core.sendTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "executor:direct" }),
+      expect.stringContaining("给我一个一句话总结"),
+      expect.objectContaining({ thinkingLevel: "minimal" }),
+    );
+  });
 });

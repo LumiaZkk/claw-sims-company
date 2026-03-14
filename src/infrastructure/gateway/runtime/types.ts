@@ -22,6 +22,7 @@ import type {
 import type { CompanyEvent, CompanyEventsListResult } from "../../../domain/delegation/events";
 import type { GatewayEventFrame, GatewayHelloOk } from "../openclaw/browser-client";
 import type {
+  GatewayCodexAuthTargetParams,
   GatewayAuthCodexOauthCallbackResult,
   GatewayAuthCodexOauthStatusResult,
   GatewayAuthCodexOauthStartResult,
@@ -238,6 +239,7 @@ export interface BackendCore {
     opts?: {
       timeoutMs?: number;
       attachments?: Array<{ type: string; mimeType: string; content: string }>;
+      thinkingLevel?: string;
       targetActorIds?: string[];
     },
   ): Promise<{ run: RunRef; status: "started" | "in_flight" }>;
@@ -260,13 +262,14 @@ export interface AgentBackend extends BackendCore {
   listAgents(): Promise<AgentsListResult>;
   listModels(params?: GatewayModelsListParams): Promise<{ models: GatewayModelChoice[] }>;
   refreshModels(): Promise<{ models: GatewayModelChoice[] }>;
-  startCodexOAuth(): Promise<GatewayAuthCodexOauthStartResult>;
+  startCodexOAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthCodexOauthStartResult>;
   getCodexOAuthStatus(state: string): Promise<GatewayAuthCodexOauthStatusResult>;
   completeCodexOAuth(params: {
     code: string;
     state: string;
+    agentIds?: string[];
   }): Promise<GatewayAuthCodexOauthCallbackResult>;
-  importCodexCliAuth(): Promise<GatewayAuthImportCodexCliResult>;
+  importCodexCliAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthImportCodexCliResult>;
   updateAgent(params: {
     agentId: string;
     name?: string;
@@ -348,6 +351,7 @@ export interface AgentBackend extends BackendCore {
     opts?: {
       timeoutMs?: number;
       attachments?: Array<{ type: string; mimeType: string; content: string }>;
+      thinkingLevel?: string;
     },
   ): Promise<{ runId: string; status: "started" | "in_flight" }>;
   appendCompanyEvent(event: CompanyEvent): Promise<{ ok: true; event: CompanyEvent }>;
@@ -419,6 +423,7 @@ export type {
   CostUsageSummary,
   CronJob,
   CronListResult,
+  GatewayCodexAuthTargetParams,
   GatewayAuthCodexOauthCallbackResult,
   GatewayAuthCodexOauthStatusResult,
   GatewayAuthCodexOauthStartResult,

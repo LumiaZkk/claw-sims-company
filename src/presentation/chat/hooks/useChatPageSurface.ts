@@ -39,8 +39,6 @@ type UseChatPageSurfaceInput = {
   runningFocusActionId: string | null;
   requirementTeam: RequirementTeamView | null;
   buildTeamAdjustmentAction: (member: RequirementTeamMember) => FocusActionButton;
-  isGenerating: boolean;
-  streamText: string | null;
 };
 
 export function useChatPageSurface(input: UseChatPageSurfaceInput) {
@@ -106,7 +104,6 @@ export function useChatPageSurface(input: UseChatPageSurfaceInput) {
     () => buildActionWatchCards(input.actionWatches),
     [input.actionWatches],
   );
-  const hasActiveRun = input.isGenerating || Boolean(input.streamText);
   const teamMemberCards = useMemo(
     () =>
       buildTeamMemberCards(
@@ -129,7 +126,6 @@ export function useChatPageSurface(input: UseChatPageSurfaceInput) {
     progressGroupSummary,
     latestProgressDisplay,
     actionWatchCards,
-    hasActiveRun,
     teamMemberCards,
   };
 }

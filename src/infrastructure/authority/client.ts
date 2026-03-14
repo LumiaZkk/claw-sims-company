@@ -14,6 +14,7 @@ import type {
   AuthorityBatchHireEmployeesResponse,
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
+  AuthorityCompanyCodexAuthSyncResponse,
   AuthorityCollaborationScopeResponse,
   AuthorityConversationStateDeleteRequest,
   AuthorityConversationStateUpsertRequest,
@@ -51,6 +52,7 @@ import type {
 import { DEFAULT_AUTHORITY_URL } from "./contract";
 
 const AUTHORITY_URL_KEY = "cyber_company_authority_url";
+const LEGACY_DEFAULT_AUTHORITY_URL = "http://127.0.0.1:18790";
 
 function getStorage(): Pick<Storage, "getItem" | "setItem"> {
   if (
@@ -76,7 +78,19 @@ function normalizeBaseUrl(url?: string | null) {
   if (!trimmed) {
     return DEFAULT_AUTHORITY_URL;
   }
+  if (trimmed === LEGACY_DEFAULT_AUTHORITY_URL) {
+    return DEFAULT_AUTHORITY_URL;
+  }
   return trimmed.replace(/\/+$/, "");
+}
+
+function loadAuthorityBaseUrl() {
+  const stored = storage.getItem(AUTHORITY_URL_KEY);
+  const normalized = normalizeBaseUrl(stored);
+  if (stored?.trim() === LEGACY_DEFAULT_AUTHORITY_URL && normalized !== stored.trim()) {
+    storage.setItem(AUTHORITY_URL_KEY, normalized);
+  }
+  return normalized;
 }
 
 function buildWsUrl(baseUrl: string) {
@@ -138,7 +152,7 @@ export async function probeAuthorityHealth(baseUrl: string) {
 }
 
 export class AuthorityClient {
-  private baseUrl = normalizeBaseUrl(storage.getItem(AUTHORITY_URL_KEY));
+  private baseUrl = loadAuthorityBaseUrl();
 
   get url() {
     return this.baseUrl;
@@ -186,6 +200,16 @@ export class AuthorityClient {
     return requestJson<AuthorityRetryCompanyProvisioningResponse>(
       this.baseUrl,
       `/companies/${encodeURIComponent(companyId)}/provisioning/retry`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
+  async syncCompanyCodexAuth(companyId: string, source: "cli" | "gateway" = "cli") {
+    return requestJson<AuthorityCompanyCodexAuthSyncResponse>(
+      this.baseUrl,
+      `/companies/${encodeURIComponent(companyId)}/codex-auth/sync?source=${encodeURIComponent(source)}`,
       {
         method: "POST",
       },

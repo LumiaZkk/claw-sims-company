@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   useGatewaySettingsCommands,
   useGatewaySettingsQuery,
@@ -14,6 +15,8 @@ import {
 } from "./components/SettingsSections";
 
 export function SettingsPresentationPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const query = useGatewaySettingsQuery();
   const {
     token,
@@ -80,6 +83,7 @@ export function SettingsPresentationPage() {
   const [providerKeyTarget, setProviderKeyTarget] = useState<string | null>(null);
 
   const [addProviderDialogOpen, setAddProviderDialogOpen] = useState(false);
+  const [executorTokenPrompted, setExecutorTokenPrompted] = useState(false);
 
   const runCommand = async (
     command: () => Promise<{ title: string; description: string } | null>,
@@ -104,6 +108,45 @@ export function SettingsPresentationPage() {
     setProviderKeyTarget(provider);
     setProviderKeyDialogOpen(true);
   };
+
+  useEffect(() => {
+    const search = new URLSearchParams(location.search);
+    const shouldForceOpen = search.get("setup") === "executor-token";
+    const hasExecutorConfig = executorConfig !== null && executorConfig !== undefined;
+    const shouldAutoPrompt =
+      !loading &&
+      !executorSaving &&
+      hasExecutorConfig &&
+      !executorConfig.openclaw.tokenConfigured &&
+      !executorTokenPrompted;
+
+    if (!shouldForceOpen && !shouldAutoPrompt) {
+      return;
+    }
+
+    setExecutorDialogOpen(true);
+    if (shouldAutoPrompt) {
+      setExecutorTokenPrompted(true);
+    }
+    if (shouldForceOpen) {
+      search.delete("setup");
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search.toString() ? `?${search.toString()}` : "",
+        },
+        { replace: true },
+      );
+    }
+  }, [
+    executorConfig?.openclaw.tokenConfigured,
+    executorSaving,
+    executorTokenPrompted,
+    loading,
+    location.pathname,
+    location.search,
+    navigate,
+  ]);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto p-4 md:p-6 lg:p-8 pb-20">

@@ -39,7 +39,7 @@ import type {
   SessionsUsageResult,
 } from "../gateway";
 
-export const DEFAULT_AUTHORITY_URL = "http://127.0.0.1:18790";
+export const DEFAULT_AUTHORITY_URL = "http://127.0.0.1:19789";
 export const AUTHORITY_PROVIDER_ID = "authority";
 
 export type AuthorityExecutorStatus = {
@@ -219,6 +219,7 @@ export type AuthorityEvent =
         state: "delta" | "final" | "aborted" | "error";
         message?: ChatMessage;
         errorMessage?: string;
+        thinkingLevel?: string;
       };
     }
   | {
@@ -252,6 +253,22 @@ export type AuthorityRetryCompanyProvisioningResponse = {
   config: CyberCompanyConfig;
   runtime: AuthorityCompanyRuntimeSnapshot;
   warnings: string[];
+};
+
+export type AuthorityCompanyCodexAuthSyncResponse = {
+  ok: true;
+  companyId: string;
+  source?: "cli" | "gateway";
+  profileId: string;
+  syncedAgentIds: string[];
+  changed: boolean;
+  accountId?: string;
+  gatewayRefresh?: {
+    restarted: true;
+    baseHash: string;
+    reconnected?: true;
+    attempts?: number;
+  };
 };
 
 export type AuthorityHireEmployeeInput = {
@@ -339,6 +356,7 @@ export type AuthorityChatSendRequest = {
   message: string;
   timeoutMs?: number;
   attachments?: Array<{ type: string; mimeType: string; content: string }>;
+  thinkingLevel?: string;
 };
 
 export type AuthorityChatSendResponse = {

@@ -128,7 +128,7 @@ function ConnectForm({
       ? collectAuthorityRepairSteps(authorityProbe.health)
       : [
           "确认 `npm run dev` 或 `npm run authority:start` 已启动",
-          `检查控制面地址是否正确（当前 ${url || currentProvider?.defaultUrl || "http://127.0.0.1:18790"}）`,
+          `检查控制面地址是否正确（当前 ${url || currentProvider?.defaultUrl || "http://127.0.0.1:19789"}）`,
           "如果 authority 已开启鉴权，确认 Token 输入无误",
         ];
   const authorityProbeGuidance =
@@ -248,7 +248,7 @@ function ConnectForm({
                     ? connectError.steps
                     : [
                         "确认 authority daemon 正在运行",
-                        `检查控制面地址是否正确（当前默认 ${currentProvider?.defaultUrl || "http://127.0.0.1:18790"}）`,
+                        `检查控制面地址是否正确（当前默认 ${currentProvider?.defaultUrl || "http://127.0.0.1:19789"}）`,
                         "如果 authority 开启了鉴权，确认 Token 输入无误",
                         "如果 authority 已连接但聊天仍失败，再检查设置页里的 OpenClaw 执行后端状态",
                         "检查本机与目标地址网络可达（防火墙/端口）",

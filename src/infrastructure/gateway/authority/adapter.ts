@@ -43,6 +43,12 @@ import {
   normalizeProviderRuntimeEvent,
   normalizeProviderSessionStatus,
 } from "../../../application/agent-runtime";
+import {
+  alignAgentSkillsToDefaults as alignAgentSkillsToDefaultsFromConfig,
+  getAgentControlSnapshot as getAgentControlSnapshotFromConfig,
+  setAgentModelOverride as setAgentModelOverrideFromConfig,
+  setAgentSkillsOverride as setAgentSkillsOverrideFromConfig,
+} from "../openclaw/agent-controls";
 
 const authorityCapabilityDefaults = createBackendCapabilities({
   sessionHistory: true,
@@ -59,8 +65,8 @@ const authorityCapabilityDefaults = createBackendCapabilities({
   channelStatus: true,
   skillsStatus: true,
   agentFiles: true,
-  agentModelOverride: false,
-  agentSkillsOverride: false,
+  agentModelOverride: true,
+  agentSkillsOverride: true,
   usageInsights: true,
 });
 
@@ -240,6 +246,7 @@ class AuthorityBackendAdapter implements AgentBackend {
       message: input,
       timeoutMs: opts?.timeoutMs,
       attachments: opts?.attachments,
+      thinkingLevel: opts?.thinkingLevel,
     });
     return {
       run: {
@@ -528,8 +535,10 @@ class AuthorityBackendAdapter implements AgentBackend {
     return authorityClient.requestGateway<AuthorityModelsResponse>("models.refresh", {});
   }
 
-  async startCodexOAuth(): Promise<GatewayAuthCodexOauthStartResult> {
-    return authorityClient.requestGateway("auth.codexOauthStart", {});
+  async startCodexOAuth(
+    params?: { agentIds?: string[] },
+  ): Promise<GatewayAuthCodexOauthStartResult> {
+    return authorityClient.requestGateway("auth.codexOauthStart", params ?? {});
   }
 
   async getCodexOAuthStatus(state: string): Promise<GatewayAuthCodexOauthStatusResult> {
@@ -539,12 +548,15 @@ class AuthorityBackendAdapter implements AgentBackend {
   async completeCodexOAuth(params: {
     code: string;
     state: string;
+    agentIds?: string[];
   }): Promise<GatewayAuthCodexOauthCallbackResult> {
     return authorityClient.requestGateway("auth.codexOauthCallback", params);
   }
 
-  async importCodexCliAuth(): Promise<GatewayAuthImportCodexCliResult> {
-    return authorityClient.requestGateway("auth.importCodexCli", {});
+  async importCodexCliAuth(
+    params?: { agentIds?: string[] },
+  ): Promise<GatewayAuthImportCodexCliResult> {
+    return authorityClient.requestGateway("auth.importCodexCli", params ?? {});
   }
 
   async updateAgent(
@@ -651,6 +663,7 @@ class AuthorityBackendAdapter implements AgentBackend {
     opts?: {
       timeoutMs?: number;
       attachments?: Array<{ type: string; mimeType: string; content: string }>;
+      thinkingLevel?: string;
     },
   ) {
     const actorId = sessionKey.split(":")[1] ?? "";
@@ -668,6 +681,7 @@ class AuthorityBackendAdapter implements AgentBackend {
           message,
           timeoutMs: opts?.timeoutMs,
           attachments: opts?.attachments,
+          thinkingLevel: opts?.thinkingLevel,
         });
       });
   }
@@ -804,25 +818,19 @@ class AuthorityBackendAdapter implements AgentBackend {
   }
 
   async alignAgentSkillsToDefaults(agentIds: string[]) {
-    return { updated: 0, defaultSkills: agentIds.length > 0 ? [] : null };
+    return alignAgentSkillsToDefaultsFromConfig(this, agentIds);
   }
 
   async getAgentControlSnapshot(agentId: string): Promise<AgentControlSnapshot> {
-    return {
-      agentId,
-      defaultModel: null,
-      defaultSkills: null,
-      modelOverride: null,
-      skillsOverride: null,
-    };
+    return getAgentControlSnapshotFromConfig(this, agentId);
   }
 
-  async setAgentModelOverride(_agentId: string, model: string | null) {
-    return { updated: false, modelOverride: model };
+  async setAgentModelOverride(agentId: string, model: string | null) {
+    return setAgentModelOverrideFromConfig(this, agentId, model);
   }
 
-  async setAgentSkillsOverride(_agentId: string, skills: string[] | null) {
-    return { updated: false, skillsOverride: skills ?? null };
+  async setAgentSkillsOverride(agentId: string, skills: string[] | null) {
+    return setAgentSkillsOverrideFromConfig(this, agentId, skills);
   }
 
   async abortChatRunsForSessionKeyWithPartials() {

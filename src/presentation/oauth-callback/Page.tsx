@@ -1,18 +1,25 @@
 import { CheckCircle2, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useCompanyShellQuery } from "../../application/company/shell";
 import { useGatewayStore } from "../../application/gateway";
-import { formatCodexRuntimeSyncDescription, reapplyCodexModelsToActiveSessions } from "../../application/gateway/codex-runtime";
+import {
+  formatCodexAuthCompletionDescription,
+  reapplyCodexModelsToActiveSessions,
+  syncCodexModelsToAllowlist,
+} from "../../application/gateway/codex-runtime";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { gateway } from "../../application/gateway";
 import { toast } from "../../components/system/toast-store";
+import { authorityClient } from "../../infrastructure/authority/client";
 
 type CallbackPhase = "connecting" | "authorizing" | "success" | "error";
 
 export function CodexOAuthCallbackPresentationPage() {
   const navigate = useNavigate();
   const completedRef = useRef(false);
+  const { activeCompany } = useCompanyShellQuery();
   const { connected, connecting, bootstrapAutoConnect, markModelsRefreshed } = useGatewayStore();
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const callbackProblem = useMemo(() => {
@@ -62,21 +69,29 @@ export function CodexOAuthCallbackPresentationPage() {
     void (async () => {
       try {
         const completed = await gateway.completeCodexOAuth({ code, state });
+        if (activeCompany?.id) {
+          await authorityClient.syncCompanyCodexAuth(activeCompany.id, "gateway");
+        }
         const refreshed = await gateway.refreshModels();
+        await syncCodexModelsToAllowlist(refreshed.models ?? []);
         const reapplyResult = await reapplyCodexModelsToActiveSessions();
         const codexCount = (refreshed.models ?? []).filter((model) => model.provider === "openai-codex")
           .length;
         markModelsRefreshed();
         clearCallbackQuery();
+        const completionDescription = formatCodexAuthCompletionDescription({
+          accountId: completed.accountId ?? null,
+          codexCount,
+          profileId: completed.profileId,
+          reapplyResult,
+        });
         setResult({
           phase: "success",
-          message:
-            `授权已完成，已导入 ${completed.profileId}，当前发现 ${codexCount} 个 Codex 模型。`
-            + formatCodexRuntimeSyncDescription(reapplyResult),
+          message: `授权已完成，${completionDescription}`,
         });
         toast.success(
           "Codex 授权成功",
-          `已同步 ${codexCount} 个可用模型。${formatCodexRuntimeSyncDescription(reapplyResult)}`,
+          `已同步 ${codexCount} 个可用模型。${completionDescription}`,
         );
 
         if (window.opener) {
@@ -93,7 +108,7 @@ export function CodexOAuthCallbackPresentationPage() {
         });
       }
     })();
-  }, [callbackProblem, clearCallbackQuery, connected, markModelsRefreshed, params]);
+  }, [activeCompany, callbackProblem, clearCallbackQuery, connected, markModelsRefreshed, params]);
 
   const phase: CallbackPhase = result?.phase ?? (connected ? "authorizing" : "connecting");
   const message =

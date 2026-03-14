@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Key,
@@ -1150,8 +1151,8 @@ export function SettingsProvidersChannelsSection(props: {
           <CardDescription>按需调集各类大语言模型，并配发 API 执行令牌</CardDescription>
         </CardHeader>
         <CardContent className="pt-4 space-y-3 flex-1 overflow-y-auto max-h-80">
-          <div className="p-3 rounded-xl border border-indigo-100 bg-white shadow-sm space-y-3">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
+	          <div className="p-3 rounded-xl border border-indigo-100 bg-white shadow-sm space-y-3">
+	            <div className="flex items-start justify-between gap-3 flex-wrap">
               <div className="min-w-[200px] flex-1">
                 <div className="font-semibold text-sm flex items-center gap-2">
                   Authority 执行后端
@@ -1177,13 +1178,23 @@ export function SettingsProvidersChannelsSection(props: {
                     ? ` · 最近接通 ${formatTime(executorConfig.lastConnectedAt)}`
                     : ""}
                 </div>
-                <div className="mt-1 text-[11px] text-slate-500">
-                  {executorStatus?.note || executorConfig?.lastError || "Authority 将浏览器请求统一代理到下游 OpenClaw。"}
-                </div>
-                {authorityHealth?.executorCapabilities ? (
-                  <div className="mt-1 text-[11px] text-slate-500">
-                    能力快照：session_status {authorityHealth.executorCapabilities.sessionStatus} · process runtime{" "}
-                    {authorityHealth.executorCapabilities.processRuntime}
+	                <div className="mt-1 text-[11px] text-slate-500">
+	                  {executorStatus?.note || executorConfig?.lastError || "Authority 将浏览器请求统一代理到下游 OpenClaw。"}
+	                </div>
+	                {!executorConfig?.openclaw.tokenConfigured ? (
+	                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-800">
+	                    <div className="flex items-start gap-2">
+	                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+	                      <div>
+	                        当前没有为 Authority 配置 OpenClaw gateway token。若下游需要 operator 权限，执行器即使连上也无法列出、创建或修复 agent。
+	                      </div>
+	                    </div>
+	                  </div>
+	                ) : null}
+	                {authorityHealth?.executorCapabilities ? (
+	                  <div className="mt-1 text-[11px] text-slate-500">
+	                    能力快照：session_status {authorityHealth.executorCapabilities.sessionStatus} · process runtime{" "}
+	                    {authorityHealth.executorCapabilities.processRuntime}
                   </div>
                 ) : null}
                 {authorityHealth?.executorCapabilities?.notes[0] ? (
@@ -1215,14 +1226,18 @@ export function SettingsProvidersChannelsSection(props: {
                 ) : null}
               </div>
               <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-8 text-xs bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50"
-                  onClick={() => setExecutorDialogOpen(true)}
-                >
-                  修改后端
-                </Button>
+	                <Button
+	                  variant="secondary"
+	                  size="sm"
+	                  className={
+	                    executorConfig?.openclaw.tokenConfigured
+	                      ? "h-8 text-xs bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50"
+	                      : "h-8 text-xs bg-red-600 text-white hover:bg-red-700"
+	                  }
+	                  onClick={() => setExecutorDialogOpen(true)}
+	                >
+	                  {executorConfig?.openclaw.tokenConfigured ? "修改后端" : "先配置 Token"}
+	                </Button>
                 <Button
                   variant="secondary"
                   size="sm"
@@ -1672,7 +1687,7 @@ export function SettingsDialogs(props: {
         open={executorDialogOpen}
         onOpenChange={setExecutorDialogOpen}
         title="更新下游 OpenClaw 执行器"
-        description="浏览器只连接 Authority。这里配置的是 Authority 内部挂接的 OpenClaw 地址和令牌。"
+        description="浏览器只连接 Authority。这里配置的是 Authority 内部挂接的 OpenClaw 地址和令牌；如果下游需要 operator 权限，这里的 token 需要先配好。"
         confirmLabel="保存并重连执行器"
         busy={executorSaving}
         fields={[
@@ -1689,7 +1704,7 @@ export function SettingsDialogs(props: {
             label: "OpenClaw Token",
             type: "password",
             required: false,
-            placeholder: executorConfig?.openclaw.tokenConfigured ? "留空表示保持原 token 不变" : "可选",
+            placeholder: executorConfig?.openclaw.tokenConfigured ? "留空表示保持原 token 不变" : "未配置时这里基本是必填",
           },
         ]}
         onSubmit={async (values) => {

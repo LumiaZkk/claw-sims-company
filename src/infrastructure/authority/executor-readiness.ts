@@ -11,6 +11,7 @@ export function buildAuthorityExecutorReadinessChecks(input: {
   executorCapabilities: AuthorityExecutorCapabilitySnapshot;
 }): AuthorityExecutorReadinessCheck[] {
   const { executor, executorConfig, executorCapabilities } = input;
+  const missingRequiredScopes = (executorConfig.lastError ?? "").includes("必需权限");
 
   const connectionCheck: AuthorityExecutorReadinessCheck = {
     id: "connection",
@@ -20,7 +21,15 @@ export function buildAuthorityExecutorReadinessChecks(input: {
     detail: executorConfig.openclaw.url || "OpenClaw 地址未配置。",
   };
 
-  const authCheck: AuthorityExecutorReadinessCheck = executorConfig.openclaw.tokenConfigured
+  const authCheck: AuthorityExecutorReadinessCheck = missingRequiredScopes
+    ? {
+        id: "auth",
+        label: "鉴权令牌",
+        state: "blocked",
+        summary: "当前 token 已配置，但没有拿到 Authority 必需的 operator 权限。",
+        detail: "请更换一个能授予 operator.read 与 operator.admin 的 OpenClaw token，再重新连接。",
+      }
+    : executorConfig.openclaw.tokenConfigured
     ? {
         id: "auth",
         label: "鉴权令牌",

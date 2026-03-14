@@ -31,8 +31,14 @@ import {
   runtimeRequirementControlChanged,
 } from "./requirement-control-runtime";
 import { createManagedFileMirrorQueue } from "./managed-file-mirror";
-import { createOpenClawExecutorBridge } from "./openclaw-bridge";
-import { resolveLocalOpenClawGatewayToken } from "./openclaw-local-auth";
+import { classifyExecutorReconnect, createOpenClawExecutorBridge } from "./openclaw-bridge";
+import { refreshGatewayAuthRuntimeSnapshot, waitForGatewayReconnect } from "./gateway-runtime-refresh";
+import { resolveLocalOpenClawGatewayToken, syncLocalCodexAuthToAgents } from "./openclaw-local-auth";
+import {
+  createSerialTaskQueue,
+  shouldPersistChatRuntimeProjection,
+  shouldPersistRuntimeProjectionEvent,
+} from "./executor-event-hot-path";
 import {
   repairAgentSessionsFromDispatches,
   reconcileDispatchesFromCompanyEvents,
@@ -195,9 +201,11 @@ type RuntimeSliceTables =
   | "escalations"
   | "decision_tickets";
 
-const AUTHORITY_PORT = Number.parseInt(process.env.CYBER_COMPANY_AUTHORITY_PORT ?? "18790", 10);
+const AUTHORITY_PORT = Number.parseInt(process.env.CYBER_COMPANY_AUTHORITY_PORT ?? "19789", 10);
 const DATA_DIR = path.join(os.homedir(), ".cyber-company", "authority");
 const DB_PATH = path.join(DATA_DIR, "authority.sqlite");
+const SQLITE_BUSY_TIMEOUT_MS = 2_000;
+const SQLITE_WRITE_RETRY_DELAYS_MS = [25, 50, 100];
 const DEFAULT_OPENCLAW_URL = "ws://localhost:18789";
 const EXECUTOR_PROVIDER_ID = "openclaw";
 let syncAuthorityAgentFileMirror:
@@ -592,7 +600,7 @@ function sendError(response: import("node:http").ServerResponse, status: number,
 
 function setCorsHeaders(response: import("node:http").ServerResponse) {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
@@ -629,6 +637,31 @@ function ageMs(timestamp: number | null | undefined, now: number): number {
   return Math.max(0, now - (timestamp ?? 0));
 }
 
+function isSqliteBusyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as {
+    code?: string;
+    errcode?: number;
+    message?: string;
+    errstr?: string;
+  };
+  return (
+    candidate.errcode === 5
+    || candidate.code === "ERR_SQLITE_ERROR"
+    || candidate.message?.includes("database is locked") === true
+    || candidate.errstr?.includes("database is locked") === true
+  );
+}
+
+function sleepSync(ms: number) {
+  if (ms <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function toPublicExecutorConfig(config: StoredExecutorConfig): AuthorityExecutorConfig {
   return {
     type: "openclaw",
@@ -650,8 +683,41 @@ class AuthorityRepository {
     mkdirSync(DATA_DIR, { recursive: true });
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`);
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.initSchema();
+  }
+
+  private runWriteTransaction<T>(operation: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = operation();
+      this.db.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Ignore rollback failures after a failed write.
+      }
+      throw error;
+    }
+  }
+
+  private runWithBusyRetry<T>(label: string, operation: () => T): T {
+    for (let attempt = 0; attempt <= SQLITE_WRITE_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        return operation();
+      } catch (error) {
+        if (!isSqliteBusyError(error) || attempt === SQLITE_WRITE_RETRY_DELAYS_MS.length) {
+          throw error;
+        }
+        const delayMs = SQLITE_WRITE_RETRY_DELAYS_MS[attempt] ?? SQLITE_WRITE_RETRY_DELAYS_MS.at(-1) ?? 50;
+        console.warn(`SQLite busy during ${label}; retrying in ${delayMs}ms (attempt ${attempt + 1}).`);
+        sleepSync(delayMs);
+      }
+    }
+    throw new Error(`SQLite write retry exhausted for ${label}.`);
   }
 
   getHealth(input?: {
@@ -1874,26 +1940,30 @@ class AuthorityRepository {
         activeAgentRuns: reconciled.runtime.activeAgentRuns,
       },
     );
-    this.replacePayloadTable("missions", snapshot.companyId, normalized.activeMissionRecords);
-    this.replacePayloadTable("conversation_states", snapshot.companyId, normalized.activeConversationStates);
-    this.replacePayloadTable("work_items", snapshot.companyId, normalized.activeWorkItems);
-    this.replacePayloadTable("requirement_aggregates", snapshot.companyId, normalized.activeRequirementAggregates);
-    this.replacePayloadTable("requirement_evidence", snapshot.companyId, normalized.activeRequirementEvidence);
-    this.replacePayloadTable("rooms", snapshot.companyId, normalized.activeRoomRecords);
-    this.replacePayloadTable("rounds", snapshot.companyId, normalized.activeRoundRecords);
-    this.replacePayloadTable("artifacts", snapshot.companyId, normalized.activeArtifacts);
-    this.replacePayloadTable("dispatches", snapshot.companyId, normalized.activeDispatches);
-    this.replacePayloadTable("room_bindings", snapshot.companyId, normalized.activeRoomBindings);
-    this.replacePayloadTable("support_requests", snapshot.companyId, normalized.activeSupportRequests);
-    this.replacePayloadTable("escalations", snapshot.companyId, normalized.activeEscalations);
-    this.replacePayloadTable("decision_tickets", snapshot.companyId, normalized.activeDecisionTickets);
-    this.db.prepare(`
-      INSERT INTO runtimes (company_id, snapshot_json, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(company_id) DO UPDATE SET
-        snapshot_json = excluded.snapshot_json,
-        updated_at = excluded.updated_at
-    `).run(snapshot.companyId, JSON.stringify(normalized), normalized.updatedAt);
+    this.runWithBusyRetry(`saveRuntime(${snapshot.companyId})`, () =>
+      this.runWriteTransaction(() => {
+        this.replacePayloadTable("missions", snapshot.companyId, normalized.activeMissionRecords);
+        this.replacePayloadTable("conversation_states", snapshot.companyId, normalized.activeConversationStates);
+        this.replacePayloadTable("work_items", snapshot.companyId, normalized.activeWorkItems);
+        this.replacePayloadTable("requirement_aggregates", snapshot.companyId, normalized.activeRequirementAggregates);
+        this.replacePayloadTable("requirement_evidence", snapshot.companyId, normalized.activeRequirementEvidence);
+        this.replacePayloadTable("rooms", snapshot.companyId, normalized.activeRoomRecords);
+        this.replacePayloadTable("rounds", snapshot.companyId, normalized.activeRoundRecords);
+        this.replacePayloadTable("artifacts", snapshot.companyId, normalized.activeArtifacts);
+        this.replacePayloadTable("dispatches", snapshot.companyId, normalized.activeDispatches);
+        this.replacePayloadTable("room_bindings", snapshot.companyId, normalized.activeRoomBindings);
+        this.replacePayloadTable("support_requests", snapshot.companyId, normalized.activeSupportRequests);
+        this.replacePayloadTable("escalations", snapshot.companyId, normalized.activeEscalations);
+        this.replacePayloadTable("decision_tickets", snapshot.companyId, normalized.activeDecisionTickets);
+        this.db.prepare(`
+          INSERT INTO runtimes (company_id, snapshot_json, updated_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT(company_id) DO UPDATE SET
+            snapshot_json = excluded.snapshot_json,
+            updated_at = excluded.updated_at
+        `).run(snapshot.companyId, JSON.stringify(normalized), normalized.updatedAt);
+      }),
+    );
     this.refreshManagedContextFiles(snapshot.companyId, normalized);
     return normalized;
   }
@@ -2023,7 +2093,37 @@ class AuthorityRepository {
       sessionKey,
       sessionId: sessionKey,
       messages,
+      thinkingLevel: this.getLatestThinkingLevelForSession(sessionKey) ?? undefined,
     };
+  }
+
+  getExecutorRunThinkingLevel(runId: string): string | null {
+    const row = this.db.prepare("SELECT payload_json FROM executor_runs WHERE id = ?").get(runId) as
+      | { payload_json?: string }
+      | undefined;
+    return this.readThinkingLevelFromPayloadJson(row?.payload_json);
+  }
+
+  getLatestThinkingLevelForSession(sessionKey: string): string | null {
+    const rows = this.db.prepare(`
+      SELECT payload_json
+      FROM executor_runs
+      WHERE session_key = ?
+      ORDER BY started_at DESC
+      LIMIT 20
+    `).all(sessionKey) as Array<{ payload_json?: string }>;
+    for (const row of rows) {
+      const thinkingLevel = this.readThinkingLevelFromPayloadJson(row.payload_json);
+      if (thinkingLevel) {
+        return thinkingLevel;
+      }
+    }
+    return null;
+  }
+
+  private readThinkingLevelFromPayloadJson(payloadJson: string | null | undefined): string | null {
+    const payload = parseJson<Record<string, unknown>>(payloadJson, {});
+    return readString(payload.thinkingLevel) ?? readString(payload.thinking);
   }
 
   resetSession(sessionKey: string) {
@@ -2182,6 +2282,7 @@ class AuthorityRepository {
     actorId: string;
     sessionKey: string;
     startedAt?: number;
+    thinkingLevel?: string | null;
     payload?: Record<string, unknown>;
   }) {
     this.db.prepare(`
@@ -2197,6 +2298,7 @@ class AuthorityRepository {
       null,
       JSON.stringify({
         ...(input.payload ?? {}),
+        thinkingLevel: input.thinkingLevel ?? null,
         lastEventAt: input.startedAt ?? Date.now(),
       }),
     );
@@ -3845,6 +3947,7 @@ function normalizeChatPayload(payload: unknown): Extract<AuthorityEvent, { type:
     state,
     message: payload.message as Extract<AuthorityEvent, { type: "chat" }>["payload"]["message"],
     errorMessage: readString(payload.errorMessage) ?? undefined,
+    thinkingLevel: readString(payload.thinkingLevel) ?? undefined,
   };
 }
 
@@ -3927,6 +4030,27 @@ const EXECUTOR_AGENT_CREATE_ATTEMPTS = 2;
 let managedExecutorMutationTail: Promise<void> = Promise.resolve();
 let managedExecutorSyncPromise: Promise<void> | null = null;
 let managedExecutorSyncQueued = false;
+const queueExecutorProjectionPersist = createSerialTaskQueue({
+  onError: (error, label) => {
+    console.error(`Authority executor projection task failed (${label})`, error);
+  },
+});
+const streamingExecutorRunIds = new Set<string>();
+
+function updateExecutorRunHotPath(runId: string | null | undefined, status: AgentRunRecord["state"], payload?: Record<string, unknown>) {
+  if (!runId) {
+    return;
+  }
+  if (status === "streaming") {
+    if (streamingExecutorRunIds.has(runId)) {
+      return;
+    }
+    streamingExecutorRunIds.add(runId);
+  } else if (status === "completed" || status === "aborted" || status === "error") {
+    streamingExecutorRunIds.delete(runId);
+  }
+  repository.updateExecutorRun(runId, status, payload);
+}
 
 function delay(ms: number) {
   return new Promise((resolve) => {
@@ -4091,6 +4215,38 @@ async function ensureExecutorAgentVisible(
   throw new Error(
     `OpenClaw agent ${target.agentId} 在创建后仍不可见（${reason}）。`,
   );
+}
+
+function findStoredCompanyOrThrow(companyId: string): Company {
+  const config = repository.loadConfig();
+  const company = config?.companies.find((candidate) => candidate.id === companyId) ?? null;
+  if (!company) {
+    throw new Error(`Company not found: ${companyId}`);
+  }
+  return company;
+}
+
+async function syncCompanyCodexAuth(companyId: string, source: "cli" | "gateway" = "cli") {
+  const company = findStoredCompanyOrThrow(companyId);
+  const agentIds = company.employees
+    .map((employee) => employee.agentId?.trim())
+    .filter((agentId): agentId is string => Boolean(agentId));
+  const result = syncLocalCodexAuthToAgents(agentIds, { preferredSource: source });
+  if (!result.changed) {
+    return result;
+  }
+  const gatewayRefresh = await refreshGatewayAuthRuntimeSnapshot(
+    proxyGatewayRequest,
+    `刷新 Codex 授权后重载 OpenClaw auth/runtime snapshot（company=${companyId} source=${source}）`,
+  );
+  const gatewayReconnect = await waitForGatewayReconnect(() => executorBridge.reconnect());
+  return {
+    ...result,
+    gatewayRefresh: {
+      ...gatewayRefresh,
+      ...gatewayReconnect,
+    },
+  };
 }
 
 async function syncManagedFilesForAgent(
@@ -4491,14 +4647,16 @@ executorBridge.onEvent((event) => {
         : null)
       ?? (runtimeEvent.agentId ? repository.findCompanyIdByAgentId(runtimeEvent.agentId) : null);
     if (runtimeEvent.runId && runtimeEvent.runState) {
-      repository.updateExecutorRun(runtimeEvent.runId, runtimeEvent.runState, {
+      updateExecutorRunHotPath(runtimeEvent.runId, runtimeEvent.runState, {
         errorMessage: runtimeEvent.errorMessage ?? undefined,
       });
     }
-    if (companyId) {
-      repository.applyRuntimeEvent(companyId, runtimeEvent);
-    }
     broadcastAgentRuntimeEvent(companyId, runtimeEvent);
+    if (companyId && shouldPersistRuntimeProjectionEvent(runtimeEvent)) {
+      void queueExecutorProjectionPersist(`agent:${runtimeEvent.runId ?? runtimeEvent.sessionKey ?? "unknown"}`, () => {
+        repository.applyRuntimeEvent(companyId, runtimeEvent);
+      });
+    }
     return;
   }
 
@@ -4509,54 +4667,65 @@ executorBridge.onEvent((event) => {
   if (!payload) {
     return;
   }
+  const thinkingLevel = repository.getExecutorRunThinkingLevel(payload.runId) ?? payload.thinkingLevel ?? undefined;
+  const enrichedPayload =
+    thinkingLevel && thinkingLevel !== payload.thinkingLevel
+      ? { ...payload, thinkingLevel }
+      : payload;
   const context = repository.getConversationContext(payload.sessionKey);
-  if (payload.state === "final" && payload.message) {
-    repository.appendAssistantMessage(payload.sessionKey, payload.message as StoredChatMessage);
-    repository.updateExecutorRun(payload.runId, "completed", { response: payload.message });
-    const controlUpdate = repository.applyAssistantControlMessage(
-      payload.sessionKey,
-      payload.message as StoredChatMessage,
-    );
-    if (controlUpdate.violations.length > 0) {
-      console.warn("Assistant control contract violations", controlUpdate.violations);
-    }
-    if (controlUpdate.changed && controlUpdate.context?.companyId) {
-      broadcast({
-        type: "company.updated",
-        companyId: controlUpdate.context.companyId,
-        timestamp: Date.now(),
-      });
-    }
-  } else if (payload.state === "error") {
-    repository.updateExecutorRun(payload.runId, "error", {
-      errorMessage: payload.errorMessage ?? "OpenClaw run failed",
-    });
-  } else if (payload.state === "aborted") {
-    repository.updateExecutorRun(payload.runId, "aborted");
-  } else if (payload.state === "delta") {
-    repository.updateExecutorRun(payload.runId, "streaming");
-  }
   const runtimeEvent = buildRuntimeEventFromChatPayload({
-    payload,
-    agentId: context?.actorId ?? (payload.sessionKey.split(":")[1] ?? null),
+    payload: enrichedPayload,
+    agentId: context?.actorId ?? (enrichedPayload.sessionKey.split(":")[1] ?? null),
   });
-  if (context?.companyId) {
-    repository.applyRuntimeEvent(context.companyId, runtimeEvent);
+  if (enrichedPayload.state === "final" && enrichedPayload.message) {
+    updateExecutorRunHotPath(enrichedPayload.runId, "completed", { response: enrichedPayload.message });
+  } else if (enrichedPayload.state === "error") {
+    updateExecutorRunHotPath(enrichedPayload.runId, "error", {
+      errorMessage: enrichedPayload.errorMessage ?? "OpenClaw run failed",
+    });
+  } else if (enrichedPayload.state === "aborted") {
+    updateExecutorRunHotPath(enrichedPayload.runId, "aborted");
+  } else if (enrichedPayload.state === "delta") {
+    updateExecutorRunHotPath(enrichedPayload.runId, "streaming");
   }
   broadcastAgentRuntimeEvent(context?.companyId ?? null, runtimeEvent);
   broadcast({
     type: "chat",
     companyId: context?.companyId ?? null,
     timestamp: Date.now(),
-    payload,
+    payload: enrichedPayload,
   });
-  if (payload.state !== "delta") {
+  if (!shouldPersistChatRuntimeProjection(enrichedPayload)) {
+    return;
+  }
+
+  void queueExecutorProjectionPersist(`chat:${enrichedPayload.runId}:${enrichedPayload.state}`, () => {
+    if (enrichedPayload.state === "final" && enrichedPayload.message) {
+      repository.appendAssistantMessage(enrichedPayload.sessionKey, enrichedPayload.message as StoredChatMessage);
+      const controlUpdate = repository.applyAssistantControlMessage(
+        enrichedPayload.sessionKey,
+        enrichedPayload.message as StoredChatMessage,
+      );
+      if (controlUpdate.violations.length > 0) {
+        console.warn("Assistant control contract violations", controlUpdate.violations);
+      }
+      if (controlUpdate.changed && controlUpdate.context?.companyId) {
+        broadcast({
+          type: "company.updated",
+          companyId: controlUpdate.context.companyId,
+          timestamp: Date.now(),
+        });
+      }
+    }
+    if (context?.companyId) {
+      repository.applyRuntimeEvent(context.companyId, runtimeEvent);
+    }
     broadcast({
       type: "conversation.updated",
       companyId: context?.companyId ?? null,
       timestamp: Date.now(),
     });
-  }
+  });
 });
 
 async function performRuntimeSessionStatusRepair() {
@@ -4731,13 +4900,21 @@ const server = createServer(async (request, response) => {
         },
       });
       try {
-        await executorBridge.patchConfig({
-          openclaw: {
-            url: desired.openclaw.url,
-            token: desired.openclaw.token ?? "",
-          },
-          reconnect: body.reconnect ?? Boolean(body.openclaw),
-        });
+        try {
+          await executorBridge.patchConfig({
+            openclaw: {
+              url: desired.openclaw.url,
+              token: desired.openclaw.token ?? "",
+            },
+            reconnect: body.reconnect ?? Boolean(body.openclaw),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const classified = classifyExecutorReconnect(message);
+          if (!classified.shouldRetry) {
+            throw error;
+          }
+        }
       } finally {
         broadcastExecutorStatus();
       }
@@ -4753,6 +4930,30 @@ const server = createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, await proxyGatewayRequest(body.method.trim(), body.params));
+      return;
+    }
+
+    const companyCodexAuthMatch = request.method === "POST"
+      ? /^\/companies\/([^/]+)\/codex-auth\/sync$/u.exec(url.pathname)
+      : null;
+    if (companyCodexAuthMatch) {
+      try {
+        const companyId = decodeURIComponent(companyCodexAuthMatch[1] ?? "");
+        const source = url.searchParams.get("source") === "gateway" ? "gateway" : "cli";
+        const result = await syncCompanyCodexAuth(companyId, source);
+        sendJson(response, 200, {
+          ok: true,
+          companyId,
+          source,
+          profileId: result.profileId,
+          syncedAgentIds: result.syncedAgentIds,
+          changed: result.changed,
+          ...("gatewayRefresh" in result ? { gatewayRefresh: result.gatewayRefresh } : {}),
+          ...(result.accountId ? { accountId: result.accountId } : {}),
+        });
+      } catch (error) {
+        sendError(response, 400, stringifyError(error));
+      }
       return;
     }
 
@@ -5135,6 +5336,9 @@ const server = createServer(async (request, response) => {
         sessionKey: dispatch.sessionKey,
         message: body.message,
         deliver: false,
+        ...(typeof body.thinkingLevel === "string" && body.thinkingLevel.trim().length > 0
+          ? { thinking: body.thinkingLevel.trim() }
+          : {}),
         ...(typeof body.timeoutMs === "number" ? { timeoutMs: body.timeoutMs } : {}),
         ...(body.attachments ? { attachments: body.attachments } : {}),
         idempotencyKey: crypto.randomUUID(),
@@ -5149,6 +5353,7 @@ const server = createServer(async (request, response) => {
         actorId: body.actorId,
         sessionKey: dispatch.sessionKey,
         startedAt: dispatch.now,
+        thinkingLevel: body.thinkingLevel ?? null,
         payload: {
           request: body.message,
           attachments: body.attachments ?? [],
@@ -5164,10 +5369,12 @@ const server = createServer(async (request, response) => {
         timestamp: dispatch.now,
         raw: result,
       };
-      repository.applyRuntimeEvent(body.companyId, runtimeEvent);
       sendJson(response, 200, result);
       broadcastAgentRuntimeEvent(body.companyId, runtimeEvent);
       broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
+      void queueExecutorProjectionPersist(`accepted:${result.runId}`, () => {
+        repository.applyRuntimeEvent(body.companyId, runtimeEvent);
+      });
       return;
     }
 

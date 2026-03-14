@@ -146,7 +146,6 @@ export type BuildChatSessionContextInput = {
   recentArchivedRounds: GatewaySessionArchiveRow[];
   routeRoomId: string | null;
   sessionKey: string | null;
-  streamText: string | null;
   targetAgentId: string | null;
 };
 
@@ -259,8 +258,7 @@ export function buildChatSessionContext(input: BuildChatSessionContextInput) {
       input.sessionKey &&
       !input.loading &&
       input.messages.length === 0 &&
-      !input.isGenerating &&
-      !input.streamText,
+      !input.isGenerating,
   );
   const isRequirementBootstrapPending = Boolean(
     isCeoSession &&
@@ -302,7 +300,6 @@ export function buildChatSessionContext(input: BuildChatSessionContextInput) {
         .slice(-8)
         .map((message) => extractTextFromMessage(message))
         .filter((text): text is string => Boolean(text)),
-      input.streamText,
     ],
     taskSteps: latestTaskSteps,
     isGenerating: input.isGenerating,

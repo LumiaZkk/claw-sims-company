@@ -19,11 +19,14 @@ type ChatComposerFooterProps = {
   sending: boolean;
   uploadingFile: boolean;
   attachments: ChatAttachment[];
+  thinkingLevel?: string;
   roomBroadcastMode: boolean;
   requirementRoomMentionCandidates?: RequirementRoomMentionCandidate[];
   composerPrefill?: { id: string | number; text: string } | null;
   routeComposerPrefill?: { id: string | number; text: string } | null;
+  showThinkingSelector?: boolean;
   setRoomBroadcastMode: (value: boolean) => void;
+  setThinkingLevel?: (value: string) => void;
   setAttachments: Dispatch<SetStateAction<ChatAttachment[]>>;
   processImageFile: (file: File) => Promise<void> | void;
   handleSend: (draft: string) => Promise<boolean>;
@@ -83,6 +86,7 @@ function areChatComposerFooterPropsEqual(
     left.sending === right.sending &&
     left.uploadingFile === right.uploadingFile &&
     areChatAttachmentsEqual(left.attachments, right.attachments) &&
+    left.thinkingLevel === right.thinkingLevel &&
     left.roomBroadcastMode === right.roomBroadcastMode &&
     areMentionCandidatesEqual(
       left.requirementRoomMentionCandidates,
@@ -90,7 +94,9 @@ function areChatComposerFooterPropsEqual(
     ) &&
     isSamePrefill(left.composerPrefill, right.composerPrefill) &&
     isSamePrefill(left.routeComposerPrefill, right.routeComposerPrefill) &&
+    left.showThinkingSelector === right.showThinkingSelector &&
     left.setRoomBroadcastMode === right.setRoomBroadcastMode &&
+    left.setThinkingLevel === right.setThinkingLevel &&
     left.setAttachments === right.setAttachments &&
     left.processImageFile === right.processImageFile &&
     left.handleSend === right.handleSend
@@ -119,11 +125,14 @@ export const ChatComposerFooter = memo(function ChatComposerFooter(input: ChatCo
     sending,
     uploadingFile,
     attachments,
+    thinkingLevel,
     roomBroadcastMode,
     requirementRoomMentionCandidates,
     composerPrefill: localComposerPrefill,
     routeComposerPrefill,
+    showThinkingSelector = false,
     setRoomBroadcastMode,
+    setThinkingLevel,
     setAttachments,
     processImageFile,
     handleSend,
@@ -164,11 +173,14 @@ export const ChatComposerFooter = memo(function ChatComposerFooter(input: ChatCo
         sending={sending}
         uploadingFile={uploadingFile}
         attachments={attachments}
+        thinkingLevel={thinkingLevel}
         broadcastMode={roomBroadcastMode}
         mentionCandidates={requirementRoomMentionCandidates}
         prefill={mergedComposerPrefill}
         showBroadcastToggle={Boolean(requirementRoomMentionCandidates)}
+        showThinkingSelector={showThinkingSelector}
         onBroadcastModeChange={setRoomBroadcastMode}
+        onThinkingLevelChange={setThinkingLevel}
         onRemoveAttachment={handleRemoveAttachment}
         onPickFile={handlePickFile}
         onPasteImage={processImageFile}

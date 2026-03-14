@@ -1,5 +1,9 @@
 import { Sparkles } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  readLiveChatSession,
+  subscribeLiveChatSession,
+} from "../../../application/chat/live-session-cache";
 import { useConversationDispatches } from "../../../application/mission";
 import { Avatar, AvatarFallback, AvatarImage } from "../../../components/ui/avatar";
 import type { DecisionTicketRecord, DispatchRecord } from "../../../domain/delegation/types";
@@ -73,6 +77,7 @@ type ChatMessageFeedProps = {
   displayItemsLength: number;
   visibleDisplayItems: ChatDisplayItem[];
   companyId: string | null;
+  sessionKey: string | null;
   employees: EmployeeRef[];
   isCeoSession: boolean;
   isGroup: boolean;
@@ -89,16 +94,18 @@ type ChatMessageFeedProps = {
   openRequirementDecisionTicket: DecisionTicketRecord | null;
   showLegacyDecisionCard: boolean;
   decisionSubmittingOptionId: string | null;
-  hasActiveRun: boolean;
-  streamText: string | null;
   isGenerating: boolean;
   emptyStateText: string;
   onExpandDisplayWindow: (nextSize: number) => void;
   onSelectDecisionOption: (optionId: string) => Promise<unknown> | void;
   onNavigateToRoute: (route: string) => void;
+  onStreamActivity?: () => void;
 };
 
-type ChatMessageListProps = Omit<ChatMessageFeedProps, "hasActiveRun" | "streamText" | "isGenerating">;
+type ChatMessageListProps = Omit<
+  ChatMessageFeedProps,
+  "sessionKey" | "isGenerating" | "onStreamActivity"
+>;
 
 function ChatDetailDisclosure(input: {
   detailContent?: string | null;
@@ -655,15 +662,84 @@ const ChatMessageList = memo(function ChatMessageList(input: ChatMessageListProp
   );
 });
 
+type StreamingVisualMode = "hidden" | "thinking" | "text";
+
+function resolveStreamingVisualState(
+  companyId: string | null,
+  sessionKey: string | null,
+  isGeneratingFallback: boolean,
+): { mode: StreamingVisualMode; text: string | null } {
+  const liveSession = readLiveChatSession(companyId, sessionKey);
+  const text = liveSession?.streamText?.trim().length ? liveSession.streamText : null;
+  const isGenerating = isGeneratingFallback || Boolean(liveSession?.isGenerating);
+  if (text) {
+    return { mode: "text", text };
+  }
+  if (isGenerating) {
+    return { mode: "thinking", text: null };
+  }
+  return { mode: "hidden", text: null };
+}
+
 const ChatStreamingState = memo(function ChatStreamingState(input: {
-  streamText: string | null;
-  isGenerating: boolean;
+  companyId: string | null;
+  sessionKey: string | null;
+  isGeneratingFallback: boolean;
   groupTopic: string | null;
   emp: EmployeeRef | null;
   isGroup: boolean;
-  hasActiveRun: boolean;
+  onStreamActivity?: () => void;
 }) {
-  if (input.streamText) {
+  const initialVisualState = useMemo(
+    () =>
+      resolveStreamingVisualState(
+        input.companyId,
+        input.sessionKey,
+        input.isGeneratingFallback,
+      ),
+    [input.companyId, input.isGeneratingFallback, input.sessionKey],
+  );
+  const [mode, setMode] = useState<StreamingVisualMode>(initialVisualState.mode);
+  const modeRef = useRef<StreamingVisualMode>(initialVisualState.mode);
+  const streamTextRef = useRef<string | null>(initialVisualState.text);
+  const textElementRef = useRef<HTMLDivElement | null>(null);
+  const onStreamActivityRef = useRef(input.onStreamActivity);
+
+  useEffect(() => {
+    onStreamActivityRef.current = input.onStreamActivity;
+  }, [input.onStreamActivity]);
+
+  useEffect(() => {
+    const syncVisualState = () => {
+      const nextState = resolveStreamingVisualState(
+        input.companyId,
+        input.sessionKey,
+        input.isGeneratingFallback,
+      );
+      streamTextRef.current = nextState.text;
+      if (textElementRef.current) {
+        textElementRef.current.textContent = nextState.text ?? "";
+      }
+      if (nextState.mode !== modeRef.current) {
+        modeRef.current = nextState.mode;
+        setMode(nextState.mode);
+      }
+      if (nextState.mode !== "hidden") {
+        onStreamActivityRef.current?.();
+      }
+    };
+
+    syncVisualState();
+    return subscribeLiveChatSession(input.companyId, input.sessionKey, syncVisualState);
+  }, [input.companyId, input.isGeneratingFallback, input.sessionKey]);
+
+  useEffect(() => {
+    if (mode === "text" && textElementRef.current) {
+      textElementRef.current.textContent = streamTextRef.current ?? "";
+    }
+  }, [mode]);
+
+  if (mode === "text") {
     return (
         <div className="group flex max-w-full justify-start">
           <div className="flex max-w-full gap-3 lg:max-w-[95%] xl:max-w-[90%] flex-row">
@@ -677,10 +753,9 @@ const ChatStreamingState = memo(function ChatStreamingState(input: {
                 {input.isGroup ? "需求团队成员" : input.emp?.nickname} · 正在思考…
               </span>
               <div className="rounded-2xl rounded-tl-sm border bg-white px-4 py-3 text-sm text-slate-900 shadow-sm">
-                <ChatContent
-                  content={[{ type: "text", text: input.streamText }]}
-                  hasActiveRun={input.hasActiveRun}
-                  streamText={input.streamText}
+                <div
+                  ref={textElementRef}
+                  className="w-full whitespace-pre-wrap break-words text-sm leading-7 text-slate-800"
                 />
               </div>
             </div>
@@ -689,7 +764,7 @@ const ChatStreamingState = memo(function ChatStreamingState(input: {
     );
   }
 
-  if (input.isGenerating) {
+  if (mode === "thinking") {
     return (
         <div className="group flex max-w-full justify-start">
           <div className="flex max-w-full gap-3 lg:max-w-[95%] xl:max-w-[90%] flex-row">
@@ -749,12 +824,13 @@ export const ChatMessageFeed = memo(function ChatMessageFeed(input: ChatMessageF
         onNavigateToRoute={input.onNavigateToRoute}
       />
       <ChatStreamingState
-        streamText={input.streamText}
-        isGenerating={input.isGenerating}
+        companyId={input.companyId}
+        sessionKey={input.sessionKey}
+        isGeneratingFallback={input.isGenerating}
         groupTopic={input.groupTopic}
         emp={input.emp}
         isGroup={input.isGroup}
-        hasActiveRun={input.hasActiveRun}
+        onStreamActivity={input.onStreamActivity}
       />
     </>
   );

@@ -127,7 +127,7 @@ function createBootstrap(config: CyberCompanyConfig | null): AuthorityBootstrapS
       },
     ],
     authority: {
-      url: "http://127.0.0.1:18790",
+      url: "http://127.0.0.1:18789",
       dbPath: "/tmp/test.sqlite",
       connected: true,
     },

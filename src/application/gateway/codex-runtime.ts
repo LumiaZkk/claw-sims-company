@@ -10,6 +10,11 @@ type SessionModelPlanEntry = {
 
 type SessionLike = Pick<GatewaySessionRow, "actorId" | "key">;
 type ControlLike = Pick<AgentControlSnapshot, "defaultModel" | "modelOverride">;
+type CompanyLike = {
+  employees?: Array<{
+    agentId?: string | null;
+  } | null> | null;
+} | null | undefined;
 
 function normalizeNonEmptyString(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
@@ -21,6 +26,20 @@ function normalizeNonEmptyString(value: string | null | undefined): string | nul
 
 function resolveEffectiveModel(snapshot: ControlLike | null | undefined): string | null {
   return normalizeNonEmptyString(snapshot?.modelOverride) ?? normalizeNonEmptyString(snapshot?.defaultModel);
+}
+
+function resolveGatewaySessionModelRef(
+  session: Pick<GatewaySessionRow, "model" | "modelProvider"> | null | undefined,
+) {
+  const model = normalizeNonEmptyString(session?.model);
+  const provider = normalizeNonEmptyString(session?.modelProvider);
+  if (model && model.includes("/")) {
+    return model;
+  }
+  if (provider && model) {
+    return `${provider}/${model}`;
+  }
+  return model;
 }
 
 export function isCodexModelRef(modelRef: string | null | undefined): boolean {
@@ -56,6 +75,28 @@ export function buildCodexSessionReapplyPlan(input: {
   }
 
   return plan;
+}
+
+export function countCodexSessionReapplySuccesses(input: {
+  plan: SessionModelPlanEntry[];
+  sessions: Array<Pick<GatewaySessionRow, "key" | "model" | "modelProvider">>;
+}): number {
+  const bySessionKey = new Map(
+    input.sessions.map((session) => [session.key, resolveGatewaySessionModelRef(session)] as const),
+  );
+  return input.plan.reduce((count, entry) => (
+    bySessionKey.get(entry.sessionKey) === entry.model ? count + 1 : count
+  ), 0);
+}
+
+export function collectCodexAuthTargetAgentIds(company: CompanyLike): string[] {
+  return [
+    ...new Set(
+      (company?.employees ?? [])
+        .map((employee) => normalizeNonEmptyString(employee?.agentId))
+        .filter((agentId): agentId is string => Boolean(agentId)),
+    ),
+  ];
 }
 
 export async function syncCodexModelsToAllowlist(models: GatewayModelChoice[]) {
@@ -143,20 +184,43 @@ export async function reapplyCodexModelsToActiveSessions(): Promise<{
     }),
   );
 
-  let reapplied = 0;
-  let failed = 0;
+  const fulfilledEntries: SessionModelPlanEntry[] = [];
+  let commandFailed = 0;
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") {
-      reapplied += 1;
+      if (plan[index]) {
+        fulfilledEntries.push(plan[index]);
+      }
       return;
     }
-    failed += 1;
+    commandFailed += 1;
     console.warn("Failed to reapply Codex model to active session", {
       actorId: plan[index]?.actorId,
       error: result.reason,
       sessionKey: plan[index]?.sessionKey,
     });
   });
+
+  let reapplied = fulfilledEntries.length;
+  let failed = commandFailed;
+  if (fulfilledEntries.length > 0) {
+    try {
+      const verification = await gateway.listSessions({
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 1000,
+      });
+      reapplied = countCodexSessionReapplySuccesses({
+        plan: fulfilledEntries,
+        sessions: verification.sessions ?? [],
+      });
+      failed = commandFailed + (fulfilledEntries.length - reapplied);
+    } catch (error) {
+      console.warn("Skipped Codex session reapply verification because listing sessions failed", {
+        error,
+      });
+    }
+  }
 
   return {
     failed,
@@ -177,4 +241,68 @@ export function formatCodexRuntimeSyncDescription(result: {
     return `已完成 ${result.reapplied} 个活动会话的 Codex 模型重绑。`;
   }
   return `已重绑 ${result.reapplied}/${result.matched} 个活动会话，另有 ${result.failed} 个会话重绑失败。`;
+}
+
+const LAST_CODEX_ACCOUNT_ID_STORAGE_KEY = "cyber-company.codex.last-account-id";
+
+function getCodexAuthStorage(): Storage | null {
+  try {
+    return typeof globalThis !== "undefined" && "localStorage" in globalThis ? globalThis.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function shortenCodexAccountId(accountId: string): string {
+  if (accountId.length <= 16) {
+    return accountId;
+  }
+  return `${accountId.slice(0, 8)}...${accountId.slice(-4)}`;
+}
+
+export function formatCodexAccountChangeDescription(accountId: string | null | undefined): string {
+  const normalizedAccountId = normalizeNonEmptyString(accountId);
+  if (!normalizedAccountId) {
+    return "";
+  }
+
+  const storage = getCodexAuthStorage();
+  const previousAccountId = normalizeNonEmptyString(storage?.getItem(LAST_CODEX_ACCOUNT_ID_STORAGE_KEY) ?? null);
+
+  try {
+    storage?.setItem(LAST_CODEX_ACCOUNT_ID_STORAGE_KEY, normalizedAccountId);
+  } catch {
+    // Best-effort only. Missing storage should not block auth completion.
+  }
+
+  const shortAccountId = shortenCodexAccountId(normalizedAccountId);
+  if (!previousAccountId) {
+    return `当前 OpenAI account 为 ${shortAccountId}。`;
+  }
+  if (previousAccountId === normalizedAccountId) {
+    return `OpenAI account 未切换，仍为 ${shortAccountId}。`;
+  }
+  return `OpenAI account 已切换为 ${shortAccountId}（之前为 ${shortenCodexAccountId(previousAccountId)}）。`;
+}
+
+export function formatCodexAuthCompletionDescription(input: {
+  accountId?: string | null;
+  codexCount: number;
+  profileId?: string | null;
+  reapplyResult: {
+    failed: number;
+    matched: number;
+    reapplied: number;
+  };
+}): string {
+  const profileLabel = normalizeNonEmptyString(input.profileId) ?? "openai-codex";
+  const parts = [
+    `已导入 ${profileLabel}，当前发现 ${input.codexCount} 个 Codex 模型。`,
+  ];
+  const accountDescription = formatCodexAccountChangeDescription(input.accountId);
+  if (accountDescription) {
+    parts.push(accountDescription);
+  }
+  parts.push(formatCodexRuntimeSyncDescription(input.reapplyResult));
+  return parts.join("");
 }

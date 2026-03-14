@@ -32,7 +32,6 @@ export function useChatSessionContext(input: BuildChatSessionContextInput) {
     recentArchivedRounds,
     routeRoomId,
     sessionKey,
-    streamText,
     targetAgentId,
   } = input;
 
@@ -65,7 +64,6 @@ export function useChatSessionContext(input: BuildChatSessionContextInput) {
         recentArchivedRounds,
         routeRoomId,
         sessionKey,
-        streamText,
         targetAgentId,
       }),
     [
@@ -95,7 +93,6 @@ export function useChatSessionContext(input: BuildChatSessionContextInput) {
       recentArchivedRounds,
       routeRoomId,
       sessionKey,
-      streamText,
       targetAgentId,
     ],
   );

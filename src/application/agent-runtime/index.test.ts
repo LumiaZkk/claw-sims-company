@@ -302,6 +302,65 @@ describe("agent runtime projection", () => {
     });
   });
 
+  it("clears stale failures when a later session status snapshot reports idle again", () => {
+    const errored = applyProviderSessionStatusToAgentSessions({
+      sessions: [],
+      status: normalizeProviderSessionStatus("openclaw", "agent:cto:main", {
+        actorId: "cto",
+        error: "rate limit",
+        updatedAt: 100,
+      }),
+    });
+
+    const recovered = applyProviderSessionStatusToAgentSessions({
+      sessions: errored,
+      status: normalizeProviderSessionStatus("openclaw", "agent:cto:main", {
+        actorId: "cto",
+        status: "idle",
+        updatedAt: 200,
+      }),
+    });
+
+    expect(recovered[0]).toMatchObject({
+      sessionState: "idle",
+      abortedLastRun: false,
+      lastError: null,
+      lastTerminalRunState: null,
+      lastTerminalSummary: null,
+    });
+  });
+
+  it("clears stale failures when a fresh sessions.list snapshot no longer marks the session as aborted", () => {
+    const recovered = buildAgentSessionRecordsFromSessions({
+      providerId: "openclaw",
+      existing: [
+        {
+          sessionKey: "agent:cto:main",
+          agentId: "cto",
+          providerId: "openclaw",
+          sessionState: "error",
+          lastSeenAt: 100,
+          lastStatusSyncAt: null,
+          lastMessageAt: 100,
+          abortedLastRun: true,
+          lastError: "rate limit",
+          lastTerminalRunState: "error",
+          lastTerminalSummary: "rate limit",
+          source: "lifecycle",
+        },
+      ],
+      sessions: [createSession({ key: "agent:cto:main", actorId: "cto", updatedAt: 200, abortedLastRun: false })],
+    });
+
+    expect(recovered[0]).toMatchObject({
+      sessionState: "idle",
+      abortedLastRun: false,
+      lastError: null,
+      lastTerminalRunState: null,
+      lastTerminalSummary: null,
+    });
+  });
+
   it("repairs runtime from session_status when lifecycle events are missing", () => {
     const sessions = buildAgentSessionRecordsFromSessions({
       providerId: "openclaw",

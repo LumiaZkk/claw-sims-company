@@ -18,16 +18,29 @@ export type ChatComposerProps = {
   sending: boolean;
   uploadingFile: boolean;
   attachments: ChatAttachment[];
+  thinkingLevel?: string;
   broadcastMode?: boolean;
   mentionCandidates?: RequirementRoomMentionCandidate[];
   prefill?: { id: string | number; text: string } | null;
   showBroadcastToggle?: boolean;
+  showThinkingSelector?: boolean;
   onBroadcastModeChange?: (value: boolean) => void;
+  onThinkingLevelChange?: (value: string) => void;
   onRemoveAttachment: (index: number) => void;
   onPickFile: () => void;
   onPasteImage: (file: File) => void;
   onSend: (draft: string) => Promise<boolean>;
 };
+
+const THINKING_LEVEL_OPTIONS = [
+  { value: "off", label: "直答" },
+  { value: "minimal", label: "极低" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "xhigh", label: "极高" },
+  { value: "adaptive", label: "自适应" },
+] as const;
 
 function areChatAttachmentsEqual(left: ChatAttachment[], right: ChatAttachment[]) {
   if (left === right) {
@@ -73,12 +86,15 @@ function areChatComposerPropsEqual(left: ChatComposerProps, right: ChatComposerP
     left.placeholder === right.placeholder &&
     left.sending === right.sending &&
     left.uploadingFile === right.uploadingFile &&
+    left.thinkingLevel === right.thinkingLevel &&
     left.broadcastMode === right.broadcastMode &&
     left.showBroadcastToggle === right.showBroadcastToggle &&
+    left.showThinkingSelector === right.showThinkingSelector &&
     areChatAttachmentsEqual(left.attachments, right.attachments) &&
     areMentionCandidatesEqual(left.mentionCandidates ?? [], right.mentionCandidates ?? []) &&
     isSamePrefill(left.prefill, right.prefill) &&
     left.onBroadcastModeChange === right.onBroadcastModeChange &&
+    left.onThinkingLevelChange === right.onThinkingLevelChange &&
     left.onRemoveAttachment === right.onRemoveAttachment &&
     left.onPickFile === right.onPickFile &&
     left.onPasteImage === right.onPasteImage &&
@@ -91,11 +107,14 @@ export const ChatComposer = memo(function ChatComposer({
   sending,
   uploadingFile,
   attachments,
+  thinkingLevel = "adaptive",
   broadcastMode = false,
   mentionCandidates = [],
   prefill,
   showBroadcastToggle = false,
+  showThinkingSelector = false,
   onBroadcastModeChange,
+  onThinkingLevelChange,
   onRemoveAttachment,
   onPickFile,
   onPasteImage,
@@ -280,6 +299,26 @@ export const ChatComposer = memo(function ChatComposer({
               <span className="text-[10px] text-indigo-500">{candidate.role}</span>
             </button>
           ))}
+        </div>
+      ) : null}
+      {showThinkingSelector ? (
+        <div className="mx-auto mb-2 flex max-w-4xl items-center gap-2 px-1">
+          <span className="text-[11px] text-slate-500">思考强度</span>
+          <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600 shadow-sm">
+            <span>{THINKING_LEVEL_OPTIONS.find((option) => option.value === thinkingLevel)?.label ?? "自适应"}</span>
+            <select
+              className="cursor-pointer border-0 bg-transparent text-xs font-medium text-slate-700 outline-none"
+              value={thinkingLevel}
+              onChange={(event) => onThinkingLevelChange?.(event.target.value)}
+              title="调整这一条会话的思考强度"
+            >
+              {THINKING_LEVEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       ) : null}
       <div className="relative mx-auto flex max-w-4xl items-end gap-2 rounded-xl border bg-slate-50 p-1 shadow-sm transition-shadow focus-within:ring-1 focus-within:ring-indigo-500">

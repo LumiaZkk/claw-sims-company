@@ -201,8 +201,8 @@ export class BackendManager implements AgentBackend {
     return this.currentBackend.refreshModels();
   }
 
-  startCodexOAuth() {
-    return this.currentBackend.startCodexOAuth();
+  startCodexOAuth(params?: Parameters<AgentBackend["startCodexOAuth"]>[0]) {
+    return this.currentBackend.startCodexOAuth(params);
   }
 
   getCodexOAuthStatus(state: string) {
@@ -213,8 +213,8 @@ export class BackendManager implements AgentBackend {
     return this.currentBackend.completeCodexOAuth(params);
   }
 
-  importCodexCliAuth() {
-    return this.currentBackend.importCodexCliAuth();
+  importCodexCliAuth(params?: Parameters<AgentBackend["importCodexCliAuth"]>[0]) {
+    return this.currentBackend.importCodexCliAuth(params);
   }
 
   updateAgent(params: Parameters<AgentBackend["updateAgent"]>[0]) {

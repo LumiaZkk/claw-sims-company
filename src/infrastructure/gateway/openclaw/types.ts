@@ -10,6 +10,10 @@ export interface GatewayModelsListParams {
   scope?: "allowed" | "catalog";
 }
 
+export interface GatewayCodexAuthTargetParams {
+  agentIds?: string[];
+}
+
 export interface GatewayAuthImportCodexCliResult {
   ok: true;
   profileId: string;

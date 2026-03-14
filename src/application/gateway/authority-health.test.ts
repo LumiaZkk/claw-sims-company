@@ -7,7 +7,9 @@ import {
   collectAuthorityGuidance,
   collectAuthorityRepairSteps,
   extractAuthorityHealthSnapshot,
+  requiresAuthorityExecutorOnboarding,
   resolveAuthorityControlState,
+  resolveAuthorityExecutorOnboardingIssue,
   resolveAuthorityStorageState,
 } from "./authority-health";
 
@@ -347,5 +349,41 @@ describe("authority health helpers", () => {
       title: "Authority 当前有待处理项：还没有标准备份",
     });
     expect(buildAuthorityBannerModel(health)?.steps[0]).toContain("npm run authority:backup");
+  });
+
+  it("requires executor onboarding when token is missing or executor is blocked", () => {
+    const missingToken = createHealthSnapshot({
+      executorConfig: {
+        ...createHealthSnapshot().executorConfig,
+        openclaw: {
+          url: "ws://localhost:18789",
+          tokenConfigured: false,
+        },
+      },
+    });
+    expect(resolveAuthorityExecutorOnboardingIssue(missingToken)).toBe("missing-token");
+    expect(requiresAuthorityExecutorOnboarding(missingToken)).toBe(true);
+
+    const missingScope = createHealthSnapshot({
+      executor: {
+        ...createHealthSnapshot().executor,
+        state: "blocked",
+      },
+      executorConfig: {
+        ...createHealthSnapshot().executorConfig,
+        lastError: "OpenClaw 未授予 Authority 必需权限：operator.read, operator.admin。",
+      },
+    });
+    expect(resolveAuthorityExecutorOnboardingIssue(missingScope)).toBe("missing-scope");
+    expect(requiresAuthorityExecutorOnboarding(missingScope)).toBe(true);
+
+    const blocked = createHealthSnapshot({
+      executor: {
+        ...createHealthSnapshot().executor,
+        state: "blocked",
+      },
+    });
+    expect(resolveAuthorityExecutorOnboardingIssue(blocked)).toBe("executor-blocked");
+    expect(requiresAuthorityExecutorOnboarding(blocked)).toBe(true);
   });
 });

@@ -754,24 +754,37 @@ export function buildAgentSessionRecordsFromSessions(input: {
   for (const session of input.sessions) {
     const previous = bySessionKey.get(session.key);
     const updatedAt = resolveSessionUpdatedAt(session) || now;
+    const shouldClearStaleFailure =
+      !session.abortedLastRun
+      && (
+        previous?.abortedLastRun
+        || previous?.lastTerminalRunState === "error"
+        || previous?.lastTerminalRunState === "aborted"
+      );
     const next: AgentSessionRecord = {
       sessionKey: session.key,
       agentId: resolveSessionActorId(session),
       providerId: input.providerId,
       sessionState:
-        previous?.sessionState
-        ?? (session.abortedLastRun ? "error" : "idle"),
+        shouldClearStaleFailure
+          ? "idle"
+          : (previous?.sessionState ?? (session.abortedLastRun ? "error" : "idle")),
       lastSeenAt: Math.max(previous?.lastSeenAt ?? 0, updatedAt) || null,
       lastStatusSyncAt: previous?.lastStatusSyncAt ?? null,
       lastMessageAt: Math.max(previous?.lastMessageAt ?? 0, updatedAt) || null,
-      abortedLastRun: Boolean(session.abortedLastRun ?? previous?.abortedLastRun),
-      lastError: previous?.lastError ?? (session.abortedLastRun ? "Gateway 标记最近一次执行为 aborted。" : null),
+      abortedLastRun: shouldClearStaleFailure ? false : Boolean(session.abortedLastRun ?? previous?.abortedLastRun),
+      lastError:
+        shouldClearStaleFailure
+          ? null
+          : (previous?.lastError ?? (session.abortedLastRun ? "Gateway 标记最近一次执行为 aborted。" : null)),
       lastTerminalRunState:
-        previous?.lastTerminalRunState
-        ?? (session.abortedLastRun ? "aborted" : null),
+        shouldClearStaleFailure
+          ? null
+          : (previous?.lastTerminalRunState ?? (session.abortedLastRun ? "aborted" : null)),
       lastTerminalSummary:
-        previous?.lastTerminalSummary
-        ?? (session.abortedLastRun ? "Gateway 标记最近一次执行为 aborted。" : null),
+        shouldClearStaleFailure
+          ? null
+          : (previous?.lastTerminalSummary ?? (session.abortedLastRun ? "Gateway 标记最近一次执行为 aborted。" : null)),
       executionContext: previous?.executionContext ?? null,
       source: previous?.source ?? "sessions_list",
     };
@@ -809,8 +822,19 @@ export function applyProviderSessionStatusToAgentRuntime(input: {
   const bySessionKey = new Map(input.sessions.map((session) => [session.sessionKey, session] as const));
   const runMap = new Map(input.runs.map((run) => [run.runId, run] as const));
   const previous = bySessionKey.get(input.status.sessionKey);
+  const shouldClearStaleFailure =
+    (input.status.state === "idle" || input.status.state === "offline")
+    && !input.status.errorMessage
+    && !input.status.runId
+    && (
+      previous?.abortedLastRun
+      || previous?.lastTerminalRunState === "error"
+      || previous?.lastTerminalRunState === "aborted"
+    );
   const terminalState =
-    input.status.state === "error"
+    shouldClearStaleFailure
+      ? null
+      : input.status.state === "error"
       ? ("error" as const)
       : input.status.state === "idle" || input.status.state === "offline"
         ? previous?.abortedLastRun
@@ -818,7 +842,9 @@ export function applyProviderSessionStatusToAgentRuntime(input: {
           : previous?.lastTerminalRunState ?? null
         : null;
   const terminalSummary =
-    terminalState
+    shouldClearStaleFailure
+      ? null
+      : terminalState
       ? buildTerminalRunSummary(terminalState, input.status.sessionKey, input.status.errorMessage)
       : previous?.lastTerminalSummary ?? null;
   bySessionKey.set(input.status.sessionKey, {
@@ -835,16 +861,20 @@ export function applyProviderSessionStatusToAgentRuntime(input: {
         input.status.lastMessageAt ?? input.status.updatedAt ?? 0,
       ) || null,
     abortedLastRun:
-      terminalState === "aborted" || input.status.state === "error"
+      shouldClearStaleFailure
+        ? false
+        : terminalState === "aborted" || input.status.state === "error"
         ? true
         : input.status.state === "idle" || input.status.state === "running" || input.status.state === "streaming"
           ? false
           : previous?.abortedLastRun ?? false,
     lastError:
-      input.status.errorMessage
-      ?? (input.status.state === "idle" || input.status.state === "running" || input.status.state === "streaming"
+      shouldClearStaleFailure
         ? null
-        : previous?.lastError ?? null),
+        : (input.status.errorMessage
+          ?? (input.status.state === "idle" || input.status.state === "running" || input.status.state === "streaming"
+            ? null
+            : previous?.lastError ?? null)),
     lastTerminalRunState: terminalState,
     lastTerminalSummary: terminalSummary,
     executionContext: previous?.executionContext ?? null,

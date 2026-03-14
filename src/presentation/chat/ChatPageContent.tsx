@@ -1,9 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { UploadCloud } from "lucide-react";
 import {
-  startTransition,
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -56,6 +54,7 @@ import type {
   WorkItemRecord,
 } from "../../domain/mission/types";
 import {
+  gateway,
   type ChatMessage,
 } from "../../application/gateway";
 import { useGatewayStore } from "../../application/gateway";
@@ -501,7 +500,6 @@ export function ChatPageScreen() {
   const [recoveringCommunication, setRecoveringCommunication] = useState(false);
   const [sessionSyncStale, setSessionSyncStale] = useState(false);
   const [sessionSyncError, setSessionSyncError] = useState<string | null>(null);
-  const [streamText, setStreamText] = useState<string | null>(null);
   const streamTextRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const pendingGenerationStartedAtRef = useRef<number | null>(null);
@@ -521,18 +519,17 @@ export function ChatPageScreen() {
   const lastTrackedStaleRef = useRef<string | null>(null);
   const [composerPrefill, setComposerPrefill] = useState<{ id: string | number; text: string } | null>(null);
   const [decisionSubmittingOptionId, setDecisionSubmittingOptionId] = useState<string | null>(null);
+  const [thinkingLevel, setThinkingLevel] = useState("adaptive");
 
   const [attachments, setAttachments] = useState<{ mimeType: string; dataUrl: string }[]>([]);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const endRef = useRef<HTMLDivElement>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
 
   const updateStreamText = useCallback((value: string | null) => {
     streamTextRef.current = value;
-    startTransition(() => {
-      setStreamText(value);
-    });
   }, []);
 
   const {
@@ -732,6 +729,30 @@ export function ChatPageScreen() {
     }
   }, []);
 
+  const syncAutoScrollPosition = useCallback(() => {
+    if (userScrollLockRef.current && scrollContainerRef.current) {
+      const lockedTop = lockedScrollTopRef.current;
+      if (typeof lockedTop === "number" && Math.abs(scrollContainerRef.current.scrollTop - lockedTop) > 2) {
+        setProgrammaticScrollLock(true);
+        scrollContainerRef.current.scrollTop = lockedTop;
+      }
+      return;
+    }
+
+    if (forceScrollOnNextUpdateRef.current || (shouldAutoScrollRef.current && !userScrollLockRef.current)) {
+      setProgrammaticScrollLock(true);
+      if (autoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(autoScrollFrameRef.current);
+      }
+      autoScrollFrameRef.current = window.requestAnimationFrame(() => {
+        autoScrollFrameRef.current = null;
+        endRef.current?.scrollIntoView({ behavior: "auto" });
+      });
+      forceScrollOnNextUpdateRef.current = false;
+      shouldAutoScrollRef.current = true;
+    }
+  }, [setProgrammaticScrollLock]);
+
   useEffect(() => {
     companySessionSnapshotsRef.current = companySessionSnapshots;
   }, [companySessionSnapshots]);
@@ -742,6 +763,30 @@ export function ChatPageScreen() {
     }, 60_000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (!connected || !sessionKey || isArchiveView || isGroup) {
+      return;
+    }
+
+    let cancelled = false;
+    void gateway
+      .getChatHistory(sessionKey, 1)
+      .then((history) => {
+        if (cancelled) {
+          return;
+        }
+        const nextLevel =
+          typeof history.thinkingLevel === "string" && history.thinkingLevel.trim().length > 0
+            ? history.thinkingLevel.trim()
+            : "adaptive";
+        setThinkingLevel(nextLevel);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, isArchiveView, isGroup, sessionKey]);
   const supportsSessionHistory = providerCapabilities.sessionHistory;
   const supportsSessionArchiveRestore = providerCapabilities.sessionArchiveRestore;
   useEffect(() => {
@@ -812,7 +857,6 @@ export function ChatPageScreen() {
     recentArchivedRounds,
     routeRoomId,
     sessionKey,
-    streamText,
     targetAgentId,
   });
   const {
@@ -1804,7 +1848,6 @@ export function ChatPageScreen() {
     progressGroupSummary,
     latestProgressDisplay,
     actionWatchCards,
-    hasActiveRun,
     teamMemberCards,
     emptyStateText,
   } = useChatPageSurface({
@@ -1831,8 +1874,6 @@ export function ChatPageScreen() {
     runningFocusActionId,
     requirementTeam,
     buildTeamAdjustmentAction,
-    isGenerating,
-    streamText,
   });
   const latestDisplayMissionNote = useMemo(
     () => findLatestDisplayMissionNote(displayItems),
@@ -1881,7 +1922,6 @@ export function ChatPageScreen() {
             ? { label: "当前步骤", value: chatSurfaceStepLabel }
             : null,
         ].filter((value): value is { label: string; value: string } => Boolean(value));
-  const deferredStreamText = useDeferredValue(streamText);
   const companyEmployees = activeCompany?.employees ?? EMPTY_EMPLOYEES;
   const chatSessionRuntime = useMemo(
     () => ({
@@ -2027,22 +2067,16 @@ export function ChatPageScreen() {
   });
 
   useEffect(() => {
-    if (userScrollLockRef.current && scrollContainerRef.current) {
-      const lockedTop = lockedScrollTopRef.current;
-      if (typeof lockedTop === "number" && Math.abs(scrollContainerRef.current.scrollTop - lockedTop) > 2) {
-        setProgrammaticScrollLock(true);
-        scrollContainerRef.current.scrollTop = lockedTop;
-      }
-      return;
-    }
+    syncAutoScrollPosition();
+  }, [messages, syncAutoScrollPosition]);
 
-    if (forceScrollOnNextUpdateRef.current || (shouldAutoScrollRef.current && !userScrollLockRef.current)) {
-      setProgrammaticScrollLock(true);
-      endRef.current?.scrollIntoView({ behavior: "auto" });
-      forceScrollOnNextUpdateRef.current = false;
-      shouldAutoScrollRef.current = true;
-    }
-  }, [messages, setProgrammaticScrollLock, streamText]);
+  useEffect(() => {
+    return () => {
+      if (autoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(autoScrollFrameRef.current);
+      }
+    };
+  }, []);
 
   const {
     handleClearSession,
@@ -2114,6 +2148,7 @@ export function ChatPageScreen() {
     sending,
     routeCompanyConflictMessage,
     attachments,
+    thinkingLevel: isGroup ? undefined : thinkingLevel,
     roomBroadcastMode,
     targetAgentId,
     displayNextBatonAgentId,
@@ -2480,6 +2515,7 @@ export function ChatPageScreen() {
           displayItemsLength={displayItems.length}
           visibleDisplayItems={visibleDisplayItems}
           companyId={activeCompany?.id ?? null}
+          sessionKey={sessionKey}
           employees={companyEmployees}
           isCeoSession={isCeoSession}
           isGroup={isGroup}
@@ -2496,13 +2532,12 @@ export function ChatPageScreen() {
           openRequirementDecisionTicket={openRequirementDecisionTicket}
           showLegacyDecisionCard={false}
           decisionSubmittingOptionId={decisionSubmittingOptionId}
-          hasActiveRun={hasActiveRun}
-          streamText={deferredStreamText}
           isGenerating={isGenerating}
           emptyStateText={emptyStateText}
           onExpandDisplayWindow={expandDisplayWindow}
           onSelectDecisionOption={(optionId) => void handleResolveRequirementDecision(optionId)}
           onNavigateToRoute={navigate}
+          onStreamActivity={syncAutoScrollPosition}
         />
         <div ref={endRef} />
       </main>
@@ -2521,11 +2556,14 @@ export function ChatPageScreen() {
         sending={sending}
         uploadingFile={uploadingFile}
         attachments={attachments}
+        thinkingLevel={thinkingLevel}
         roomBroadcastMode={roomBroadcastMode}
         requirementRoomMentionCandidates={isGroup ? requirementRoomMentionCandidates : undefined}
         composerPrefill={composerPrefill}
         routeComposerPrefill={routeComposerPrefill}
+        showThinkingSelector={!isGroup}
         setRoomBroadcastMode={setRoomBroadcastMode}
+        setThinkingLevel={setThinkingLevel}
         setAttachments={setAttachments}
         processImageFile={processImageFile}
         handleSend={handleSend}

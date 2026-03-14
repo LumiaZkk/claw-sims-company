@@ -60,6 +60,10 @@ export function AuthorityHealthBanner() {
   }, [hidden, refreshHealth]);
 
   const banner = useMemo(() => (health ? buildAuthorityBannerModel(health, 2) : null), [health]);
+  const needsExecutorToken = Boolean(
+    health &&
+    !health.executorConfig.openclaw.tokenConfigured,
+  );
 
   if (hidden || !banner) {
     return null;
@@ -95,12 +99,21 @@ export function AuthorityHealthBanner() {
             <RefreshCcw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
             刷新诊断
           </button>
-          <Link
-            to="/settings"
-            className="inline-flex items-center rounded-md border border-current/30 bg-white/80 px-2.5 py-1 text-[11px] font-semibold hover:bg-white"
-          >
-            打开 Settings Doctor
-          </Link>
+          {needsExecutorToken ? (
+            <Link
+              to="/executor-setup"
+              className="inline-flex items-center rounded-md border border-current/30 bg-white/80 px-2.5 py-1 text-[11px] font-semibold hover:bg-white"
+            >
+              配置 Authority Token
+            </Link>
+          ) : (
+            <Link
+              to="/settings"
+              className="inline-flex items-center rounded-md border border-current/30 bg-white/80 px-2.5 py-1 text-[11px] font-semibold hover:bg-white"
+            >
+              打开 Settings Doctor
+            </Link>
+          )}
           <Link
             to="/connect"
             className="inline-flex items-center rounded-md border border-current/30 bg-white/80 px-2.5 py-1 text-[11px] font-semibold hover:bg-white"

@@ -1,4 +1,5 @@
 import type {
+  GatewayCodexAuthTargetParams,
   GatewayAuthCodexOauthCallbackResult,
   GatewayAuthCodexOauthStatusResult,
   GatewayAuthCodexOauthStartResult,
@@ -155,8 +156,8 @@ export function buildControlPlaneMethods(gateway: GatewayControlRequester) {
       return gateway.request<{ models: GatewayModelChoice[] }>("models.refresh", {});
     },
 
-    async startCodexOAuth(): Promise<GatewayAuthCodexOauthStartResult> {
-      return gateway.request<GatewayAuthCodexOauthStartResult>("auth.codexOauthStart", {});
+    async startCodexOAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthCodexOauthStartResult> {
+      return gateway.request<GatewayAuthCodexOauthStartResult>("auth.codexOauthStart", params ?? {});
     },
 
     async getCodexOAuthStatus(state: string): Promise<GatewayAuthCodexOauthStatusResult> {
@@ -166,12 +167,13 @@ export function buildControlPlaneMethods(gateway: GatewayControlRequester) {
     async completeCodexOAuth(params: {
       code: string;
       state: string;
+      agentIds?: string[];
     }): Promise<GatewayAuthCodexOauthCallbackResult> {
       return gateway.request<GatewayAuthCodexOauthCallbackResult>("auth.codexOauthCallback", params);
     },
 
-    async importCodexCliAuth(): Promise<GatewayAuthImportCodexCliResult> {
-      return gateway.request<GatewayAuthImportCodexCliResult>("auth.importCodexCli", {});
+    async importCodexCliAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthImportCodexCliResult> {
+      return gateway.request<GatewayAuthImportCodexCliResult>("auth.importCodexCli", params ?? {});
     },
 
     async listCron(): Promise<CronListResult> {

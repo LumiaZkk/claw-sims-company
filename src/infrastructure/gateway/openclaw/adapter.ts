@@ -126,6 +126,7 @@ class OpenClawBackendAdapter implements AgentBackend {
     const result = await this.gateway.sendChatMessage(conversationRef.conversationId, input, {
       timeoutMs: opts?.timeoutMs,
       attachments: opts?.attachments,
+      thinkingLevel: opts?.thinkingLevel,
     });
     return {
       run: {
@@ -191,8 +192,8 @@ class OpenClawBackendAdapter implements AgentBackend {
     return this.gateway.refreshModels();
   }
 
-  startCodexOAuth() {
-    return this.gateway.startCodexOAuth();
+  startCodexOAuth(params?: Parameters<CyberGateway["startCodexOAuth"]>[0]) {
+    return this.gateway.startCodexOAuth(params);
   }
 
   getCodexOAuthStatus(state: string) {
@@ -203,8 +204,8 @@ class OpenClawBackendAdapter implements AgentBackend {
     return this.gateway.completeCodexOAuth(params);
   }
 
-  importCodexCliAuth() {
-    return this.gateway.importCodexCliAuth();
+  importCodexCliAuth(params?: Parameters<CyberGateway["importCodexCliAuth"]>[0]) {
+    return this.gateway.importCodexCliAuth(params);
   }
 
   updateAgent(params: Parameters<CyberGateway["updateAgent"]>[0]) {

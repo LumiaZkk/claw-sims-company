@@ -28,6 +28,7 @@ import type {
 import type { GatewayEventFrame, GatewayHelloOk } from "./browser-client";
 import type { CompanyEvent, CompanyEventsListResult } from "../../../domain/delegation/events";
 import type {
+  GatewayCodexAuthTargetParams,
   GatewayAuthCodexOauthCallbackResult,
   GatewayAuthCodexOauthStatusResult,
   GatewayAuthCodexOauthStartResult,
@@ -168,8 +169,8 @@ export class CyberGateway {
     return this.controlPlaneMethods.refreshModels();
   }
 
-  async startCodexOAuth(): Promise<GatewayAuthCodexOauthStartResult> {
-    return this.controlPlaneMethods.startCodexOAuth();
+  async startCodexOAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthCodexOauthStartResult> {
+    return this.controlPlaneMethods.startCodexOAuth(params);
   }
 
   async getCodexOAuthStatus(state: string): Promise<GatewayAuthCodexOauthStatusResult> {
@@ -179,12 +180,13 @@ export class CyberGateway {
   async completeCodexOAuth(params: {
     code: string;
     state: string;
+    agentIds?: string[];
   }): Promise<GatewayAuthCodexOauthCallbackResult> {
     return this.controlPlaneMethods.completeCodexOAuth(params);
   }
 
-  async importCodexCliAuth(): Promise<GatewayAuthImportCodexCliResult> {
-    return this.controlPlaneMethods.importCodexCliAuth();
+  async importCodexCliAuth(params?: GatewayCodexAuthTargetParams): Promise<GatewayAuthImportCodexCliResult> {
+    return this.controlPlaneMethods.importCodexCliAuth(params);
   }
 
   async updateAgent(params: {
@@ -316,6 +318,7 @@ export class CyberGateway {
     opts?: {
       timeoutMs?: number;
       attachments?: Array<{ type: string; mimeType: string; content: string }>;
+      thinkingLevel?: string;
     },
   ): Promise<ChatSendAck> {
     return this.sessionMethods.sendChatMessage(sessionKey, message, opts);

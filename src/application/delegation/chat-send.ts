@@ -25,6 +25,7 @@ type ExecuteChatSendInput = {
   sessionKey: string;
   text: string;
   attachments: ChatSendAttachment[];
+  thinkingLevel?: string;
   isGroup: boolean;
   roomBroadcastMode: boolean;
   targetAgentId: string | null;
@@ -84,6 +85,7 @@ export async function executeChatSend(input: ExecuteChatSendInput): Promise<Chat
     const ack = await gateway.sendChatMessage(input.sessionKey, input.text, {
       timeoutMs: 300_000,
       attachments: apiAttachments,
+      thinkingLevel: input.thinkingLevel,
     });
     return {
       ok: true,
@@ -190,6 +192,7 @@ export async function executeChatSend(input: ExecuteChatSendInput): Promise<Chat
         kind: "direct",
         timeoutMs: 300_000,
         attachments: apiAttachments,
+        thinkingLevel: input.thinkingLevel,
         targetActorIds: audienceAgentIds,
       });
       void prepared.send.catch((error) => {

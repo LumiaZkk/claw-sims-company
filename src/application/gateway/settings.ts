@@ -19,11 +19,17 @@ import {
   resolveAuthorityStorageState,
 } from "./authority-health";
 import {
+  formatCodexAuthCompletionDescription,
   formatCodexRuntimeSyncDescription,
   reapplyCodexModelsToActiveSessions,
   syncCodexModelsToAllowlist,
 } from "./codex-runtime";
+import {
+  isTransientAuthorityFetchError,
+  retryTransientAuthorityOperation,
+} from "./settings-recovery";
 import { patchAuthorityExecutorConfig } from "./authority-control";
+import { authorityClient } from "../../infrastructure/authority/client";
 
 type JsonMap = Record<string, unknown>;
 export type GatewayDoctorLayerState = "ready" | "degraded" | "blocked";
@@ -73,6 +79,16 @@ async function refreshAvailableModels() {
   return modelsResult.models ?? [];
 }
 
+function scheduleFollowupRuntimeRefresh(refreshRuntime: () => Promise<unknown>, delayMs = 1_200) {
+  void sleep(delayMs)
+    .then(() =>
+      retryTransientAuthorityOperation({
+        operation: refreshRuntime,
+      }),
+    )
+    .catch(() => undefined);
+}
+
 export function useGatewaySettingsQuery() {
   const { connected, error: gatewayError, modelsVersion, phase, token, url } = useGatewayStore();
   const { config: companyConfig, activeCompany } = useCompanyShellQuery();
@@ -80,6 +96,7 @@ export function useGatewaySettingsQuery() {
   const runtimeSync = useAuthorityRuntimeSyncStore();
 
   const [status, setStatus] = useState<JsonMap | null>(null);
+  const [health, setHealth] = useState<JsonMap | null>(null);
   const [channels, setChannels] = useState<JsonMap | null>(null);
   const [skills, setSkills] = useState<JsonMap | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState<GatewayConfigSnapshot | null>(null);
@@ -93,21 +110,43 @@ export function useGatewaySettingsQuery() {
     }
 
     setLoading(true);
-    setError(null);
     try {
-      const [statusResult, channelsResult, skillsResult, snapshotResult, modelsResult] = await Promise.all([
-        gateway.getStatus(),
-        gateway.getChannelsStatus(),
-        gateway.getSkillsStatus(),
-        gateway.getConfigSnapshot(),
-        gateway.listModels(),
-      ]);
+      const {
+        healthResult,
+        statusResult,
+        channelsResult,
+        skillsResult,
+        snapshotResult,
+        modelsResult,
+      } = await retryTransientAuthorityOperation({
+        operation: async () => {
+          const [healthResult, statusResult, channelsResult, skillsResult, snapshotResult, modelsResult] = await Promise.all([
+            gateway.getHealth(),
+            gateway.getStatus(),
+            gateway.getChannelsStatus(),
+            gateway.getSkillsStatus(),
+            gateway.getConfigSnapshot(),
+            gateway.listModels(),
+          ]);
+          return {
+            healthResult,
+            statusResult,
+            channelsResult,
+            skillsResult,
+            snapshotResult,
+            modelsResult,
+          };
+        },
+      });
+      setHealth(healthResult);
       setStatus(statusResult);
       setChannels(channelsResult);
       setSkills(skillsResult);
       setConfigSnapshot(snapshotResult);
       setAvailableModels(modelsResult.models ?? []);
+      setError(null);
       return {
+        health: healthResult,
         status: statusResult,
         channels: channelsResult,
         skills: skillsResult,
@@ -142,6 +181,20 @@ export function useGatewaySettingsQuery() {
     void refreshRuntime().catch(() => undefined);
   }, [connected, modelsVersion, refreshRuntime]);
 
+  useEffect(() => {
+    if (!connected || !error || !isTransientAuthorityFetchError(error)) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void refreshRuntime().catch(() => undefined);
+    }, 1_200);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [connected, error, refreshRuntime]);
+
   const companyCount = useMemo(() => companyConfig?.companies.length ?? 0, [companyConfig]);
   const codexModels = useMemo(
     () => availableModels.filter((model) => model.provider === "openai-codex"),
@@ -153,7 +206,7 @@ export function useGatewaySettingsQuery() {
   const telegramConfig = ((configSnapshot?.config as {
     channels?: { telegram?: { enabled?: boolean; botToken?: string } };
   })?.channels?.telegram ?? null) as GatewayTelegramConfig;
-  const authorityHealth = useMemo(() => extractAuthorityHealthSnapshot(status), [status]);
+  const authorityHealth = useMemo(() => extractAuthorityHealthSnapshot(health), [health]);
   const executorStatus = authorityHealth?.executor ?? null;
   const executorConfig = authorityHealth?.executorConfig ?? null;
   const doctorBaseline = useMemo<GatewayDoctorBaseline>(() => {
@@ -320,6 +373,9 @@ export function useGatewaySettingsCommands(input: {
     setCodexImporting(true);
     try {
       const imported = await gateway.importCodexCliAuth();
+      if (input.activeCompany?.id) {
+        await authorityClient.syncCompanyCodexAuth(input.activeCompany.id, "cli");
+      }
       const refreshed = await gateway.refreshModels();
       await syncCodexModelsToAllowlist(refreshed.models ?? []);
       const reapplyResult = await reapplyCodexModelsToActiveSessions();
@@ -329,9 +385,12 @@ export function useGatewaySettingsCommands(input: {
       await input.refreshRuntime();
       return {
         title: "Codex 授权已同步",
-        description:
-          `已导入 ${imported.profileId}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`
-          + formatCodexRuntimeSyncDescription(reapplyResult),
+        description: formatCodexAuthCompletionDescription({
+          accountId: imported.accountId ?? null,
+          codexCount: nextCodexModels.length,
+          profileId: imported.profileId,
+          reapplyResult,
+        }),
       };
     } finally {
       setCodexImporting(false);
@@ -383,6 +442,9 @@ export function useGatewaySettingsCommands(input: {
           throw new Error(status.errorMessage ?? "Codex OAuth 失败，请重试。");
         }
 
+        if (input.activeCompany?.id) {
+          await authorityClient.syncCompanyCodexAuth(input.activeCompany.id, "gateway");
+        }
         const refreshed = await gateway.refreshModels();
         await syncCodexModelsToAllowlist(refreshed.models ?? []);
         const reapplyResult = await reapplyCodexModelsToActiveSessions();
@@ -393,9 +455,12 @@ export function useGatewaySettingsCommands(input: {
         await input.refreshRuntime();
         return {
           title: "Codex 授权成功",
-          description:
-            `已导入 ${status.profileId ?? "openai-codex"}，当前发现 ${nextCodexModels.length} 个 Codex 模型。`
-            + formatCodexRuntimeSyncDescription(reapplyResult),
+          description: formatCodexAuthCompletionDescription({
+            accountId: status.accountId ?? null,
+            codexCount: nextCodexModels.length,
+            profileId: status.profileId ?? "openai-codex",
+            reapplyResult,
+          }),
         };
       }
 
@@ -597,14 +662,19 @@ export function useGatewaySettingsCommands(input: {
 
     setExecutorSaving(true);
     try {
-      await patchAuthorityExecutorConfig({
-        openclaw: {
-          url: openclawUrl,
-          ...(values.openclawToken?.trim() ? { token: values.openclawToken.trim() } : {}),
-        },
-        reconnect: true,
+      await retryTransientAuthorityOperation({
+        operation: () => patchAuthorityExecutorConfig({
+          openclaw: {
+            url: openclawUrl,
+            ...(values.openclawToken?.trim() ? { token: values.openclawToken.trim() } : {}),
+          },
+          reconnect: true,
+        }),
       });
-      await input.refreshRuntime();
+      await retryTransientAuthorityOperation({
+        operation: () => input.refreshRuntime(),
+      });
+      scheduleFollowupRuntimeRefresh(input.refreshRuntime);
       return {
         title: "执行后端已更新",
         description: "Authority 已保存并重连下游 OpenClaw。",
@@ -617,8 +687,13 @@ export function useGatewaySettingsCommands(input: {
   const handleExecutorReconnect = useCallback(async () => {
     setExecutorSaving(true);
     try {
-      await patchAuthorityExecutorConfig({ reconnect: true });
-      await input.refreshRuntime();
+      await retryTransientAuthorityOperation({
+        operation: () => patchAuthorityExecutorConfig({ reconnect: true }),
+      });
+      await retryTransientAuthorityOperation({
+        operation: () => input.refreshRuntime(),
+      });
+      scheduleFollowupRuntimeRefresh(input.refreshRuntime);
       return {
         title: "执行后端已重连",
         description: "Authority 已向下游 OpenClaw 发起重连。",

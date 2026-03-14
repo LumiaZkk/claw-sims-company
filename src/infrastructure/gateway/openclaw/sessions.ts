@@ -1,6 +1,8 @@
 export interface GatewaySessionRow {
   key: string;
   actorId?: string | null;
+  model?: string | null;
+  modelProvider?: string | null;
   kind?: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -62,6 +64,7 @@ export type ChatEventPayload = {
   state: "delta" | "final" | "aborted" | "error";
   message?: ChatMessage;
   errorMessage?: string;
+  thinkingLevel?: string;
 };
 
 export type ChatSendAck = {
@@ -227,6 +230,7 @@ export function buildSessionMethods(gateway: GatewaySessionRequester) {
       opts?: {
         timeoutMs?: number;
         attachments?: Array<{ type: string; mimeType: string; content: string }>;
+        thinkingLevel?: string;
       },
     ) {
       return gateway.request<ChatSendAck>("chat.send", {
@@ -234,6 +238,9 @@ export function buildSessionMethods(gateway: GatewaySessionRequester) {
         message,
         deliver: false,
         ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+        ...(typeof opts?.thinkingLevel === "string" && opts.thinkingLevel.trim().length > 0
+          ? { thinking: opts.thinkingLevel.trim() }
+          : {}),
         ...(typeof opts?.timeoutMs === "number" ? { timeoutMs: opts.timeoutMs } : {}),
         idempotencyKey: crypto.randomUUID(),
       });

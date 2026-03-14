@@ -21,6 +21,7 @@ export function useChatSend(input: {
   sending: boolean;
   routeCompanyConflictMessage: string | null;
   attachments: ChatSendAttachment[];
+  thinkingLevel?: string;
   roomBroadcastMode: boolean;
   targetAgentId: string | null;
   displayNextBatonAgentId: string | null;
@@ -115,6 +116,7 @@ export function useChatSend(input: {
           sessionKey: input.sessionKey,
           text,
           attachments: currentAttachments,
+          thinkingLevel: input.thinkingLevel,
           isGroup: input.isGroup,
           roomBroadcastMode: input.roomBroadcastMode,
           targetAgentId: input.targetAgentId,

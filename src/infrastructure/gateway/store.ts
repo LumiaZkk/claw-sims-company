@@ -22,6 +22,7 @@ const GATEWAY_CONNECTED_ONCE_KEY = 'cyber_company_gateway_connected_once';
 const GATEWAY_MODELS_VERSION_KEY = 'cyber_company_gateway_models_version';
 const MAX_RECONNECT_ATTEMPTS = 3;
 const LEGACY_GATEWAY_CONFIG_KEY = 'cyber_company_gateway_config';
+const LEGACY_DEFAULT_AUTHORITY_URL = 'http://127.0.0.1:18790';
 
 function getStorage(): Pick<Storage, 'getItem' | 'setItem'> {
   if (
@@ -123,10 +124,22 @@ function migrateLegacyGatewayConfig(providerId: string) {
 function loadStoredProviderUrl(providerId: string, fallback: string): string {
   const direct = loadStoredValue(providerUrlKey(providerId), '');
   if (direct) {
+    if (providerId === 'authority' && direct === LEGACY_DEFAULT_AUTHORITY_URL && fallback !== direct) {
+      storage.setItem(providerUrlKey(providerId), fallback);
+      return fallback;
+    }
     return direct;
   }
   const legacyConfig = loadLegacyGatewayConfig();
   if (legacyConfig?.providerId === providerId && legacyConfig.url) {
+    if (
+      providerId === 'authority' &&
+      legacyConfig.url === LEGACY_DEFAULT_AUTHORITY_URL &&
+      fallback !== legacyConfig.url
+    ) {
+      storage.setItem(providerUrlKey(providerId), fallback);
+      return fallback;
+    }
     return legacyConfig.url;
   }
   return fallback;

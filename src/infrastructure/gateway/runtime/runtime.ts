@@ -124,6 +124,7 @@ export async function sendTurnToCompanyActor(input: {
   kind?: ConversationKind;
   timeoutMs?: number;
   attachments?: Array<{ type: string; mimeType: string; content: string }>;
+  thinkingLevel?: string;
   targetActorIds?: string[];
 }): Promise<{
   actorRef: ActorRef;
@@ -153,6 +154,7 @@ export async function startTurnToCompanyActor(input: {
   kind?: ConversationKind;
   timeoutMs?: number;
   attachments?: Array<{ type: string; mimeType: string; content: string }>;
+  thinkingLevel?: string;
   targetActorIds?: string[];
 }): Promise<{
   actorRef: ActorRef;
@@ -182,6 +184,7 @@ export async function startTurnToCompanyActor(input: {
     send: input.backend.sendTurn(sendConversation, message, {
       timeoutMs: input.timeoutMs,
       attachments: input.attachments,
+      thinkingLevel: input.thinkingLevel,
       targetActorIds: input.targetActorIds,
     }).then((result) => ({
       runId: result.run.runId,

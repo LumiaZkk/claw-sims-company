@@ -3,6 +3,17 @@ import type {
   AuthorityExecutorConnectionState,
   AuthorityExecutorStatus,
 } from "../../../src/infrastructure/authority/contract";
+import {
+  buildDeviceAuthPayloadV3,
+  clearLocalOpenClawDeviceAuthToken,
+  loadLocalOpenClawDeviceAuthToken,
+  loadOrCreateLocalOpenClawDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+  storeLocalOpenClawDeviceAuthToken,
+  type LocalOpenClawDeviceAuthEntry,
+  type LocalOpenClawDeviceIdentity,
+} from "./openclaw-device-auth";
 
 type OpenClawBridgeConfig = {
   type: "openclaw";
@@ -17,6 +28,18 @@ type OpenClawBridgeConfig = {
 
 type OpenClawExecutorBridgeOptions = {
   resolveFallbackToken?: () => string | undefined;
+  loadDeviceIdentity?: () => LocalOpenClawDeviceIdentity | null;
+  loadStoredDeviceToken?: (params: {
+    deviceId: string;
+    role: string;
+  }) => LocalOpenClawDeviceAuthEntry | null;
+  storeDeviceToken?: (params: {
+    deviceId: string;
+    role: string;
+    token: string;
+    scopes?: string[];
+  }) => LocalOpenClawDeviceAuthEntry;
+  clearDeviceToken?: (params: { deviceId: string; role: string }) => void;
 };
 
 type GatewayEventFrame = {
@@ -37,6 +60,14 @@ type GatewayResponseFrame = {
   };
 };
 
+type GatewayHelloOk = {
+  auth?: {
+    deviceToken?: string;
+    role?: string;
+    scopes?: string[];
+  };
+};
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -46,6 +77,28 @@ const CONNECT_TIMEOUT_MS = 8_000;
 const GATEWAY_PROTOCOL_VERSION = 3;
 const GATEWAY_CLIENT_ID = "gateway-client";
 const GATEWAY_CLIENT_MODE = "backend";
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 10_000;
+const REQUESTED_OPERATOR_SCOPES = [
+  "operator.read",
+  "operator.admin",
+  "operator.approvals",
+  "operator.pairing",
+] as const;
+const REQUIRED_OPERATOR_SCOPES = [
+  "operator.read",
+  "operator.admin",
+] as const;
+
+function hasGrantedOperatorScope(granted: Set<string>, requiredScope: (typeof REQUIRED_OPERATOR_SCOPES)[number]) {
+  if (granted.has("operator.admin")) {
+    return true;
+  }
+  if (requiredScope === "operator.read") {
+    return granted.has("operator.read") || granted.has("operator.write");
+  }
+  return granted.has(requiredScope);
+}
 
 function normalizeWsUrl(url: string) {
   const trimmed = url.trim().replace(/\/+$/, "");
@@ -66,13 +119,59 @@ function toErrorMessage(error: unknown) {
   if (raw.includes("device identity required")) {
     return "OpenClaw 需要设备身份或共享 token。请在设置页的 Authority 执行后端填写 OpenClaw token，或在启动前导出 OPENCLAW_GATEWAY_TOKEN。";
   }
+  if (raw.includes("pairing required")) {
+    return "Authority 首次接入 OpenClaw 需要先完成本机设备授权。请保留可用的 shared token 重试一次，或先用 OpenClaw CLI/控制台完成本机设备配对。";
+  }
   return raw;
+}
+
+export function describeMissingScopes(grantedScopes: string[] | null | undefined) {
+  const granted = new Set((grantedScopes ?? []).filter((scope) => typeof scope === "string"));
+  const missing = REQUIRED_OPERATOR_SCOPES.filter((scope) => !hasGrantedOperatorScope(granted, scope));
+  if (missing.length === 0) {
+    return null;
+  }
+  return `OpenClaw 未授予 Authority 必需权限：${missing.join(", ")}。请为当前连接配置带 operator scope 的 gateway token。`;
+}
+
+export function classifyExecutorReconnect(message: string | null | undefined): {
+  state: AuthorityExecutorConnectionState;
+  shouldRetry: boolean;
+} {
+  const normalized = (message ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return { state: "degraded", shouldRetry: true };
+  }
+
+  const blockedPatterns = [
+    "地址未配置",
+    "device identity required",
+    "共享 token",
+    "unauthorized",
+    "forbidden",
+    "auth failed",
+    "authentication failed",
+    "invalid token",
+    "token required",
+    "connect failed",
+  ];
+  if (blockedPatterns.some((pattern) => normalized.includes(pattern.toLowerCase()))) {
+    return { state: "blocked", shouldRetry: false };
+  }
+  return { state: "degraded", shouldRetry: true };
+}
+
+export function computeReconnectDelayMs(attempt: number) {
+  const normalizedAttempt = Math.max(0, Math.floor(attempt));
+  return Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * (2 ** normalizedAttempt));
 }
 
 class OpenClawExecutorBridge {
   private config: OpenClawBridgeConfig;
   private socket: WebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
   private readonly pending = new Map<string, Pending>();
   private readonly eventHandlers = new Set<(event: GatewayEventFrame) => void>();
   private readonly stateHandlers = new Set<() => void>();
@@ -91,6 +190,30 @@ class OpenClawExecutorBridge {
         token: initialConfig.openclaw.token ?? "",
       },
     };
+  }
+
+  private loadDeviceIdentity() {
+    return this.options.loadDeviceIdentity?.() ?? loadOrCreateLocalOpenClawDeviceIdentity();
+  }
+
+  private loadStoredDeviceToken(role: string, deviceId: string) {
+    return this.options.loadStoredDeviceToken?.({ deviceId, role })
+      ?? loadLocalOpenClawDeviceAuthToken({ deviceId, role });
+  }
+
+  private storeDeviceToken(params: {
+    deviceId: string;
+    role: string;
+    token: string;
+    scopes?: string[];
+  }) {
+    return this.options.storeDeviceToken?.(params)
+      ?? storeLocalOpenClawDeviceAuthToken(params);
+  }
+
+  private clearDeviceToken(params: { deviceId: string; role: string }) {
+    this.options.clearDeviceToken?.(params)
+      ?? clearLocalOpenClawDeviceAuthToken(params);
   }
 
   snapshot(): OpenClawBridgeConfig {
@@ -162,11 +285,13 @@ class OpenClawExecutorBridge {
   }
 
   async reconnect() {
+    this.clearReconnectTimer(true);
     this.disconnect();
     await this.ensureConnected();
   }
 
   disconnect() {
+    this.clearReconnectTimer(true);
     const socket = this.socket;
     this.socket = null;
     this.connectPromise = null;
@@ -211,6 +336,7 @@ class OpenClawExecutorBridge {
     this.connectPromise = new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(normalizeWsUrl(this.config.openclaw.url));
       let settled = false;
+      let terminated = false;
       let connectTimer: NodeJS.Timeout | null = null;
       let connectRequested = false;
 
@@ -221,8 +347,15 @@ class OpenClawExecutorBridge {
         }
       };
 
-      const fail = (error: unknown) => {
+      const fail = (error: unknown, override?: { state?: AuthorityExecutorConnectionState; retry?: boolean }) => {
+        if (terminated) {
+          return;
+        }
+        terminated = true;
         const message = toErrorMessage(error);
+        const classified = classifyExecutorReconnect(message);
+        const nextState = override?.state ?? classified.state;
+        const shouldRetry = override?.retry ?? classified.shouldRetry;
         cleanupTimer();
         if (!settled) {
           settled = true;
@@ -237,7 +370,10 @@ class OpenClawExecutorBridge {
           // noop
         }
         this.flushPending(error);
-        this.updateState("degraded", message);
+        this.updateState(nextState, message);
+        if (shouldRetry) {
+          this.scheduleReconnect(message);
+        }
       };
 
       socket.on("open", () => {
@@ -261,11 +397,47 @@ class OpenClawExecutorBridge {
           && parsed.type === "event"
           && parsed.event === "connect.challenge"
         ) {
+          const role = "operator";
+          const identity = this.loadDeviceIdentity();
+          const storedDeviceToken = identity
+            ? this.loadStoredDeviceToken(role, identity.deviceId)
+            : null;
           const authToken =
             this.config.openclaw.token?.trim()
             || this.options.resolveFallbackToken?.();
+          const resolvedAuthToken = authToken || storedDeviceToken?.token;
+          const nonce = (() => {
+            const value = parsed.payload;
+            if (!value || typeof value !== "object" || !("nonce" in value)) {
+              return "";
+            }
+            return typeof value.nonce === "string" ? value.nonce.trim() : "";
+          })();
+          const signedAtMs = Date.now();
+          const device = identity && nonce
+            ? (() => {
+                const payload = buildDeviceAuthPayloadV3({
+                  deviceId: identity.deviceId,
+                  clientId: GATEWAY_CLIENT_ID,
+                  clientMode: GATEWAY_CLIENT_MODE,
+                  role,
+                  scopes: [...REQUESTED_OPERATOR_SCOPES],
+                  signedAtMs,
+                  token: resolvedAuthToken ?? null,
+                  nonce,
+                  platform: process.platform,
+                });
+                return {
+                  id: identity.deviceId,
+                  publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+                  signature: signDevicePayload(identity.privateKeyPem, payload),
+                  signedAt: signedAtMs,
+                  nonce,
+                };
+              })()
+            : undefined;
           connectRequested = true;
-          void this.sendRequest(socket, "connect", {
+          void this.sendRequest<GatewayHelloOk>(socket, "connect", {
             minProtocol: GATEWAY_PROTOCOL_VERSION,
             maxProtocol: GATEWAY_PROTOCOL_VERSION,
             client: {
@@ -274,17 +446,32 @@ class OpenClawExecutorBridge {
               platform: process.platform,
               mode: GATEWAY_CLIENT_MODE,
             },
-            role: "operator",
-            scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+            role,
+            scopes: [...REQUESTED_OPERATOR_SCOPES],
+            device,
             caps: [],
-            auth: authToken
-              ? { token: authToken }
+            auth: resolvedAuthToken
+              ? { token: resolvedAuthToken }
               : undefined,
             userAgent: "cyber-company-authority-daemon",
             locale: "zh-CN",
           })
-            .then(() => {
+            .then((hello) => {
+              if (hello?.auth?.deviceToken && identity) {
+                this.storeDeviceToken({
+                  deviceId: identity.deviceId,
+                  role: hello.auth.role ?? role,
+                  token: hello.auth.deviceToken,
+                  scopes: hello.auth.scopes ?? [...REQUESTED_OPERATOR_SCOPES],
+                });
+              }
+              const missingScopeMessage = describeMissingScopes(hello?.auth?.scopes);
+              if (missingScopeMessage) {
+                fail(new Error(missingScopeMessage), { state: "blocked", retry: false });
+                return;
+              }
               cleanupTimer();
+              this.clearReconnectTimer(true);
               this.config.lastConnectedAt = Date.now();
               this.updateState("ready", null);
               if (!settled) {
@@ -293,6 +480,12 @@ class OpenClawExecutorBridge {
               }
             })
             .catch((error) => {
+              if (!authToken && storedDeviceToken && identity) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                if (errorMessage.toLowerCase().includes("unauthorized")) {
+                  this.clearDeviceToken({ deviceId: identity.deviceId, role });
+                }
+              }
               fail(error);
             });
           return;
@@ -301,6 +494,10 @@ class OpenClawExecutorBridge {
       });
 
       socket.on("close", (code, reasonBuffer) => {
+        if (terminated) {
+          return;
+        }
+        terminated = true;
         cleanupTimer();
         const reason = String(reasonBuffer ?? "");
         if (!settled) {
@@ -311,10 +508,15 @@ class OpenClawExecutorBridge {
           this.socket = null;
         }
         this.flushPending(new Error(`OpenClaw executor closed (${code}): ${reason}`));
+        const detail = reason || "OpenClaw executor disconnected";
+        const classified = classifyExecutorReconnect(detail);
         this.updateState(
-          this.config.openclaw.url.trim().length > 0 ? "degraded" : "blocked",
-          reason || "OpenClaw executor disconnected",
+          this.config.openclaw.url.trim().length > 0 ? classified.state : "blocked",
+          detail,
         );
+        if (this.config.openclaw.url.trim().length > 0 && classified.shouldRetry) {
+          this.scheduleReconnect(detail);
+        }
       });
 
       socket.on("error", (error) => {
@@ -385,6 +587,34 @@ class OpenClawExecutorBridge {
     this.config.connectionState = state;
     this.config.lastError = state === "ready" ? null : lastError;
     this.emitStateChange();
+  }
+
+  private scheduleReconnect(reason: string | null) {
+    if (this.reconnectTimer || !this.config.openclaw.url.trim()) {
+      return;
+    }
+    const { shouldRetry } = classifyExecutorReconnect(reason);
+    if (!shouldRetry) {
+      return;
+    }
+    const delayMs = computeReconnectDelayMs(this.reconnectAttempt);
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.ensureConnected().catch(() => {
+        // The bridge state is already updated inside ensureConnected; keep retrying in background.
+      });
+    }, delayMs);
+  }
+
+  private clearReconnectTimer(resetAttempts: boolean) {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (resetAttempts) {
+      this.reconnectAttempt = 0;
+    }
   }
 
   private emitStateChange() {

@@ -72,11 +72,11 @@ npm test
 - `pages` 不直接碰 `domain` 或 `infrastructure`
 - `presentation` 不直接 import `infrastructure`
 - `domain` 不依赖 `application`、`presentation`、`infrastructure`
-- 需要确认边界时，以 ESLint restricted-imports 和 `docs/engineering-onboarding.md` 为准
+- 需要确认边界时，以当前目录结构和 ESLint restricted-imports 为准
 
 ## 推荐阅读顺序
 
-1. `docs/engineering-onboarding.md`
+1. `README.md`
 2. `src/App.tsx`
 3. 对应路由的 `src/pages/*`
 4. 对应 screen 的 `src/presentation/*`
@@ -84,7 +84,7 @@ npm test
 
 ## 历史材料
 
-`docs/archive/ddd-boundary-migration/` 下是 2026-03 DDD 收口时的计划、进度和发现，保留用于回溯，不作为当前开发入口。
+本地工作区里可能保留内部策划、归档和过程性文档，但这些材料默认不再同步到 GitHub，也不作为公开仓库的开发入口。
 
 ## 报告问题时请带上
 

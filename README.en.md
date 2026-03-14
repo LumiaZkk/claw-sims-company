@@ -58,12 +58,13 @@ If you also run OpenClaw locally, the Authority will try to connect to `ws://loc
 
 If this is your first time in the codebase, use this order:
 
-1. `docs/engineering-onboarding.md`
-2. `src/App.tsx`
-3. Route entry components in `src/pages/*`
-4. Screens, hooks, and page assembly in `src/presentation/*`
-5. Facades, commands, queries, and orchestration in `src/application/*`
-6. Pure rules in `src/domain/*`, and Gateway / runtime / persistence code in `src/infrastructure/*`
+1. `README.md`
+2. `CONTRIBUTING.md`
+3. `src/App.tsx`
+4. Route entry components in `src/pages/*`
+5. Screens, hooks, and page assembly in `src/presentation/*`
+6. Facades, commands, queries, and orchestration in `src/application/*`
+7. Pure rules in `src/domain/*`, and Gateway / runtime / persistence code in `src/infrastructure/*`
 
 ## Architecture Layers
 
@@ -98,33 +99,13 @@ npm run lint -- --max-warnings=0
 npm test
 ```
 
-## Docs
+## Repository Docs
 
-- `docs/engineering-onboarding.md`
-  Entry points, brand structure, and the current directory map.
-- `docs/cyber-company-evolution-direction.md`
-  How the current `Claw Company` slice can evolve into a broader `Claw Sims` product surface.
-- `docs/cyber-company-prd.md`
-  Product background, problem framing, and requirement drafts for the current company-sim slice.
-- `docs/codex-for-oss-application.md`
-  External application material draft.
-- `docs/archive/ddd-boundary-migration/`
-  Historical planning, progress, and archive records from the 2026-03 DDD consolidation work. Not the current development entry point.
+- `README.md`
+  Default Chinese repository overview.
+- `README.en.md`
+  English repository overview.
+- `CONTRIBUTING.md`
+  Contributor-facing structure and change guidelines.
 
-## Screenshots
-
-### CEO Home
-
-![CEO Home](docs/images/ceo-home.png)
-
-### CEO Chat
-
-![CEO Chat](docs/images/ceo-chat.png)
-
-### Ops
-
-![Ops](docs/images/ops.png)
-
-### Board
-
-![Board](docs/images/board.png)
+Planning, review, roadmap, and archive material under `docs/` remains available in the local workspace, but is intentionally no longer published to GitHub.

@@ -58,12 +58,13 @@ npm run dev
 
 如果你是第一次进来，建议按下面顺序读：
 
-1. `docs/engineering-onboarding.md`
-2. `src/App.tsx`
-3. `src/pages/*` 里对应路由的入口组件
-4. `src/presentation/*` 里对应页面的 screen、hooks 和页面装配
-5. `src/application/*` 里的 façade、命令、查询和业务编排
-6. 纯规则去看 `src/domain/*`，Gateway / runtime / 持久化去看 `src/infrastructure/*`
+1. `README.md`
+2. `CONTRIBUTING.md`
+3. `src/App.tsx`
+4. `src/pages/*` 里对应路由的入口组件
+5. `src/presentation/*` 里对应页面的 screen、hooks 和页面装配
+6. `src/application/*` 里的 façade、命令、查询和业务编排
+7. 纯规则去看 `src/domain/*`，Gateway / runtime / 持久化去看 `src/infrastructure/*`
 
 ## 代码分层
 
@@ -98,33 +99,13 @@ npm run lint -- --max-warnings=0
 npm test
 ```
 
-## 文档
+## 仓库说明文件
 
-- `docs/engineering-onboarding.md`
-  当前工程入口、品牌层级和目录地图。
-- `docs/cyber-company-evolution-direction.md`
-  从当前 `Claw Company` 可玩子集如何演进到 `Claw Sims` 更大版图的方向说明。
-- `docs/cyber-company-prd.md`
-  当前公司模拟子集的产品背景、问题定义和需求草案。
-- `docs/codex-for-oss-application.md`
-  对外申请材料草稿。
-- `docs/archive/ddd-boundary-migration/`
-  2026-03 DDD 收口的历史计划、进度和归档记录，不是当前开发入口。
+- `README.md`
+  默认中文入口说明。
+- `README.en.md`
+  英文入口说明。
+- `CONTRIBUTING.md`
+  面向贡献者的结构和改动约定。
 
-## Screenshots
-
-### CEO Home
-
-![CEO Home](docs/images/ceo-home.png)
-
-### CEO Chat
-
-![CEO Chat](docs/images/ceo-chat.png)
-
-### Ops
-
-![Ops](docs/images/ops.png)
-
-### Board
-
-![Board](docs/images/board.png)
+`docs/` 下的策划、评审、路线和归档材料会继续保留在本地工作区，但默认不再同步到 GitHub。

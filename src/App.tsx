@@ -36,7 +36,6 @@ import { OrgAutopilotHost } from "./presentation/org/OrgAutopilotHost";
 import { extractTextFromMessage } from "./presentation/chat/view-models/messages";
 import { toast } from "./components/system/toast-store";
 import { resolveSessionActorId } from "./lib/sessions";
-import { useCompanyRuntimeStore } from "./infrastructure/company/runtime/store";
 
 const AutomationPage = lazy(() =>
   import("./pages/AutomationPage").then((module) => ({ default: module.AutomationPage })),
@@ -170,10 +169,7 @@ export default function App() {
   const location = useLocation();
   const isChatRoute = location.pathname.startsWith("/chat/");
   const { loadConfig } = useCompanyShellCommands();
-  const { loading, activeCompany, bootstrapPhase } = useCompanyShellQuery();
-  const hasPrimaryRequirement = useCompanyRuntimeStore(
-    (state) => Boolean(state.primaryRequirementId || state.activeRequirementAggregates.some((aggregate) => aggregate.primary)),
-  );
+  const { loading, activeCompany, bootstrapPhase, hasPrimaryRequirement } = useCompanyShellQuery();
   const {
     connected,
     phase,
@@ -378,7 +374,7 @@ export default function App() {
         {
           label: "执行",
           items: [
-            { path: "/ops", label: "运营大厅", icon: ShieldAlert },
+            { path: "/ops", label: "Ops", icon: ShieldAlert },
             { path: "/board", label: "工作看板", icon: LayoutDashboard },
             ...(workspaceApps.length > 0
               ? [{ path: "/workspace", label: "工作目录", icon: BookOpen }]

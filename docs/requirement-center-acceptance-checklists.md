@@ -1,7 +1,7 @@
 # Requirement Center Acceptance Checklists
 
-Status: Draft  
-Last updated: 2026-03-10
+Status: Active  
+Last updated: 2026-03-14
 
 ## 1. User Journey Checklist
 
@@ -34,11 +34,16 @@ Last updated: 2026-03-10
 ## 5. Acceptance Loop Checklist
 
 - 执行完成后不会静默结束，必须进入“待你验收”
+- 发起验收前能看到交付物、来源链路、规则校验结果、知识/验收摘要和 Workspace closeout 当前状态
+- 如果缺少交付证据或 closeout 阻塞，发起验收条件会明确显示原因
+- 如果只有提醒项，验收区会明确告诉用户“可继续但需说明”，而不是静默放行
 - 验收通过后显示“已完成”
 - 继续修改后返回执行态
 - 驳回重开后返回执行态
 - 继续修改和驳回重开都不会创建第二条 primary requirement
 - 发起验收、验收通过、驳回重开会立即反映到主线时间线
+- 规则校验结果会显示最近报告、锚点覆盖和待补齐锚点
+- 知识与验收摘要会显示最近可复用的知识卡片或验收总结，而不是只留在 Workspace 正文里
 
 ## 6. Ops Recovery Checklist
 

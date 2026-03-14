@@ -491,16 +491,16 @@ function describeStatusCoverage(
       label: "Authority 局部覆盖",
       detail:
         missingLabels.length > 0
-          ? `当前仅覆盖 ${health.coveredAgentCount}/${health.expectedAgentCount} 名成员，缺失 ${missingLabels.join("、")}。`
+          ? `当前仅覆盖 ${health.coveredAgentCount}/${health.expectedAgentCount} 名成员，缺失 ${missingLabels.join("、")}；缺口部分仅作为恢复/兼容来源展示。`
           : `当前仅覆盖 ${health.coveredAgentCount}/${health.expectedAgentCount} 名成员。`,
       missingAgentIds: health.missingAgentIds,
     };
   }
   return {
-    label: "Fallback 重算",
+    label: "恢复/兼容投影",
     detail:
       health.note ??
-      `当前没有可用的 Authority canonical 状态，页面正在对 ${health.expectedAgentCount} 名成员执行本地兼容重算。`,
+      `当前没有可用的 Authority canonical 状态，页面正在对 ${health.expectedAgentCount} 名成员展示恢复/兼容投影。`,
     missingAgentIds: health.missingAgentIds,
   };
 }
@@ -806,7 +806,7 @@ function buildRecommendedActions(input: {
   if (actions.length === 0) {
     actions.push({
       id: "ops",
-      label: "查看运营大厅",
+      label: "查看 Ops",
       summary: "当前没有明显瓶颈，可从运营视角继续观察整体负载。",
       to: "/ops",
       tone: "default",
@@ -1066,8 +1066,8 @@ export function buildRuntimeInspectorSurface(input: RuntimeInspectorInput): Runt
     source: "fallback",
     generatedAt: Date.now(),
     note: authorityHealth?.coverage === "authority_partial"
-      ? `Authority 仅覆盖 ${authorityHealth.coveredAgentCount}/${authorityHealth.expectedAgentCount} 名成员，缺失成员已局部回退到前端兼容推导。`
-      : "Authority 当前没有可用的 canonical agent statuses。",
+      ? `Authority 仅覆盖 ${authorityHealth.coveredAgentCount}/${authorityHealth.expectedAgentCount} 名成员，缺失成员已局部标记为恢复/兼容来源。`
+      : "Authority 当前没有可用的 canonical agent statuses，页面正在展示恢复/兼容投影。",
   });
   const statusHealth =
     authorityHealth?.coverage === "authority_complete"

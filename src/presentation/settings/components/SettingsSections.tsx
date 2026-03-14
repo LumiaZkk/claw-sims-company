@@ -19,11 +19,18 @@ import type {
 } from "../../../application/gateway/settings";
 import type { AuthorityHealthSnapshot } from "../../../infrastructure/authority/contract";
 import { buildCollaborationContextSnapshot } from "../../../application/company/collaboration-context";
+import { buildCompanyHeartbeatSurface } from "../../../application/org";
 import { buildWorkspacePolicySummary } from "../../../application/workspace/workspace-policy";
-import { buildAuthorityGuidanceItems } from "../../../application/gateway/authority-health";
+import { runAuthorityOperatorAction } from "../../../application/gateway/authority-control";
+import {
+  buildAuthorityGuidanceItems,
+  buildAuthorityOperatorControlPlaneModel,
+} from "../../../application/gateway/authority-health";
 import { buildDefaultOrgSettings } from "../../../domain/org/autonomy-policy";
+import type { CompanyEvent } from "../../../domain/delegation/events";
 import type {
   CompanyAutonomyPolicy,
+  CompanyHeartbeatPolicy,
   CollaborationEdge,
   CompanyCollaborationPolicy,
   CompanyWorkspacePolicy,
@@ -31,11 +38,14 @@ import type {
   EmployeeRef,
 } from "../../../domain/org/types";
 import { ActionFormDialog } from "../../../components/ui/action-form-dialog";
+import { toast } from "../../../components/system/toast-store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { formatTime } from "../../../lib/utils";
 import { ConnectionDiagnosisSummary } from "../../shared/ConnectionDiagnosisSummary";
+import { AuthorityOperatorControlPlaneCard } from "../../shared/AuthorityOperatorControlPlaneCard";
+import { HeartbeatAuditList } from "../../shared/HeartbeatAuditList";
 
 export function stringifyPreview(value: unknown): string {
   try {
@@ -201,11 +211,43 @@ export function SettingsHeader(props: {
 export function SettingsDoctorSection(props: {
   doctorBaseline: GatewayDoctorBaseline;
   authorityHealth: AuthorityHealthSnapshot | null;
+  refreshRuntime: () => Promise<unknown>;
 }) {
-  const { doctorBaseline, authorityHealth } = props;
+  const { doctorBaseline, authorityHealth, refreshRuntime } = props;
   const authorityDoctor = authorityHealth?.authority.doctor ?? null;
   const authorityPreflight = authorityHealth?.authority.preflight ?? null;
   const authorityGuidanceItems = authorityHealth ? buildAuthorityGuidanceItems(authorityHealth, 4) : [];
+  const authorityOperatorControlPlane = useMemo(
+    () => buildAuthorityOperatorControlPlaneModel(authorityHealth),
+    [authorityHealth],
+  );
+  const executeAuthorityOperatorEntry = async (
+    entry: ReturnType<typeof buildAuthorityOperatorControlPlaneModel>["entries"][number],
+  ) => {
+    try {
+      const result = await runAuthorityOperatorAction({ id: entry.id });
+      if (result.state === "blocked") {
+        toast.error(result.title, result.summary);
+      } else if (result.state === "degraded") {
+        toast.warning(result.title, result.summary);
+      } else {
+        toast.success(result.title, result.summary);
+      }
+      try {
+        await refreshRuntime();
+      } catch (refreshError) {
+        toast.warning(
+          "设置页快照刷新失败",
+          refreshError instanceof Error ? refreshError.message : String(refreshError),
+        );
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`${entry.actionLabel}失败`, message);
+      throw error;
+    }
+  };
 
   return (
     <Card className="shadow-sm border-slate-200">
@@ -285,6 +327,38 @@ export function SettingsDoctorSection(props: {
             {doctorBaseline.lastError ? (
               <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
                 最近同步错误：{doctorBaseline.lastError}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-slate-900">Authority 同步诊断</div>
+              <Badge variant="outline" className={doctorToneClass(doctorBaseline.runtimeSync.state)}>
+                {doctorBaseline.runtimeSync.state}
+              </Badge>
+            </div>
+            <div className="mt-2 text-xs text-slate-600">{doctorBaseline.runtimeSync.summary}</div>
+            <div className="mt-1 text-[11px] text-slate-500">{doctorBaseline.runtimeSync.detail}</div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-600">
+              {doctorBaseline.runtimeSync.metrics.map((item) => (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                  <div className="uppercase tracking-[0.12em] text-slate-400">{item.label}</div>
+                  <div className="mt-1 font-semibold text-slate-900">{item.value}</div>
+                </div>
+              ))}
+            </div>
+            {doctorBaseline.runtimeSync.lastActivityAt ? (
+              <div className="mt-2 text-[11px] text-slate-500">
+                最近活动：{formatTime(doctorBaseline.runtimeSync.lastActivityAt)}
+                {doctorBaseline.runtimeSync.lastAppliedSource
+                  ? ` · 最近应用 ${doctorBaseline.runtimeSync.lastAppliedSource}`
+                  : ""}
+              </div>
+            ) : null}
+            {doctorBaseline.runtimeSync.warning ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+                最近同步错误：{doctorBaseline.runtimeSync.warning}
               </div>
             ) : null}
           </div>
@@ -411,6 +485,11 @@ export function SettingsDoctorSection(props: {
             ) : null}
           </div>
         ) : null}
+
+        <AuthorityOperatorControlPlaneCard
+          model={authorityOperatorControlPlane}
+          onExecuteEntry={executeAuthorityOperatorEntry}
+        />
       </CardContent>
     </Card>
   );
@@ -424,11 +503,13 @@ export function SettingsGatewayCompanySection(props: {
     activeCompanyId?: string | null;
   } | null;
   activeCompany: GatewaySettingsQueryResult["activeCompany"];
+  companyEvents: CompanyEvent[];
   loading: boolean;
   companyCount: number;
   orgAutopilotEnabled: boolean;
   orgAutopilotSaving: boolean;
   autonomyPolicySaving: boolean;
+  heartbeatPolicySaving: boolean;
   collaborationPolicySaving: boolean;
   workspacePolicySaving: boolean;
   switchCompany: (id: string) => void;
@@ -440,6 +521,7 @@ export function SettingsGatewayCompanySection(props: {
     collaborationPolicy: CompanyCollaborationPolicy,
   ) => Promise<{ title: string; description: string } | null>;
   setAutomationBudgetDialogOpen: (open: boolean) => void;
+  setHeartbeatDialogOpen: (open: boolean) => void;
   setWorkspacePolicyDialogOpen: (open: boolean) => void;
   runCommand: RunCommand;
 }) {
@@ -448,11 +530,13 @@ export function SettingsGatewayCompanySection(props: {
     connected,
     companyConfig,
     activeCompany,
+    companyEvents,
     loading,
     companyCount,
     orgAutopilotEnabled,
     orgAutopilotSaving,
     autonomyPolicySaving,
+    heartbeatPolicySaving,
     collaborationPolicySaving,
     workspacePolicySaving,
     switchCompany,
@@ -462,17 +546,19 @@ export function SettingsGatewayCompanySection(props: {
     handleToggleOrgAutopilot,
     handleUpdateCollaborationPolicy,
     setAutomationBudgetDialogOpen,
+    setHeartbeatDialogOpen,
     setWorkspacePolicyDialogOpen,
     runCommand,
   } = props;
 
-  const orgSettings = useMemo(
-    () => (activeCompany ? buildDefaultOrgSettings(activeCompany.orgSettings) : null),
-    [activeCompany],
-  );
+  const orgSettings = activeCompany ? buildDefaultOrgSettings(activeCompany.orgSettings) : null;
   const autonomyPolicy = orgSettings?.autonomyPolicy ?? null;
+  const heartbeatPolicy = orgSettings?.heartbeatPolicy ?? null;
   const collaborationPolicy = orgSettings?.collaborationPolicy ?? null;
   const workspacePolicy = orgSettings?.workspacePolicy ?? null;
+  const heartbeatSurface = activeCompany
+    ? buildCompanyHeartbeatSurface({ company: activeCompany, events: companyEvents })
+    : null;
   const workspacePolicySummary = useMemo(
     () =>
       workspacePolicy
@@ -548,7 +634,7 @@ export function SettingsGatewayCompanySection(props: {
   }, [departmentOptions, edgeToId, edgeToKind, employeeOptions]);
 
   const previewScope = useMemo(() => {
-    if (!activeCompany || !previewAgentId) {
+    if (!activeCompany || !previewAgentId || !employeesById.has(previewAgentId)) {
       return null;
     }
     return buildCollaborationContextSnapshot({
@@ -758,6 +844,57 @@ export function SettingsGatewayCompanySection(props: {
                   </Button>
                 </div>
               </div>
+            </div>
+          )}
+          {activeCompany && heartbeatPolicy && heartbeatSurface && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">CEO heartbeat</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-600">
+                    业务 heartbeat 由 Cyber Company 自身系统保存和解释。OpenClaw 只做执行/唤醒层，不再维护第二套业务配置。
+                  </div>
+                  <div className="mt-2 text-[11px] leading-5 text-slate-500">
+                    当前策略：
+                    {!heartbeatPolicy.enabled
+                      ? " 已关闭后台巡检"
+                      : heartbeatPolicy.paused
+                        ? ` 已暂停，恢复后按 ${heartbeatPolicy.intervalMinutes ?? 5} 分钟周期继续`
+                        : ` 每 ${heartbeatPolicy.intervalMinutes ?? 5} 分钟巡检一次`}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-5 text-slate-500">
+                    最近巡检 {formatTime(heartbeatSurface.lastRunAt)} · 下一轮 {formatTime(heartbeatSurface.nextRunAt)}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-5 text-slate-500">
+                    最近检查 {formatTime(heartbeatSurface.lastCheckAt)} · 权威源 {heartbeatSurface.sourceOfTruth}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={
+                      !heartbeatPolicy.enabled
+                        ? "border-slate-200 bg-white text-slate-500"
+                        : heartbeatPolicy.paused
+                          ? "border-amber-200 bg-white text-amber-700"
+                          : "border-sky-200 bg-white text-sky-700"
+                    }
+                  >
+                    {!heartbeatPolicy.enabled ? "已关闭" : heartbeatPolicy.paused ? "已暂停" : "系统托管"}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    onClick={() => setHeartbeatDialogOpen(true)}
+                    disabled={heartbeatPolicySaving}
+                  >
+                    {heartbeatPolicySaving ? "保存中..." : "调整 heartbeat"}
+                  </Button>
+                </div>
+              </div>
+              <HeartbeatAuditList
+                entries={heartbeatSurface.recentAudit}
+                className="mt-3 rounded-xl border border-sky-200/80 bg-white/80 p-3"
+              />
             </div>
           )}
           {activeCompany && workspacePolicy && workspacePolicySummary && (
@@ -1511,10 +1648,13 @@ export function SettingsDialogs(props: {
   setExecutorDialogOpen: (open: boolean) => void;
   automationBudgetDialogOpen: boolean;
   setAutomationBudgetDialogOpen: (open: boolean) => void;
+  heartbeatDialogOpen: boolean;
+  setHeartbeatDialogOpen: (open: boolean) => void;
   workspacePolicyDialogOpen: boolean;
   setWorkspacePolicyDialogOpen: (open: boolean) => void;
   activeCompany: GatewaySettingsQueryResult["activeCompany"];
   autonomyPolicySaving: boolean;
+  heartbeatPolicySaving: boolean;
   workspacePolicySaving: boolean;
   executorConfig: GatewaySettingsQueryResult["executorConfig"];
   telegramDialogOpen: boolean;
@@ -1533,6 +1673,9 @@ export function SettingsDialogs(props: {
   handleUpdateAutonomyPolicy: (
     autonomyPolicy: CompanyAutonomyPolicy,
   ) => Promise<{ title: string; description: string } | null>;
+  handleUpdateHeartbeatPolicy: (
+    heartbeatPolicy: CompanyHeartbeatPolicy,
+  ) => Promise<{ title: string; description: string } | null>;
   handleUpdateWorkspacePolicy: (
     workspacePolicy: CompanyWorkspacePolicy,
   ) => Promise<{ title: string; description: string } | null>;
@@ -1546,10 +1689,13 @@ export function SettingsDialogs(props: {
     setExecutorDialogOpen,
     automationBudgetDialogOpen,
     setAutomationBudgetDialogOpen,
+    heartbeatDialogOpen,
+    setHeartbeatDialogOpen,
     workspacePolicyDialogOpen,
     setWorkspacePolicyDialogOpen,
     activeCompany,
     autonomyPolicySaving,
+    heartbeatPolicySaving,
     workspacePolicySaving,
     executorConfig,
     telegramDialogOpen,
@@ -1566,6 +1712,7 @@ export function SettingsDialogs(props: {
     addProviderSaving,
     handleExecutorConfigSubmit,
     handleUpdateAutonomyPolicy,
+    handleUpdateHeartbeatPolicy,
     handleUpdateWorkspacePolicy,
     handleTelegramSubmit,
     onProviderKeySubmit,
@@ -1664,6 +1811,69 @@ export function SettingsDialogs(props: {
           );
           if (result) {
             setAutomationBudgetDialogOpen(false);
+          }
+        }}
+      />
+
+      <ActionFormDialog
+        open={heartbeatDialogOpen}
+        onOpenChange={setHeartbeatDialogOpen}
+        title="调整 CEO heartbeat"
+        description="业务 heartbeat 的权威配置保留在当前系统里。这里控制后台定时巡检是否启用、是否暂停、以及默认巡检频率。"
+        confirmLabel="保存 heartbeat 策略"
+        busy={heartbeatPolicySaving}
+        fields={[
+          {
+            name: "enabled",
+            label: "启用后台定时巡检",
+            type: "checkbox",
+            defaultValue: activeCompany?.orgSettings?.heartbeatPolicy?.enabled === false ? "false" : "true",
+          },
+          {
+            name: "paused",
+            label: "暂时暂停后台定时巡检（保留配置）",
+            type: "checkbox",
+            defaultValue: activeCompany?.orgSettings?.heartbeatPolicy?.paused ? "true" : "false",
+          },
+          {
+            name: "intervalMinutes",
+            label: "巡检周期（分钟）",
+            type: "text",
+            required: true,
+            defaultValue: String(activeCompany?.orgSettings?.heartbeatPolicy?.intervalMinutes ?? 5),
+            placeholder: "例如: 5",
+          },
+          {
+            name: "syncTarget",
+            label: "同步到 OpenClaw 作为执行/唤醒层",
+            type: "checkbox",
+            defaultValue:
+              activeCompany?.orgSettings?.heartbeatPolicy?.syncTarget === "none" ? "false" : "true",
+          },
+        ]}
+        onSubmit={async (values) => {
+          if (!activeCompany) {
+            return;
+          }
+          const rawInterval = values.intervalMinutes?.trim() ?? "";
+          const parsedInterval = Number(rawInterval);
+          if (!Number.isFinite(parsedInterval) || parsedInterval < 1) {
+            throw new Error("请输入大于等于 1 的巡检周期。");
+          }
+          const result = await runCommand(
+            () =>
+              handleUpdateHeartbeatPolicy({
+                ...(activeCompany.orgSettings?.heartbeatPolicy ?? {}),
+                enabled: values.enabled !== "false",
+                paused: values.paused === "true",
+                intervalMinutes: Math.max(1, Math.floor(parsedInterval)),
+                sourceOfTruth: "cyber_company",
+                syncTarget: values.syncTarget === "false" ? "none" : "openclaw",
+              }),
+            "CEO heartbeat 策略更新失败",
+          );
+          if (result) {
+            setHeartbeatDialogOpen(false);
           }
         }}
       />

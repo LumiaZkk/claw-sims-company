@@ -8,6 +8,7 @@ import {
   type AuthorityGatewayConfigSnapshot,
   type AuthorityHealthSnapshot,
   type AuthorityModelsResponse,
+  type AuthorityOperatorActionRequest,
 } from "../../authority/contract";
 import {
   createBackendCapabilities,
@@ -97,6 +98,8 @@ function toHello(url: string): BackendHello {
         "authority.company.employee.batch_hire",
         "authority.approval.request",
         "authority.approval.resolve",
+        "authority.operator.run",
+        "authority.takeover.transition",
       ],
       events: [
         "bootstrap.updated",
@@ -138,6 +141,10 @@ class AuthorityBackendAdapter implements AgentBackend {
 
   get isConnected() {
     return this.connected;
+  }
+
+  stageConnectionDraft(url: string) {
+    authorityClient.setBaseUrl(url || DEFAULT_AUTHORITY_URL);
   }
 
   connect(url: string) {
@@ -490,6 +497,14 @@ class AuthorityBackendAdapter implements AgentBackend {
         params as Parameters<typeof authorityClient.cancelDecisionTicket>[0],
       )) as T;
     }
+    if (method === "authority.takeover.transition") {
+      return (await authorityClient.transitionTakeoverCase(
+        params as Parameters<typeof authorityClient.transitionTakeoverCase>[0],
+      )) as T;
+    }
+    if (method === "authority.operator.run") {
+      return (await authorityClient.runOperatorAction(params as AuthorityOperatorActionRequest)) as T;
+    }
     if (method === "authority.executor.get") {
       return (await authorityClient.getExecutorConfig()) as T;
     }
@@ -681,13 +696,22 @@ class AuthorityBackendAdapter implements AgentBackend {
     since?: number;
     cursor?: string;
     limit?: number;
+    recent?: boolean;
   }): Promise<CompanyEventsListResult> {
-    return authorityClient.listCompanyEvents(params.companyId, params.cursor, params.since).then((result) => ({
-      companyId: result.companyId,
-      ok: true as const,
-      events: result.events as CompanyEventsListResult["events"],
-      nextCursor: result.nextCursor,
-    }));
+    return authorityClient
+      .listCompanyEvents(
+        params.companyId,
+        params.cursor,
+        params.since,
+        params.limit,
+        params.recent,
+      )
+      .then((result) => ({
+        companyId: result.companyId,
+        ok: true as const,
+        events: result.events as CompanyEventsListResult["events"],
+        nextCursor: result.nextCursor,
+      }));
   }
 
   async listCron(): Promise<CronListResult> {

@@ -15,6 +15,6 @@ export function useExceptionInboxQuery() {
 }
 
 export function useGovernanceApp() {
-  const { replaceDispatchRecords, updateCompany } = useCompanyRuntimeCommands();
-  return { replaceDispatchRecords, updateCompany };
+  const { replaceDispatchRecords, upsertDispatchRecord, updateCompany } = useCompanyRuntimeCommands();
+  return { replaceDispatchRecords, upsertDispatchRecord, updateCompany };
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCompanyOpsAuditEvents, runCompanyOpsCycle } from "./company-ops-engine";
+import {
+  buildCompanyOpsAuditEvents,
+  createHeartbeatCycleAuditEvent,
+  runCompanyOpsCycle,
+} from "./company-ops-engine";
 import type { AuthorityCompanyRuntimeSnapshot } from "../../../src/infrastructure/authority/contract";
 import type { Company, WorkItemRecord } from "../../../src/domain";
 import { buildDefaultOrgSettings } from "../../../src/domain/org/autonomy-policy";
@@ -548,6 +552,48 @@ describe("runCompanyOpsCycle", () => {
       ticketId: "decision:escalation:support:work-1:headcount",
       status: "cancelled",
       revision: 3,
+    });
+  });
+
+  it("creates heartbeat audit events for both executed and skipped cycles", () => {
+    const ranEvent = createHeartbeatCycleAuditEvent({
+      companyId: "company-1",
+      createdAt: 20_000,
+      trigger: "event",
+      ran: true,
+      skipReason: null,
+      reasons: ["room.append", "takeover.transition"],
+      actions: ["已自动升级支持请求"],
+    });
+    const skippedEvent = createHeartbeatCycleAuditEvent({
+      companyId: "company-1",
+      createdAt: 21_000,
+      trigger: "interval",
+      ran: false,
+      skipReason: "heartbeat_not_due",
+      reasons: ["interval"],
+      actions: [],
+    });
+
+    expect(ranEvent).toMatchObject({
+      kind: "heartbeat_cycle_checked",
+      payload: {
+        trigger: "event",
+        ran: true,
+        skipReason: null,
+        reasons: ["room.append", "takeover.transition"],
+        actionCount: 1,
+      },
+    });
+    expect(skippedEvent).toMatchObject({
+      kind: "heartbeat_cycle_checked",
+      payload: {
+        trigger: "interval",
+        ran: false,
+        skipReason: "heartbeat_not_due",
+        reasons: ["interval"],
+        actionCount: 0,
+      },
     });
   });
 });

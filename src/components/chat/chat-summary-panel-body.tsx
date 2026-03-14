@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import { ChevronDown, RefreshCcw, Users } from "lucide-react";
 import type { RequirementCollaborationSurface } from "../../application/mission/requirement-collaboration-surface";
+import type { TakeoverCase, TakeoverCaseSummary } from "../../application/delegation/takeover-case";
 import { RequirementExecutionOverviewCard } from "../../presentation/chat/components/RequirementExecutionOverviewCard";
+import { TakeoverCasePanel } from "../../presentation/shared/TakeoverCasePanel";
 import { Button } from "../ui/button";
 import { ExecutionStateBadge } from "../execution-state-badge";
 import { formatRequestDeliveryStateLabel } from "../../application/governance/focus-summary";
@@ -176,6 +178,8 @@ export type ChatSummaryPanelBodyProps = {
   hasTechnicalSummary: boolean;
   isTechnicalSummaryOpen: boolean;
   takeoverPack: TechnicalTakeoverPack | null;
+  takeoverCaseSummary: TakeoverCaseSummary;
+  takeoverCaseBusyId: string | null;
   structuredTaskPreview: StructuredTaskPreview | null;
   hasRequirementOverview: boolean;
   headerStatusBadgeClass: string;
@@ -196,6 +200,13 @@ export type ChatSummaryPanelBodyProps = {
   onNavigateToTeamGroup: () => void;
   onToggleTechnicalSummary: () => void;
   onCopyTakeoverPack: () => void;
+  onOpenTakeoverCase: (caseItem: TakeoverCase) => void;
+  onAcknowledgeTakeoverCase: (caseItem: TakeoverCase) => void;
+  onAssignTakeoverCase: (caseItem: TakeoverCase) => void;
+  onStartTakeoverCase: (caseItem: TakeoverCase) => void;
+  onResolveTakeoverCase: (caseItem: TakeoverCase, note: string) => void | Promise<boolean>;
+  onRedispatchTakeoverCase?: (caseItem: TakeoverCase, note: string) => void | Promise<boolean>;
+  onArchiveTakeoverCase: (caseItem: TakeoverCase) => void;
 };
 
 function cardToneClass(tone: ProgressEvent["tone"] | LifecycleEvent["tone"]) {
@@ -304,6 +315,8 @@ export function ChatSummaryPanelBody({
   hasTechnicalSummary,
   isTechnicalSummaryOpen,
   takeoverPack,
+  takeoverCaseSummary,
+  takeoverCaseBusyId,
   structuredTaskPreview,
   hasRequirementOverview,
   headerStatusBadgeClass,
@@ -324,6 +337,13 @@ export function ChatSummaryPanelBody({
   onNavigateToTeamGroup,
   onToggleTechnicalSummary,
   onCopyTakeoverPack,
+  onOpenTakeoverCase,
+  onAcknowledgeTakeoverCase,
+  onAssignTakeoverCase,
+  onStartTakeoverCase,
+  onResolveTakeoverCase,
+  onRedispatchTakeoverCase,
+  onArchiveTakeoverCase,
 }: ChatSummaryPanelBodyProps) {
   const isRequirementOverviewMode =
     summaryPanelView === "owner" && Boolean(collaborationSurface);
@@ -1039,25 +1059,31 @@ export function ChatSummaryPanelBody({
           {isTechnicalSummaryOpen ? (
             <div className="border-t border-slate-200 px-4 py-4">
               <div className="grid gap-4">
-                {takeoverPack ? (
-                  <section className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-amber-950">人工接管包</div>
-                        <div className="mt-1 text-xs leading-5 text-amber-800">{takeoverPack.failureSummary}</div>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="border-amber-200 bg-white text-amber-900 hover:bg-amber-100"
-                        onClick={onCopyTakeoverPack}
-                      >
-                        复制接管包
-                      </Button>
-                    </div>
-                    <div className="mt-3 text-sm text-slate-800">{takeoverPack.recommendedNextAction}</div>
-                  </section>
+                {takeoverPack || takeoverCaseSummary.primaryCase ? (
+                  <TakeoverCasePanel
+                    summary={takeoverCaseSummary}
+                    busyCaseId={takeoverCaseBusyId}
+                    onOpenCase={onOpenTakeoverCase}
+                    onAcknowledgeCase={onAcknowledgeTakeoverCase}
+                    onAssignCase={onAssignTakeoverCase}
+                    onStartCase={onStartTakeoverCase}
+                    onResolveCase={onResolveTakeoverCase}
+                    onRedispatchCase={onRedispatchTakeoverCase}
+                    onArchiveCase={onArchiveTakeoverCase}
+                    extraActions={
+                      takeoverPack ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="border-amber-200 bg-white text-amber-900 hover:bg-amber-100"
+                          onClick={onCopyTakeoverPack}
+                        >
+                          复制接管包
+                        </Button>
+                      ) : null
+                    }
+                  />
                 ) : null}
                 {structuredTaskPreview ? (
                   <section className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">

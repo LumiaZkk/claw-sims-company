@@ -5,7 +5,7 @@ import { hasCompatibilityRuntimeSlices } from "./runtime-slice-ownership";
 export type AuthorityRuntimeSyncOperation = "push" | "pull" | "command";
 export type AuthorityRuntimeSyncMode = "compatibility_snapshot" | "command_preferred";
 
-type AuthorityRuntimeSyncState = {
+export type AuthorityRuntimeSyncState = {
   compatibilityPathEnabled: boolean;
   commandRoutes: string[];
   mode: AuthorityRuntimeSyncMode;
@@ -128,4 +128,8 @@ export function recordAuthorityRuntimeSyncError(
     lastErrorAt: Date.now(),
     lastErrorOperation: operation,
   }));
+}
+
+export function readAuthorityRuntimeSyncState() {
+  return useAuthorityRuntimeSyncStore.getState();
 }

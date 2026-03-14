@@ -330,6 +330,7 @@ export class CyberGateway {
     since?: number;
     cursor?: string;
     limit?: number;
+    recent?: boolean;
   }): Promise<CompanyEventsListResult> {
     return this.request("company.events.list", params);
   }

@@ -227,7 +227,7 @@ export function LobbyTeamActivitySection(props: LobbyTeamActivitySectionProps) {
             </CardTitle>
             <CardDescription className="text-xs">
               {hasRequirementOverview
-                ? "这里只保留当前需求相关成员和自动化的最近活动。"
+                ? "这里只保留当前主线相关成员和自动化的最近活动。"
                 : "按时间排列的所有交互流与自动化日志"}
             </CardDescription>
           </CardHeader>

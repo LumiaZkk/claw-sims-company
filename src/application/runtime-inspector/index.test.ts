@@ -183,6 +183,8 @@ describe("buildRuntimeInspectorSurface", () => {
     });
     expect(surface?.focusAgent?.agentId).toBe("cto");
     expect(surface?.triageQueue[0]?.agentId).toBe("cto");
+    expect(surface?.statusCoverage.label).toBe("恢复/兼容投影");
+    expect(surface?.statusCoverage.detail).toContain("恢复/兼容");
     expect(surface?.timeline[0]).toMatchObject({
       agentId: "cto",
       tone: "info",

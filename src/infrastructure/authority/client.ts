@@ -35,6 +35,8 @@ import type {
   AuthorityHireEmployeeResponse,
   AuthorityMissionDeleteRequest,
   AuthorityMissionUpsertRequest,
+  AuthorityOperatorActionRequest,
+  AuthorityOperatorActionResponse,
   AuthorityRequirementPromoteRequest,
   AuthorityRequirementTransitionRequest,
   AuthorityRoundDeleteRequest,
@@ -45,12 +47,39 @@ import type {
   AuthoritySessionHistoryResponse,
   AuthoritySessionListResponse,
   AuthoritySwitchCompanyRequest,
+  AuthorityTakeoverCaseCommandRequest,
+  AuthorityTakeoverCaseMutationResponse,
   AuthorityWorkItemDeleteRequest,
   AuthorityWorkItemUpsertRequest,
 } from "./contract";
-import { DEFAULT_AUTHORITY_URL } from "./contract";
+import type { CompanyEvent } from "../gateway";
+import { AUTHORITY_PROVIDER_ID, DEFAULT_AUTHORITY_URL } from "./contract";
 
 const AUTHORITY_URL_KEY = "cyber_company_authority_url";
+const BACKEND_PROVIDER_KEY = "cyber_company_backend_provider";
+
+function providerUrlKey(providerId: string) {
+  return `cyber_company_backend_url__${providerId}`;
+}
+
+function normalizeOptionalBaseUrl(url?: string | null) {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function readStoredAuthorityBaseUrl() {
+  const activeProviderId = storage.getItem(BACKEND_PROVIDER_KEY)?.trim() ?? "";
+  const activeProviderUrl =
+    activeProviderId === AUTHORITY_PROVIDER_ID
+      ? normalizeOptionalBaseUrl(storage.getItem(providerUrlKey(activeProviderId)))
+      : null;
+  const providerScopedUrl = normalizeOptionalBaseUrl(storage.getItem(providerUrlKey(AUTHORITY_PROVIDER_ID)));
+  const authorityUrl = normalizeOptionalBaseUrl(storage.getItem(AUTHORITY_URL_KEY));
+  return activeProviderUrl ?? providerScopedUrl ?? authorityUrl ?? DEFAULT_AUTHORITY_URL;
+}
 
 function getStorage(): Pick<Storage, "getItem" | "setItem"> {
   if (
@@ -137,54 +166,81 @@ export async function probeAuthorityHealth(baseUrl: string) {
   return requestJson<AuthorityHealthSnapshot>(baseUrl, "/health");
 }
 
+export async function runAuthorityOperatorActionAt(
+  baseUrl: string,
+  body: AuthorityOperatorActionRequest,
+) {
+  return requestJson<AuthorityOperatorActionResponse>(baseUrl, "/operator/actions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export class AuthorityClient {
-  private baseUrl = normalizeBaseUrl(storage.getItem(AUTHORITY_URL_KEY));
+  private baseUrl = readStoredAuthorityBaseUrl();
+
+  private resolveBaseUrl() {
+    const stored = readStoredAuthorityBaseUrl();
+    if (stored !== this.baseUrl) {
+      this.baseUrl = stored;
+    }
+    return this.baseUrl;
+  }
+
+  private requestJson<T>(path: string, init?: RequestInit) {
+    return requestJson<T>(this.resolveBaseUrl(), path, init);
+  }
 
   get url() {
-    return this.baseUrl;
+    return this.resolveBaseUrl();
   }
 
   setBaseUrl(url: string) {
     this.baseUrl = normalizeBaseUrl(url);
     storage.setItem(AUTHORITY_URL_KEY, this.baseUrl);
+    storage.setItem(BACKEND_PROVIDER_KEY, AUTHORITY_PROVIDER_ID);
+    storage.setItem(providerUrlKey(AUTHORITY_PROVIDER_ID), this.baseUrl);
   }
 
   async health() {
-    return probeAuthorityHealth(this.baseUrl);
+    return probeAuthorityHealth(this.resolveBaseUrl());
   }
 
   async bootstrap() {
-    return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, "/bootstrap");
+    return this.requestJson<AuthorityBootstrapSnapshot>("/bootstrap");
+  }
+
+  async runOperatorAction(body: AuthorityOperatorActionRequest) {
+    return runAuthorityOperatorActionAt(this.baseUrl, body);
   }
 
   async getExecutorConfig() {
-    return requestJson<AuthorityExecutorConfig>(this.baseUrl, "/executor");
+    return this.requestJson<AuthorityExecutorConfig>("/executor");
   }
 
   async patchExecutorConfig(body: AuthorityExecutorConfigPatch) {
-    return requestJson<AuthorityExecutorConfig>(this.baseUrl, "/executor", {
+    return this.requestJson<AuthorityExecutorConfig>("/executor", {
       method: "PATCH",
       body: JSON.stringify(body),
     });
   }
 
   async requestGateway<T = unknown>(method: string, params?: unknown) {
-    return requestJson<T>(this.baseUrl, "/gateway/request", {
+    return this.requestJson<T>("/gateway/request", {
       method: "POST",
       body: JSON.stringify({ method, params }),
     });
   }
 
   async createCompany(body: AuthorityCreateCompanyRequest) {
-    return requestJson<AuthorityCreateCompanyResponse>(this.baseUrl, "/companies", {
+    return this.requestJson<AuthorityCreateCompanyResponse>("/companies", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async retryCompanyProvisioning(companyId: string) {
-    return requestJson<AuthorityRetryCompanyProvisioningResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthorityRetryCompanyProvisioningResponse>(
       `/companies/${encodeURIComponent(companyId)}/provisioning/retry`,
       {
         method: "POST",
@@ -193,8 +249,7 @@ export class AuthorityClient {
   }
 
   async hireEmployee(body: AuthorityHireEmployeeRequest) {
-    return requestJson<AuthorityHireEmployeeResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthorityHireEmployeeResponse>(
       `/companies/${encodeURIComponent(body.companyId)}/employees`,
       {
         method: "POST",
@@ -204,8 +259,7 @@ export class AuthorityClient {
   }
 
   async batchHireEmployees(body: AuthorityBatchHireEmployeesRequest) {
-    return requestJson<AuthorityBatchHireEmployeesResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthorityBatchHireEmployeesResponse>(
       `/companies/${encodeURIComponent(body.companyId)}/employees/batch`,
       {
         method: "POST",
@@ -215,49 +269,47 @@ export class AuthorityClient {
   }
 
   async requestApproval(body: AuthorityApprovalRequest) {
-    return requestJson<AuthorityApprovalMutationResponse>(this.baseUrl, "/commands/approval.request", {
+    return this.requestJson<AuthorityApprovalMutationResponse>("/commands/approval.request", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async resolveApproval(body: AuthorityApprovalResolveRequest) {
-    return requestJson<AuthorityApprovalMutationResponse>(this.baseUrl, "/commands/approval.resolve", {
+    return this.requestJson<AuthorityApprovalMutationResponse>("/commands/approval.resolve", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteCompany(companyId: string) {
-    return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, `/companies/${encodeURIComponent(companyId)}`, {
+    return this.requestJson<AuthorityBootstrapSnapshot>(`/companies/${encodeURIComponent(companyId)}`, {
       method: "DELETE",
     });
   }
 
   async switchCompany(body: AuthoritySwitchCompanyRequest) {
-    return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, "/company/switch", {
+    return this.requestJson<AuthorityBootstrapSnapshot>("/company/switch", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async updateConfig(config: AuthorityBootstrapSnapshot["config"]) {
-    return requestJson<AuthorityBootstrapSnapshot>(this.baseUrl, "/config", {
+    return this.requestJson<AuthorityBootstrapSnapshot>("/config", {
       method: "PUT",
       body: JSON.stringify({ config }),
     });
   }
 
   async getRuntime(companyId: string) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>(
       `/companies/${encodeURIComponent(companyId)}/runtime`,
     );
   }
 
   async syncRuntime(companyId: string, body: AuthorityRuntimeSyncRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>(
       `/companies/${encodeURIComponent(companyId)}/runtime`,
       {
         method: "PUT",
@@ -267,15 +319,14 @@ export class AuthorityClient {
   }
 
   async sendChat(body: AuthorityChatSendRequest) {
-    return requestJson<AuthorityChatSendResponse>(this.baseUrl, "/commands/chat.send", {
+    return this.requestJson<AuthorityChatSendResponse>("/commands/chat.send", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async transitionRequirement(body: AuthorityRequirementTransitionRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>(
       "/commands/requirement.transition",
       {
         method: "POST",
@@ -285,8 +336,7 @@ export class AuthorityClient {
   }
 
   async promoteRequirement(body: AuthorityRequirementPromoteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>(
       "/commands/requirement.promote",
       {
         method: "POST",
@@ -296,146 +346,162 @@ export class AuthorityClient {
   }
 
   async appendRoom(body: AuthorityAppendRoomRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/room.append", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/room.append", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertRoomBindings(body: AuthorityRoomBindingsUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/room-bindings.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/room-bindings.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertRound(body: AuthorityRoundUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/round.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/round.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteRound(body: AuthorityRoundDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/round.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/round.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertMission(body: AuthorityMissionUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/mission.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/mission.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteMission(body: AuthorityMissionDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/mission.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/mission.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertConversationState(body: AuthorityConversationStateUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/conversation-state.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/conversation-state.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteConversationState(body: AuthorityConversationStateDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/conversation-state.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/conversation-state.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertWorkItem(body: AuthorityWorkItemUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/work-item.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/work-item.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteWorkItem(body: AuthorityWorkItemDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/work-item.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/work-item.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteRoom(body: AuthorityRoomDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/room.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/room.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertDispatch(body: AuthorityDispatchUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/dispatch.create", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/dispatch.create", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteDispatch(body: AuthorityDispatchDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/dispatch.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/dispatch.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertArtifact(body: AuthorityArtifactUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/artifact.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/artifact.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async syncArtifactMirrors(body: AuthorityArtifactMirrorSyncRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/artifact.sync-mirror", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/artifact.sync-mirror", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteArtifact(body: AuthorityArtifactDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/artifact.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/artifact.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async upsertDecisionTicket(body: AuthorityDecisionTicketUpsertRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.upsert", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/decision.upsert", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async deleteDecisionTicket(body: AuthorityDecisionTicketDeleteRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.delete", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/decision.delete", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async resolveDecisionTicket(body: AuthorityDecisionTicketResolveRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.resolve", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/decision.resolve", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
   async cancelDecisionTicket(body: AuthorityDecisionTicketCancelRequest) {
-    return requestJson<AuthorityCompanyRuntimeSnapshot>(this.baseUrl, "/commands/decision.cancel", {
+    return this.requestJson<AuthorityCompanyRuntimeSnapshot>("/commands/decision.cancel", {
       method: "POST",
       body: JSON.stringify(body),
     });
   }
 
-  async listCompanyEvents(companyId: string, cursor?: string | null, since?: number) {
+  async transitionTakeoverCase(body: AuthorityTakeoverCaseCommandRequest) {
+    return this.requestJson<AuthorityTakeoverCaseMutationResponse>(
+      "/commands/takeover.transition",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  async listCompanyEvents(
+    companyId: string,
+    cursor?: string | null,
+    since?: number,
+    limit?: number,
+    recent?: boolean,
+  ) {
     const search = new URLSearchParams();
     if (cursor) {
       search.set("cursor", cursor);
@@ -443,23 +509,26 @@ export class AuthorityClient {
     if (typeof since === "number") {
       search.set("since", String(since));
     }
+    if (typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      search.set("limit", String(Math.max(1, Math.floor(limit))));
+    }
+    if (recent) {
+      search.set("recent", "1");
+    }
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
-    return requestJson<AuthorityCompanyEventsResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCompanyEventsResponse>(
       `/companies/${encodeURIComponent(companyId)}/events${suffix}`,
     );
   }
 
   async getCollaborationScope(companyId: string, agentId: string) {
-    return requestJson<AuthorityCollaborationScopeResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthorityCollaborationScopeResponse>(
       `/companies/${encodeURIComponent(companyId)}/collaboration-scope/${encodeURIComponent(agentId)}`,
     );
   }
 
   async appendCompanyEvent(body: AuthorityAppendCompanyEventRequest) {
-    return requestJson<{ ok: true; event: AuthorityAppendCompanyEventRequest["event"] }>(
-      this.baseUrl,
+    return this.requestJson<{ ok: true; event: CompanyEvent }>(
       "/commands/company-event.append",
       {
         method: "POST",
@@ -469,7 +538,7 @@ export class AuthorityClient {
   }
 
   async listActors() {
-    return requestJson<AuthorityActorsResponse>(this.baseUrl, "/actors");
+    return this.requestJson<AuthorityActorsResponse>("/actors");
   }
 
   async listSessions(companyId?: string | null, agentId?: string | null) {
@@ -481,7 +550,7 @@ export class AuthorityClient {
       search.set("agentId", agentId);
     }
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
-    return requestJson<AuthoritySessionListResponse>(this.baseUrl, `/sessions${suffix}`);
+    return this.requestJson<AuthoritySessionListResponse>(`/sessions${suffix}`);
   }
 
   async getChatHistory(sessionKey: string, limit?: number) {
@@ -490,15 +559,13 @@ export class AuthorityClient {
       search.set("limit", String(limit));
     }
     const suffix = search.size > 0 ? `?${search.toString()}` : "";
-    return requestJson<AuthoritySessionHistoryResponse>(
-      this.baseUrl,
+    return this.requestJson<AuthoritySessionHistoryResponse>(
       `/sessions/${encodeURIComponent(sessionKey)}/history${suffix}`,
     );
   }
 
   async resetSession(sessionKey: string) {
-    return requestJson<{ ok: true; key: string }>(
-      this.baseUrl,
+    return this.requestJson<{ ok: true; key: string }>(
       `/sessions/${encodeURIComponent(sessionKey)}/reset`,
       {
         method: "POST",
@@ -507,8 +574,7 @@ export class AuthorityClient {
   }
 
   async deleteSession(sessionKey: string) {
-    return requestJson<{ ok: boolean; deleted: boolean }>(
-      this.baseUrl,
+    return this.requestJson<{ ok: boolean; deleted: boolean }>(
       `/sessions/${encodeURIComponent(sessionKey)}`,
       {
         method: "DELETE",
@@ -517,7 +583,7 @@ export class AuthorityClient {
   }
 
   async getAgentFile(agentId: string, name: string) {
-    return requestJson<{
+    return this.requestJson<{
       agentId: string;
       workspace: string;
       file: {
@@ -528,11 +594,11 @@ export class AuthorityClient {
         updatedAtMs?: number;
         content?: string;
       };
-    }>(this.baseUrl, `/agents/${encodeURIComponent(agentId)}/files/${encodeURIComponent(name)}`);
+    }>(`/agents/${encodeURIComponent(agentId)}/files/${encodeURIComponent(name)}`);
   }
 
   async listAgentFiles(agentId: string) {
-    return requestJson<{
+    return this.requestJson<{
       agentId: string;
       workspace: string;
       files: Array<{
@@ -543,11 +609,11 @@ export class AuthorityClient {
         updatedAtMs?: number;
         content?: string;
       }>;
-    }>(this.baseUrl, `/agents/${encodeURIComponent(agentId)}/files`);
+    }>(`/agents/${encodeURIComponent(agentId)}/files`);
   }
 
   async setAgentFile(agentId: string, name: string, content: string) {
-    return requestJson<{
+    return this.requestJson<{
       ok: true;
       agentId: string;
       workspace: string;
@@ -559,7 +625,7 @@ export class AuthorityClient {
         updatedAtMs?: number;
         content?: string;
       };
-    }>(this.baseUrl, `/agents/${encodeURIComponent(agentId)}/files/${encodeURIComponent(name)}`, {
+    }>(`/agents/${encodeURIComponent(agentId)}/files/${encodeURIComponent(name)}`, {
       method: "PUT",
       body: JSON.stringify({ content }),
     });
@@ -570,8 +636,7 @@ export class AuthorityClient {
     payload?: Record<string, unknown>;
     timeoutMs?: number;
   }) {
-    return requestJson<import("./contract").AuthorityAgentFileRunResponse>(
-      this.baseUrl,
+    return this.requestJson<import("./contract").AuthorityAgentFileRunResponse>(
       `/agents/${encodeURIComponent(agentId)}/run`,
       {
         method: "POST",
@@ -585,18 +650,26 @@ export class AuthorityClient {
     onClose?: (event: CloseEvent) => void;
     onMessage: (event: AuthorityEvent) => void;
   }) {
-    const socket = new WebSocket(buildWsUrl(this.baseUrl));
-    socket.addEventListener("open", () => handlers.onOpen?.());
-    socket.addEventListener("close", (event) => handlers.onClose?.(event));
-    socket.addEventListener("message", (event) => {
+    const socket = new WebSocket(buildWsUrl(this.resolveBaseUrl()));
+    const handleOpen = () => handlers.onOpen?.();
+    const handleClose = (event: CloseEvent) => handlers.onClose?.(event);
+    const handleMessage = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(String(event.data ?? "")) as AuthorityEvent;
         handlers.onMessage(payload);
       } catch (error) {
         console.warn("Failed to parse authority event payload", error);
       }
-    });
-    return () => socket.close();
+    };
+    socket.addEventListener("open", handleOpen);
+    socket.addEventListener("close", handleClose);
+    socket.addEventListener("message", handleMessage);
+    return () => {
+      socket.removeEventListener("open", handleOpen);
+      socket.removeEventListener("close", handleClose);
+      socket.removeEventListener("message", handleMessage);
+      socket.close();
+    };
   }
 }
 

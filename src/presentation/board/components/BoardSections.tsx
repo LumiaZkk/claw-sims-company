@@ -263,7 +263,7 @@ export function BoardRoomPanel(props: {
         ) : route ? (
           <div className="flex flex-col gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-900">当前需求还没有固定房间</div>
+              <div className="text-sm font-semibold text-slate-900">当前主线还没有固定房间</div>
               <div className="mt-1 text-sm leading-6 text-slate-600">
                 第一次打开后会固化成这条需求的固定群聊，后面从 CEO、看板或大厅点进去都会回到同一个房间。
               </div>

@@ -33,7 +33,9 @@ export type WorkflowEventKind =
 
 export type GovernanceEventKind =
   | "ops_cycle_applied"
+  | "heartbeat_cycle_checked"
   | "operator_action_recorded"
+  | "takeover_case_updated"
   | "approval_record_upserted"
   | "approval_record_deleted"
   | "approval_resolved"

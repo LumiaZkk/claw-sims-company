@@ -17,12 +17,16 @@ import type {
   AuthorityDispatchDeleteRequest,
   AuthorityMissionDeleteRequest,
   AuthorityMissionUpsertRequest,
+  AuthorityOperatorActionRequest,
+  AuthorityOperatorActionResponse,
   AuthorityRequirementPromoteRequest,
   AuthorityRequirementTransitionRequest,
   AuthorityRoundDeleteRequest,
   AuthorityRoundUpsertRequest,
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
+  AuthorityTakeoverCaseCommandRequest,
+  AuthorityTakeoverCaseMutationResponse,
   AuthorityWorkItemDeleteRequest,
   AuthorityWorkItemUpsertRequest,
   AuthorityBootstrapSnapshot,
@@ -181,6 +185,14 @@ export function resolveAuthorityDecisionTicket(input: AuthorityDecisionTicketRes
 
 export function cancelAuthorityDecisionTicket(input: AuthorityDecisionTicketCancelRequest) {
   return gateway.request<AuthorityCompanyRuntimeSnapshot>("authority.decision.cancel", input);
+}
+
+export function transitionAuthorityTakeoverCase(input: AuthorityTakeoverCaseCommandRequest) {
+  return gateway.request<AuthorityTakeoverCaseMutationResponse>("authority.takeover.transition", input);
+}
+
+export function runAuthorityOperatorAction(input: AuthorityOperatorActionRequest) {
+  return gateway.request<AuthorityOperatorActionResponse>("authority.operator.run", input);
 }
 
 export function getAuthorityExecutorConfig() {

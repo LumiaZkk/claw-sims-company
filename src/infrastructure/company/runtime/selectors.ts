@@ -12,6 +12,9 @@ export function selectCompanyShellState(state: CompanyRuntimeState) {
     loading: state.loading,
     error: state.error,
     bootstrapPhase: state.bootstrapPhase,
+    hasPrimaryRequirement:
+      Boolean(state.primaryRequirementId) ||
+      state.activeRequirementAggregates.some((aggregate) => aggregate.primary),
   };
 }
 

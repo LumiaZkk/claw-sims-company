@@ -90,7 +90,7 @@ export function buildCeoControlSurface(input: {
       id: `support-request:${request.id}`,
       title: `支持请求待升级: ${request.summary}`,
       summary: `${request.requesterDepartmentId} -> ${request.targetDepartmentId}`,
-      actionLabel: "查看运营大厅",
+      actionLabel: "查看 Ops",
       href: "/ops",
       tone: request.status === "blocked" ? "rose" : "blue",
     }));

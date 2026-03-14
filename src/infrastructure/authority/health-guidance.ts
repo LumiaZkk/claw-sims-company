@@ -33,6 +33,13 @@ type GuidanceExecutorSnapshot = {
   note: string;
 };
 
+function isAuthoritySqliteLockErrorMessage(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return /database (table )?is locked/i.test(message) || message.includes("另一 authority 实例占用");
+}
+
 export type AuthorityHealthGuidanceInput = {
   doctor: GuidanceDoctorSnapshot;
   preflight: GuidancePreflightSnapshot;
@@ -68,6 +75,21 @@ export function buildAuthorityHealthGuidance(
   const primaryDoctorIssue = doctor.issues[0] ?? null;
   const staleBackupWarning = preflight.warnings.find((line) => line.includes("最新标准备份已超过"));
   const unreadableBackupIssue = preflight.issues.find((line) => line.includes("最新标准备份不可读"));
+  const sqliteLocked =
+    isAuthoritySqliteLockErrorMessage(preflight.integrityMessage) ||
+    preflight.issues.some((line) => isAuthoritySqliteLockErrorMessage(line)) ||
+    doctor.issues.some((line) => isAuthoritySqliteLockErrorMessage(line));
+
+  if (sqliteLocked) {
+    items.push({
+      id: "authority-db-locked",
+      state: "blocked",
+      title: "Authority SQLite 正被另一实例占用",
+      summary: "当前 authority.sqlite 有锁冲突，Doctor 与 Preflight 暂时无法稳定读取。",
+      action: "先停止另一份 authority，或用最新标准备份启动隔离 authority 再继续验收。",
+      command: null,
+    });
+  }
 
   if (preflight.integrityStatus === "failed") {
     items.push({

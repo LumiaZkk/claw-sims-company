@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCompanyShellCommands } from "../../application/company/shell";
+import { resolveRequirementRoomEntryTarget } from "../../application/delegation/requirement-room-entry";
 import { buildRequirementRoomHrefFromRecord } from "../../application/delegation/room-routing";
 import { buildRequirementRoomRecordSignature } from "../../application/delegation/room-routing";
 import { type RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
@@ -85,6 +86,13 @@ import {
   upsertLiveChatSession,
 } from "../../application/chat/live-session-cache";
 import type { EmployeeRef } from "../../domain/org/types";
+import {
+  buildTakeoverCaseSummary,
+  buildTakeoverCases,
+  type TakeoverCase,
+} from "../../application/delegation/takeover-case";
+import { useTakeoverCaseWorkflow } from "../../application/delegation/use-takeover-case-workflow";
+import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 
 const CHAT_RENDER_WINDOW_STEP = 80;
 const EMPTY_EMPLOYEES: EmployeeRef[] = [];
@@ -463,6 +471,7 @@ export function ChatPageScreen() {
     activeDecisionTickets,
     primaryRequirementId,
     activeRoundRecords,
+    activeArtifacts,
     activeDispatches,
     activeRoomBindings,
     activeAgentRuntime,
@@ -1086,6 +1095,8 @@ export function ChatPageScreen() {
   });
   const syncCompanyCommunication = useChatClosedLoop({
     activeCompany,
+    activeArtifacts,
+    activeDispatches,
     previousSnapshotsRef: companySessionSnapshotsRef,
     setCompanySessionSnapshots,
     replaceDispatchRecords,
@@ -1327,6 +1338,97 @@ export function ChatPageScreen() {
       !isGroup &&
       primaryRequirementSurface?.aggregateId,
   );
+  const takeoverSessionKey = conversationStateKey ?? targetAgentId ?? historyAgentId ?? sessionKey ?? null;
+  const directChatTakeoverCase = useMemo<TakeoverCase | null>(() => {
+    if (!activeCompany) {
+      return null;
+    }
+    const matchedRecord =
+      (activeCompany.takeoverCases ?? []).find((record) => {
+        if (record.status === "archived") {
+          return false;
+        }
+        if (takeoverSessionKey && record.sourceSessionKey === takeoverSessionKey) {
+          return true;
+        }
+        if (targetAgentId && record.ownerAgentId === targetAgentId) {
+          return true;
+        }
+        return Boolean(targetAgentId && record.route.includes(`/chat/${targetAgentId}`));
+      }) ?? null;
+    if (!matchedRecord) {
+      return null;
+    }
+    return {
+      id: matchedRecord.id,
+      title: matchedRecord.title,
+      ownerAgentId: matchedRecord.ownerAgentId ?? null,
+      ownerLabel: matchedRecord.ownerLabel ?? emp?.nickname ?? "当前负责人",
+      assigneeAgentId: matchedRecord.assigneeAgentId ?? null,
+      assigneeLabel: matchedRecord.assigneeLabel ?? null,
+      sourceSessionKey: matchedRecord.sourceSessionKey,
+      sourceWorkItemId: matchedRecord.sourceWorkItemId ?? null,
+      sourceTopicKey: matchedRecord.sourceTopicKey ?? null,
+      sourceDispatchId: matchedRecord.sourceDispatchId ?? null,
+      sourceRoomId: matchedRecord.sourceRoomId ?? null,
+      failureSummary: matchedRecord.failureSummary,
+      recommendedNextAction: matchedRecord.recommendedNextAction,
+      route: matchedRecord.route,
+      detectedAt: matchedRecord.detectedAt,
+      updatedAt: matchedRecord.updatedAt,
+      status: matchedRecord.status,
+      auditTrail: [...(matchedRecord.auditTrail ?? [])],
+    };
+  }, [activeCompany, emp?.nickname, takeoverSessionKey, targetAgentId]);
+  const takeoverCaseSummary = useMemo(() => {
+    if (!activeCompany || !takeoverSessionKey) {
+      return buildTakeoverCaseSummary(directChatTakeoverCase ? [directChatTakeoverCase] : []);
+    }
+    const sessionDisplayName =
+      emp?.nickname ?? groupTitle ?? groupTopic ?? requirementOverview?.currentOwnerLabel ?? targetAgentId ?? sessionKey;
+    const cases = buildTakeoverCases({
+        company: activeCompany,
+        sessions: [
+          {
+            key: takeoverSessionKey,
+            agentId: targetAgentId,
+            updatedAt: latestMessageTimestamp ?? previewTimestamp ?? currentTime,
+            displayName: sessionDisplayName,
+          },
+        ],
+        sessionExecutions: new Map([[takeoverSessionKey, sessionExecution]]),
+        takeoverPacks: takeoverPack ? new Map([[takeoverSessionKey, takeoverPack]]) : undefined,
+        activeRoomRecords,
+        activeDispatches,
+        sessionKeys: new Set([takeoverSessionKey]),
+      });
+    return buildTakeoverCaseSummary(cases.length > 0 ? cases : directChatTakeoverCase ? [directChatTakeoverCase] : []);
+  }, [
+    activeCompany,
+    activeDispatches,
+    activeRoomRecords,
+    currentTime,
+    directChatTakeoverCase,
+    emp?.nickname,
+    groupTitle,
+    groupTopic,
+    latestMessageTimestamp,
+    previewTimestamp,
+    requirementOverview?.currentOwnerLabel,
+    historyAgentId,
+    sessionExecution,
+    sessionKey,
+    takeoverSessionKey,
+    targetAgentId,
+    takeoverPack,
+  ]);
+  const { busyCaseId: busyTakeoverCaseId, runTakeoverAction, runTakeoverRedispatch } = useTakeoverCaseWorkflow({
+    activeCompany,
+    updateCompany,
+    providerManifest,
+    upsertDispatchRecord,
+    surface: "chat",
+  });
   const { handleCopyTakeoverPack, handleRecoverCommunication } = useChatCoordinationActions({
     takeoverPack: takeoverPack ? { operatorNote: takeoverPack.operatorNote } : null,
     activeCompanyId: activeCompany?.id ?? null,
@@ -1357,19 +1459,20 @@ export function ChatPageScreen() {
   const isSyncStale = companySyncStale || sessionSyncStale;
   const syncStaleDetail = sessionSyncError ?? companySyncError ?? null;
   const openRequirementRoom = useCallback(() => {
-    if (activeCompany && primaryRequirementSurface?.aggregateId) {
-      const ensuredRoom = ensureRequirementRoomForAggregate(primaryRequirementSurface.aggregateId);
+    const target = resolveRequirementRoomEntryTarget({
+      room: resolvedRequirementRoom,
+      aggregateId: activeCompany ? primaryRequirementSurface?.aggregateId ?? null : null,
+      route: teamGroupRoute,
+    });
+    if (target.kind === "ensure") {
+      const ensuredRoom = ensureRequirementRoomForAggregate(target.aggregateId);
       if (ensuredRoom) {
         navigate(buildRequirementRoomHrefFromRecord(ensuredRoom));
         return;
       }
     }
-    if (resolvedRequirementRoom) {
-      navigate(buildRequirementRoomHrefFromRecord(resolvedRequirementRoom));
-      return;
-    }
-    if (teamGroupRoute) {
-      navigate(teamGroupRoute);
+    if (target.kind === "room" || target.kind === "route") {
+      navigate(target.href);
       return;
     }
     openSummaryPanel("team");
@@ -1912,6 +2015,7 @@ export function ChatPageScreen() {
       sessionKey,
       productRoomId,
       activeRoomBindings,
+      activeDispatches,
       currentConversationWorkItemId,
       currentConversationTopicKey,
       lastSyncedRoomSignatureRef,
@@ -1936,6 +2040,7 @@ export function ChatPageScreen() {
     [
       activeArchivedRound,
       activeCompany,
+      activeDispatches,
       activeRoomBindings,
       agentId,
       archiveId,
@@ -2173,7 +2278,7 @@ export function ChatPageScreen() {
       open={isSummaryOpen}
       summaryPanelView={summaryPanelView}
       isGroup={isGroup}
-      hasTechnicalSummary={hasTechnicalSummary}
+      hasTechnicalSummary={hasTechnicalSummary || Boolean(takeoverCaseSummary.primaryCase)}
       effectiveHeadline={headerMissionHeadline}
       headerStatusBadgeClass={headerStatusBadgeClass}
       effectiveStatusLabel={chatSurfaceStatusLabel}
@@ -2219,6 +2324,8 @@ export function ChatPageScreen() {
             }
           : null
       }
+      takeoverCaseSummary={takeoverCaseSummary}
+      takeoverCaseBusyId={busyTakeoverCaseId}
       structuredTaskPreview={
         structuredTaskPreview
           ? {
@@ -2244,6 +2351,51 @@ export function ChatPageScreen() {
       onNavigateToTeamGroup={openRequirementRoom}
       onToggleTechnicalSummary={() => setIsTechnicalSummaryOpen((open) => !open)}
       onCopyTakeoverPack={handleCopyTakeoverPack}
+      onOpenTakeoverCase={(caseItem) => {
+        if (activeCompany) {
+          void appendOperatorActionAuditEvent({
+            companyId: activeCompany.id,
+            action: "takeover_route_open",
+            surface: "chat",
+            outcome: "succeeded",
+            details: {
+              takeoverCaseId: caseItem.id,
+              sessionKey: caseItem.sourceSessionKey,
+              targetActorId: caseItem.ownerAgentId,
+              route: caseItem.route,
+              takeoverStatus: caseItem.status,
+            },
+          });
+        }
+        navigate(caseItem.route);
+      }}
+      onAcknowledgeTakeoverCase={(caseItem) => {
+        void runTakeoverAction({ caseItem, action: "acknowledge" });
+      }}
+      onAssignTakeoverCase={(caseItem) => {
+        void runTakeoverAction({
+          caseItem,
+          action: "assign",
+          assigneeAgentId: caseItem.ownerAgentId,
+          assigneeLabel: caseItem.ownerLabel,
+        });
+      }}
+      onStartTakeoverCase={(caseItem) => {
+        void runTakeoverAction({ caseItem, action: "start" });
+      }}
+      onResolveTakeoverCase={(caseItem, note) => {
+        void runTakeoverAction({ caseItem, action: "resolve", note });
+      }}
+      onRedispatchTakeoverCase={
+        providerManifest
+          ? (caseItem, note) => {
+              void runTakeoverRedispatch({ caseItem, note });
+            }
+          : undefined
+      }
+      onArchiveTakeoverCase={(caseItem) => {
+        void runTakeoverAction({ caseItem, action: "archive" });
+      }}
     />
   );
   const handleOpenRequirementTeam = useCallback(() => {
@@ -2292,12 +2444,15 @@ export function ChatPageScreen() {
         requirementOverview={requirementOverview}
         sessionKey={sessionKey}
         shouldPersistConversationTruth={shouldPersistConversationTruth}
+        activeArtifacts={activeArtifacts}
+        activeDispatches={activeDispatches}
         upsertWorkItemRecord={upsertWorkItemRecord}
         setConversationCurrentWorkKey={setConversationCurrentWorkKey}
       />
       <ChatAutoDispatchController
         company={activeCompany}
         providerManifest={providerManifest}
+        activeDispatches={activeDispatches}
         fromActorId={targetAgentId}
         workItemId={currentConversationWorkItemId}
         topicKey={currentConversationTopicKey}
@@ -2488,14 +2643,16 @@ export function ChatPageScreen() {
           effectiveOwnerAgentId={effectiveOwnerAgentId}
           requirementRoomSessionsLength={requirementRoomSessions.length}
           targetAgentId={targetAgentId}
-          currentConversationRequirementTopicKey={currentConversationRequirementHint?.topicKey ?? null}
-          requirementOverviewTopicKey={requirementOverview?.topicKey ?? null}
-          conversationMissionRecordId={conversationMissionRecord?.id ?? null}
-          persistedWorkItemId={persistedWorkItem?.id ?? null}
-          groupWorkItemId={groupWorkItemId ?? null}
-          openRequirementDecisionTicket={openRequirementDecisionTicket}
-          showLegacyDecisionCard={false}
-          decisionSubmittingOptionId={decisionSubmittingOptionId}
+        currentConversationRequirementTopicKey={currentConversationRequirementHint?.topicKey ?? null}
+        requirementOverviewTopicKey={requirementOverview?.topicKey ?? null}
+        conversationMissionRecordId={conversationMissionRecord?.id ?? null}
+        persistedWorkItemId={persistedWorkItem?.id ?? null}
+        groupWorkItemId={groupWorkItemId ?? null}
+        activeDispatches={activeDispatches}
+        activeRoomRecords={activeRoomRecords}
+        openRequirementDecisionTicket={openRequirementDecisionTicket}
+        showLegacyDecisionCard={false}
+        decisionSubmittingOptionId={decisionSubmittingOptionId}
           hasActiveRun={hasActiveRun}
           streamText={deferredStreamText}
           isGenerating={isGenerating}

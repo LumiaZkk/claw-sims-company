@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { syncDelegationClosedLoopState } from "../../../application/delegation/closed-loop";
-import { gateway } from "../../../application/gateway";
-import { appendOperatorActionAuditEvent } from "../../../application/governance/operator-action-audit";
-import type { RequirementSessionSnapshot } from "../../../domain/mission/requirement-snapshot";
-import type { ArtifactRecord } from "../../../domain/artifact/types";
-import type { DispatchRecord } from "../../../domain/delegation/types";
-import type { Company } from "../../../domain/org/types";
-import { toast } from "../../../components/system/toast-store";
-import { resolveSessionActorId } from "../../../lib/sessions";
+import { syncDelegationClosedLoopState } from "../delegation/closed-loop";
+import { gateway } from "../gateway";
+import { appendOperatorActionAuditEvent } from "../governance/operator-action-audit";
+import type { RequirementSessionSnapshot } from "../../domain/mission/requirement-snapshot";
+import type { ArtifactRecord } from "../../domain/artifact/types";
+import type { DispatchRecord } from "../../domain/delegation/types";
+import type { Company } from "../../domain/org/types";
+import { toast } from "../../components/system/toast-store";
+import { resolveSessionActorId } from "../../lib/sessions";
 
 function extractChatSyncSessionKey(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
@@ -130,7 +130,7 @@ export function useBoardCommunicationSync(input: {
         setRecoveringCommunication(false);
       }
     },
-    [],
+    [input.surface],
   );
 
   useEffect(() => {

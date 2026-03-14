@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AuthorityHealthGuidanceItem } from "../../../src/infrastructure/authority/contract";
+import {
+  isAuthoritySqliteLockErrorMessage,
+  openAuthoritySqlite,
+} from "./sqlite";
 
 type SqlScalarRow = Record<string, number | string | null | undefined>;
 
@@ -201,7 +205,7 @@ function readSchemaVersionFromDbPath(dbPath: string) {
   if (!existsSync(dbPath)) {
     return null;
   }
-  const db = new DatabaseSync(dbPath);
+  const db = openAuthoritySqlite(dbPath);
   try {
     return readSchemaVersion(db);
   } catch {
@@ -257,7 +261,7 @@ function inspectSqliteFile(dbPath: string): {
 
   let db: DatabaseSync | null = null;
   try {
-    db = new DatabaseSync(dbPath);
+    db = openAuthoritySqlite(dbPath);
     const schemaVersion = readSchemaVersion(db);
     const integrity = readIntegrityCheck(db);
     return {
@@ -316,7 +320,7 @@ function checkpointAuthorityDb(dbPath: string) {
   if (!existsSync(dbPath)) {
     return;
   }
-  const db = new DatabaseSync(dbPath);
+  const db = openAuthoritySqlite(dbPath);
   try {
     db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
   } finally {
@@ -430,7 +434,7 @@ export function readAuthorityDoctorSnapshot(input?: {
   const backups = listAuthorityBackups({ backupDir });
   const latestBackup = backups[0] ?? null;
     try {
-    const db = new DatabaseSync(dbPath);
+    const db = openAuthoritySqlite(dbPath);
     try {
     const schemaVersion = readSchemaVersion(db);
     const integrity = readIntegrityCheck(db);
@@ -510,7 +514,12 @@ export function readAuthorityDoctorSnapshot(input?: {
       db.close();
     }
   } catch (error) {
-    issues.push(`Authority SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    issues.push(
+      isAuthoritySqliteLockErrorMessage(message)
+        ? "Authority SQLite 当前被另一 authority 实例占用。请先停止另一实例，或改用标准备份启动隔离 authority。"
+        : `Authority SQLite 无法读取：${message}`,
+    );
     return {
       status: "blocked",
       dataDir,
@@ -518,7 +527,7 @@ export function readAuthorityDoctorSnapshot(input?: {
       dbExists,
       schemaVersion: null,
       integrityStatus: "failed",
-      integrityMessage: error instanceof Error ? error.message : String(error),
+      integrityMessage: message,
       dbSizeBytes,
       backupDir,
       backupCount: backups.length,
@@ -597,7 +606,7 @@ export function migrateAuthoritySchemaVersion(input?: {
     };
   }
 
-  const db = new DatabaseSync(dbPath);
+  const db = openAuthoritySqlite(dbPath);
   try {
     ensureMetadataTable(db);
     const previousSchemaVersion = readSchemaVersion(db);
@@ -957,7 +966,7 @@ export function readAuthorityPreflightSnapshot(input?: {
   if (dbExists) {
     notes.push("Authority SQLite 已存在，启动时会直接复用。");
     try {
-      const db = new DatabaseSync(dbPath);
+      const db = openAuthoritySqlite(dbPath);
       try {
         schemaVersion = readSchemaVersion(db);
         const integrity = readIntegrityCheck(db);
@@ -969,10 +978,18 @@ export function readAuthorityPreflightSnapshot(input?: {
     } catch (error) {
       integrityStatus = "failed";
       integrityMessage = error instanceof Error ? error.message : String(error);
-      issues.push(`Authority SQLite 无法读取：${integrityMessage}`);
+      issues.push(
+        isAuthoritySqliteLockErrorMessage(integrityMessage)
+          ? "Authority SQLite 当前被另一 authority 实例占用。请先停止另一实例，或改用标准备份启动隔离 authority。"
+          : `Authority SQLite 无法读取：${integrityMessage}`,
+      );
     }
     if (integrityStatus === "failed") {
-      issues.push(`Authority SQLite integrity_check 失败：${integrityMessage ?? "未知错误"}`);
+      if (isAuthoritySqliteLockErrorMessage(integrityMessage)) {
+        issues.push("Authority SQLite 出现锁冲突，当前 doctor/preflight 无法稳定读取。");
+      } else {
+        issues.push(`Authority SQLite integrity_check 失败：${integrityMessage ?? "未知错误"}`);
+      }
     } else if (integrityStatus === "unknown") {
       warnings.push(`Authority SQLite integrity_check 无法确认：${integrityMessage ?? "未知错误"}`);
     }

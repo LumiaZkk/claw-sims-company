@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { resolveRequirementRoomEntryTarget } from "../../application/delegation/requirement-room-entry";
 import { useBoardPageViewModel } from "../../application/mission/board-view-model";
+import { useBoardCommunicationSync } from "../../application/mission/board-communication-sync";
+import { useBoardRuntimeState } from "../../application/mission/board-runtime-state";
+import { useBoardTaskBackfill } from "../../application/mission/board-task-backfill";
 import { useCanonicalRuntimeSummary } from "../../application/runtime-summary";
 import { buildRequirementRoomHrefFromRecord } from "../../application/delegation/room-routing";
 import {
@@ -17,10 +21,9 @@ import { useGatewayStore } from "../../application/gateway";
 import { buildActivityInboxSummary } from "../../application/governance/activity-inbox";
 import { appendOperatorActionAuditEvent } from "../../application/governance/operator-action-audit";
 import { trackChatRequirementMetric } from "../../application/telemetry/chat-requirement-metrics";
-import { resolveConversationPresentation } from "../../lib/chat-routes";
-import {
-  resolveSessionActorId,
-} from "../../lib/sessions";
+import { buildTakeoverCaseSummary, buildTakeoverCases } from "../../application/delegation/takeover-case";
+import { useTakeoverCaseWorkflow } from "../../application/delegation/use-takeover-case-workflow";
+import { resolveSessionActorId } from "../../lib/sessions";
 import { usePageVisibility } from "../../lib/use-page-visibility";
 import {
   BoardAlertStrip,
@@ -29,11 +32,9 @@ import {
   BoardRoomPanel,
   BoardTaskBoardSection,
 } from "./components/BoardSections";
-import { useBoardCommunicationSync } from "./hooks/useBoardCommunicationSync";
-import { useBoardRuntimeState } from "./hooks/useBoardRuntimeState";
-import { useBoardTaskBackfill } from "./hooks/useBoardTaskBackfill";
 import { CanonicalRuntimeSummaryCard } from "../shared/CanonicalRuntimeSummaryCard";
 import { ActivityInboxStrip } from "../shared/ActivityInboxStrip";
+import { TakeoverCasePanel } from "../shared/TakeoverCasePanel";
 
 type BoardPageContentProps = Omit<
   ReturnType<typeof useBoardPageViewModel>,
@@ -52,11 +53,11 @@ function BoardPageContent({
   activeRoomRecords,
   activeWorkItems,
   activeArtifacts,
-  activeAgentSessions,
   activeAgentRuntime,
   activeAgentStatuses,
   primaryRequirementId,
   replaceDispatchRecords,
+  upsertDispatchRecord,
   upsertTask,
   updateCompany,
   ensureRequirementRoomForAggregate,
@@ -64,6 +65,7 @@ function BoardPageContent({
   const navigate = useNavigate();
   const { summary: runtimeSummary } = useCanonicalRuntimeSummary();
   const connected = useGatewayStore((state) => state.connected);
+  const providerManifest = useGatewayStore((state) => state.manifest);
   const supportsAgentFiles = useGatewayStore((state) => state.capabilities.agentFiles);
   const isPageVisible = usePageVisibility();
   const {
@@ -77,7 +79,6 @@ function BoardPageContent({
     companySessions,
   } = useBoardRuntimeState({
     activeCompany,
-    activeAgentSessions,
     activeAgentRuntime,
     activeAgentStatuses,
     activeArtifacts,
@@ -217,6 +218,42 @@ function BoardPageContent({
     escalationCount: visibleSlaAlerts.length,
     manualTakeoverCount: visibleTakeoverCount,
   });
+  const takeoverCaseSummary = useMemo(() => {
+    const visibleSessionKeys = new Set(
+      boardTaskSurface.taskSequence
+        .filter(
+          (item) =>
+            item.execution.state === "manual_takeover_required" || Boolean(item.takeoverPack),
+        )
+        .map((item) => item.task.sessionKey),
+    );
+    return buildTakeoverCaseSummary(
+      buildTakeoverCases({
+        company: activeCompany,
+        sessions,
+        sessionExecutions: sessionStates,
+        takeoverPacks: sessionTakeoverPacks,
+        activeRoomRecords,
+        activeDispatches,
+        sessionKeys: visibleSessionKeys.size > 0 ? visibleSessionKeys : undefined,
+      }),
+    );
+  }, [
+    activeCompany,
+    activeDispatches,
+    activeRoomRecords,
+    boardTaskSurface.taskSequence,
+    sessions,
+    sessionStates,
+    sessionTakeoverPacks,
+  ]);
+  const { busyCaseId, runTakeoverAction, runTakeoverRedispatch } = useTakeoverCaseWorkflow({
+    activeCompany,
+    updateCompany,
+    providerManifest,
+    upsertDispatchRecord,
+    surface: "board",
+  });
   const stageStripSteps =
     currentWorkItem?.steps.length
       ? currentWorkItem.steps.map((step, index) => ({
@@ -311,7 +348,7 @@ function BoardPageContent({
             : showPreRequirementMainline
               ? `当前主线「${requirementDisplayTitle}」已经固化为需求房入口，先补充、澄清或确认后再启动真实执行。`
             : showPreRequirementDraft
-              ? "CEO 已经形成当前目标草案，但系统还没有正式 requirement/work item。先回 CEO 会话确认草案或继续推进，这里会在主线落地后自动切换。"
+              ? "CEO 已经形成当前主线草案，但系统还没有正式 requirement/work item。先回 CEO 会话确认草案或继续推进，这里会在主线落地后自动切换。"
             : isBoardFallbackView
               ? "当前展示 CEO 任务板视图。系统还没有正式 requirement，但已根据 TASK-BOARD.md 还原当前步骤和执行顺序。"
               : "这里只看任务顺序、当前步骤和子任务进度。成员状态和异常监控统一去 `/runtime`。"
@@ -372,15 +409,19 @@ function BoardPageContent({
         }}
         route={primaryRequirementSurface.aggregateId ? `ensure:${primaryRequirementSurface.aggregateId}` : requirementRoomRoute}
         onCreateRoom={() => {
-          if (primaryRequirementSurface.aggregateId) {
-            const ensuredRoom = ensureRequirementRoomForAggregate(primaryRequirementSurface.aggregateId);
+          const target = resolveRequirementRoomEntryTarget({
+            aggregateId: primaryRequirementSurface.aggregateId,
+            route: requirementRoomRoute,
+          });
+          if (target.kind === "ensure") {
+            const ensuredRoom = ensureRequirementRoomForAggregate(target.aggregateId);
             if (ensuredRoom) {
               navigate(buildRequirementRoomHrefFromRecord(ensuredRoom));
               return;
             }
           }
-          if (requirementRoomRoute) {
-            navigate(requirementRoomRoute);
+          if (target.kind === "route") {
+            navigate(target.href);
           }
         }}
       />
@@ -417,54 +458,62 @@ function BoardPageContent({
 
       <ActivityInboxStrip summary={activityInboxSummary} title="统一活动摘要" />
 
-      <BoardAlertStrip
-        visible={visibleTakeoverCount > 0}
-        tone="amber"
-        title="人工接管警报"
-        description={`当前检测到 ${visibleTakeoverCount} 条会话需要人工接管，已生成接管包。`}
-        actionLabel="查看接管包"
-        onAction={() => {
-          const firstSessionKey = sessionTakeoverPacks.keys().next().value;
-          if (typeof firstSessionKey === "string") {
-            const session = sessions.find((item) => item.key === firstSessionKey) ?? null;
-            const route = resolveConversationPresentation({
-              sessionKey: firstSessionKey,
-              actorId: session ? resolveSessionActorId(session) : null,
-              rooms: activeRoomRecords,
-              employees: activeCompany.employees,
-            }).route;
+      {takeoverCaseSummary.totalCount > 0 ? (
+        <TakeoverCasePanel
+          summary={takeoverCaseSummary}
+          busyCaseId={busyCaseId}
+          onOpenCase={(caseItem) => {
+            const session = sessions.find((item) => item.key === caseItem.sourceSessionKey) ?? null;
             void appendOperatorActionAuditEvent({
               companyId: activeCompany.id,
               action: "takeover_route_open",
               surface: "board",
               outcome: "succeeded",
               details: {
-                sessionKey: firstSessionKey,
+                takeoverCaseId: caseItem.id,
+                sessionKey: caseItem.sourceSessionKey,
                 targetActorId: session ? resolveSessionActorId(session) : null,
-                route,
-                visibleTakeoverCount,
+                route: caseItem.route,
+                visibleTakeoverCount: takeoverCaseSummary.totalCount,
+                takeoverStatus: caseItem.status,
               },
             });
-            navigate(route);
-            return;
+            navigate(caseItem.route);
+          }}
+          onAcknowledgeCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "acknowledge" });
+          }}
+          onAssignCase={(caseItem) => {
+            void runTakeoverAction({
+              caseItem,
+              action: "assign",
+              assigneeAgentId: caseItem.ownerAgentId,
+              assigneeLabel: caseItem.ownerLabel,
+            });
+          }}
+          onStartCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "start" });
+          }}
+          onResolveCase={(caseItem, note) => {
+            void runTakeoverAction({ caseItem, action: "resolve", note });
+          }}
+          onRedispatchCase={
+            providerManifest
+              ? (caseItem, note) => {
+                  void runTakeoverRedispatch({ caseItem, note });
+                }
+              : undefined
           }
-          void appendOperatorActionAuditEvent({
-            companyId: activeCompany.id,
-            action: "takeover_route_open",
-            surface: "board",
-            outcome: "failed",
-            error: "没有找到可打开的人工接管会话。",
-            details: {
-              visibleTakeoverCount,
-            },
-          });
-        }}
-      />
+          onArchiveCase={(caseItem) => {
+            void runTakeoverAction({ caseItem, action: "archive" });
+          }}
+        />
+      ) : null}
 
       <BoardAlertStrip
         visible={visibleRequestHealth.active > 0}
         tone="sky"
-        title={requirementOverview ? "当前需求请求闭环" : "请求闭环队列"}
+        title={requirementOverview ? "当前主线请求闭环" : "请求闭环队列"}
         description={
           requirementOverview
             ? `当前主线还有 ${visibleRequestHealth.active} 条请求未闭环，其中阻塞 ${visibleRequestHealth.blocked} 条；历史请求已隐藏。`
@@ -478,7 +527,7 @@ function BoardPageContent({
       <BoardAlertStrip
         visible={visiblePendingHandoffs.length > 0}
         tone="violet"
-        title={requirementOverview ? "当前需求交接队列" : "交接队列"}
+        title={requirementOverview ? "当前主线交接队列" : "交接队列"}
         description={
           requirementOverview
             ? `当前主线有 ${visiblePendingHandoffs.length} 条待完成交接；过期交接已自动隐藏。`
@@ -486,14 +535,14 @@ function BoardPageContent({
         }
       >
         <div className="rounded-lg border border-violet-200 bg-white/80 px-3 py-3 text-xs leading-6 text-slate-700">
-          工作看板只保留“哪些交接正在影响当前执行顺序”这一层摘要。完整交接条目、缺失项和恢复动作统一留在运营大厅。
+          工作看板只保留“哪些交接正在影响当前执行顺序”这一层摘要。完整交接条目、缺失项和恢复动作统一留在 Ops。
         </div>
       </BoardAlertStrip>
 
       <BoardAlertStrip
         visible={visibleSlaAlerts.length > 0}
         tone="rose"
-        title={requirementOverview ? "当前需求超时提醒" : "SLA 升级队列"}
+        title={requirementOverview ? "当前主线超时提醒" : "SLA 升级队列"}
         description={
           requirementOverview
             ? `当前主线有 ${visibleSlaAlerts.length} 条超时或阻塞提醒；历史超时项已隐藏。`
@@ -501,7 +550,7 @@ function BoardPageContent({
         }
       >
         <div className="rounded-lg border border-rose-200 bg-white/80 px-3 py-3 text-xs leading-6 text-slate-700">
-          超时提醒在看板里只承担“提醒你执行顺序已受影响”。具体超时条目、恢复建议和全局异常列表统一在运营大厅处理。
+          超时提醒在看板里只承担“提醒你执行顺序已受影响”。具体超时条目、恢复建议和全局异常列表统一在 Ops 处理。
         </div>
       </BoardAlertStrip>
 

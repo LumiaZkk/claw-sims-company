@@ -1,0 +1,254 @@
+import { describe, expect, it } from "vitest";
+import { buildRequirementCloseoutReport } from "./requirement-closeout-report";
+import { buildDefaultOrgSettings } from "../../domain/org/autonomy-policy";
+import type { Company } from "../../domain/org/types";
+
+function createCompany(overrides?: Partial<Company>): Company {
+  return {
+    id: "company-1",
+    name: "测试公司",
+    description: "",
+    icon: "🏢",
+    template: "blank",
+    orgSettings: buildDefaultOrgSettings(),
+    employees: [],
+    quickPrompts: [],
+    workspaceApps: [
+      {
+        id: "app-knowledge",
+        slug: "knowledge",
+        title: "知识与验收",
+        description: "集中查看正式方案与验收结论。",
+        icon: "🧾",
+        kind: "custom",
+        status: "ready",
+        surface: "template",
+        template: "knowledge",
+        manifestArtifactId: "artifact-manifest",
+      },
+    ],
+    skillDefinitions: [],
+    skillRuns: [],
+    capabilityRequests: [],
+    capabilityIssues: [],
+    capabilityAuditEvents: [
+      {
+        id: "audit-1",
+        type: "skill",
+        action: "verified",
+        summary: "已留下治理证据",
+        detail: "已验证一轮。",
+        status: "completed",
+        updatedAt: 9_000,
+        createdAt: 9_000,
+      } as any,
+    ],
+    createdAt: 1,
+    ...overrides,
+  };
+}
+
+describe("buildRequirementCloseoutReport", () => {
+  it("blocks acceptance when deliverables and traceability are missing", () => {
+    const report = buildRequirementCloseoutReport({
+      aggregate: {
+        id: "requirement-1",
+        revision: 2,
+      } as any,
+      activeCompany: createCompany(),
+      workspaceFiles: [],
+      deliverableFiles: [],
+      requirementTimelineCount: 0,
+      transcriptPreviewCount: 0,
+      updatedAtCandidates: [],
+    });
+
+    expect(report.status).toBe("blocked");
+    expect(report.blockingReasons).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("交付物摘要"),
+        expect.stringContaining("来源链路"),
+      ]),
+    );
+    expect(report.consistencySummary.status).toBe("warning");
+    expect(report.knowledgeSummary.status).toBe("warning");
+  });
+
+  it("keeps acceptance available with warnings when deliverables exist but evidence is incomplete", () => {
+    const report = buildRequirementCloseoutReport({
+      aggregate: {
+        id: "requirement-1",
+        revision: 3,
+      } as any,
+      activeCompany: createCompany(),
+      workspaceFiles: [
+        {
+          key: "file-1",
+          agentId: "writer",
+          agentLabel: "写手",
+          role: "Writer",
+          workspace: "workspace",
+          name: "chapter-1.md",
+          path: "/chapter-1.md",
+          kind: "chapter",
+          resourceType: "document",
+          tags: [],
+          resourceOrigin: "declared",
+          updatedAtMs: 12_000,
+        } as any,
+      ],
+      deliverableFiles: [
+        {
+          key: "file-1",
+          agentId: "writer",
+          agentLabel: "写手",
+          role: "Writer",
+          workspace: "workspace",
+          name: "chapter-1.md",
+          path: "/chapter-1.md",
+          kind: "chapter",
+          resourceType: "document",
+          tags: [],
+          resourceOrigin: "declared",
+          updatedAtMs: 12_000,
+        } as any,
+      ],
+      requirementTimelineCount: 2,
+      transcriptPreviewCount: 1,
+      updatedAtCandidates: [12_000],
+    });
+
+    expect(report.status).toBe("warning");
+    expect(report.blockingReasons).toHaveLength(0);
+    expect(report.deliverableHighlights[0]).toMatchObject({
+      title: "chapter-1.md",
+      path: "/chapter-1.md",
+    });
+    expect(report.advisoryReasons).toEqual(
+      expect.arrayContaining([expect.stringContaining("验收依据")]),
+    );
+    expect(report.consistencySummary.anchorReadyCount).toBe(0);
+    expect(report.knowledgeSummary.itemCount).toBeGreaterThan(0);
+  });
+
+  it("surfaces evidence highlights when review artifacts exist", () => {
+    const report = buildRequirementCloseoutReport({
+      aggregate: {
+        id: "requirement-1",
+        revision: 3,
+      } as any,
+      activeCompany: createCompany(),
+      workspaceFiles: [],
+      deliverableFiles: [
+        {
+          key: "review-1",
+          agentId: "reviewer",
+          agentLabel: "审校",
+          role: "Reviewer",
+          workspace: "workspace",
+          name: "acceptance-report.md",
+          path: "/acceptance-report.md",
+          kind: "review",
+          resourceType: "document",
+          tags: [],
+          resourceOrigin: "declared",
+          updatedAtMs: 13_000,
+        } as any,
+      ],
+      requirementTimelineCount: 1,
+      transcriptPreviewCount: 1,
+      updatedAtCandidates: [13_000],
+    });
+
+    expect(report.status).toBe("warning");
+    expect(report.acceptanceEvidenceHighlights[0]).toMatchObject({
+      title: "acceptance-report.md",
+      path: "/acceptance-report.md",
+    });
+    expect(report.knowledgeSummary.status).toBe("ready");
+  });
+
+  it("surfaces consistency and knowledge evidence alongside the closeout report", () => {
+    const report = buildRequirementCloseoutReport({
+      aggregate: {
+        id: "requirement-1",
+        revision: 4,
+        memberIds: ["coo-1"],
+      } as any,
+      activeCompany: createCompany({
+        knowledgeItems: [
+          {
+            id: "knowledge-1",
+            kind: "summary",
+            title: "验收总结",
+            summary: "已经汇总主要验收结论。",
+            status: "active",
+            acceptanceMode: "auto",
+            sourceAgentId: "coo-1",
+            sourcePath: "/knowledge/acceptance-summary.md",
+            updatedAt: 14_000,
+          } as any,
+        ],
+      }),
+      workspaceFiles: [
+        {
+          key: "canon-1",
+          agentId: "writer",
+          agentLabel: "写手",
+          role: "Writer",
+          workspace: "workspace",
+          name: "shared-canon.md",
+          path: "/shared-canon.md",
+          kind: "canon",
+          resourceType: "document",
+          tags: ["domain.reference"],
+          resourceOrigin: "declared",
+          updatedAtMs: 10_000,
+        } as any,
+        {
+          key: "timeline-1",
+          agentId: "writer",
+          agentLabel: "写手",
+          role: "Writer",
+          workspace: "workspace",
+          name: "timeline.md",
+          path: "/timeline.md",
+          kind: "canon",
+          resourceType: "document",
+          tags: ["domain.reference", "story.timeline"],
+          resourceOrigin: "declared",
+          updatedAtMs: 11_000,
+        } as any,
+      ],
+      deliverableFiles: [
+        {
+          key: "consistency-report-1",
+          artifactId: "artifact-consistency-1",
+          agentId: "coo-1",
+          agentLabel: "COO",
+          role: "COO",
+          workspace: "workspace",
+          name: "consistency-report-17000.md",
+          path: "/skill-results/consistency-report-17000.md",
+          kind: "other",
+          resourceType: "report",
+          tags: ["qa.report"],
+          resourceOrigin: "declared",
+          updatedAtMs: 17_000,
+        } as any,
+      ],
+      requirementTimelineCount: 2,
+      transcriptPreviewCount: 1,
+      updatedAtCandidates: [17_000],
+    });
+
+    expect(report.consistencySummary.reportHighlights[0]).toMatchObject({
+      title: "consistency-report-17000.md",
+    });
+    expect(report.consistencySummary.summary).toContain("规则/校验结果");
+    expect(report.knowledgeSummary.highlights[0]).toMatchObject({
+      title: "验收总结",
+      kindLabel: "最终汇总",
+    });
+  });
+});

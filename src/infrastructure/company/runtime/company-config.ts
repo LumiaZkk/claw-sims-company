@@ -1,5 +1,6 @@
 import {
   deleteCompanyCascade,
+  peekCachedCompanyConfig,
   saveCompanyConfig,
 } from "../persistence/persistence";
 import type {
@@ -149,7 +150,7 @@ export function buildCompanyConfigActions(
     },
 
     saveConfig: async () => {
-      const { config } = get();
+      const { config, activeCompany } = get();
       if (!config) {
         return;
       }
@@ -160,7 +161,16 @@ export function buildCompanyConfigActions(
         if (!success) {
           set({ error: "Failed to persist configuration" });
         }
-        set({ loading: false });
+        const canonicalConfig = peekCachedCompanyConfig() ?? config;
+        const canonicalActiveCompany =
+          canonicalConfig.companies.find((company) => company.id === canonicalConfig.activeCompanyId)
+          ?? activeCompany
+          ?? null;
+        set({
+          config: canonicalConfig,
+          activeCompany: canonicalActiveCompany,
+          loading: false,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         set({ error: message, loading: false });

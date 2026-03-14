@@ -6,6 +6,8 @@ import type {
   RequirementRoomRecord,
   RoomConversationBindingRecord,
   SupportRequestRecord,
+  TakeoverCaseRecord,
+  TakeoverCaseWorkflowAction,
 } from "../../domain/delegation/types";
 import type {
   ConversationMissionRecord,
@@ -189,6 +191,30 @@ export type AuthorityHealthGuidanceItem = {
   summary: string;
   action: string;
   command?: string | null;
+};
+
+export type AuthorityOperatorActionId =
+  | "doctor"
+  | "migrate-plan"
+  | "backup"
+  | "restore-plan"
+  | "restore-apply"
+  | "rehearse";
+
+export type AuthorityOperatorActionRequest = {
+  id: AuthorityOperatorActionId;
+};
+
+export type AuthorityOperatorActionResponse = {
+  id: AuthorityOperatorActionId;
+  state: "ready" | "degraded" | "blocked";
+  title: string;
+  summary: string;
+  detail: string | null;
+  command: string;
+  report: string;
+  timestamp: number;
+  bootstrap?: AuthorityBootstrapSnapshot;
 };
 
 export type AuthorityEvent =
@@ -477,8 +503,29 @@ export type AuthorityDecisionTicketCancelRequest = {
   timestamp?: number;
 };
 
+export type AuthorityTakeoverCaseCommandRequest = {
+  companyId: string;
+  caseRecord: TakeoverCaseRecord;
+  action: TakeoverCaseWorkflowAction;
+  actorId?: string | null;
+  actorLabel?: string | null;
+  assigneeAgentId?: string | null;
+  assigneeLabel?: string | null;
+  note?: string | null;
+  dispatchId?: string | null;
+  timestamp?: number;
+};
+
+export type AuthorityTakeoverCaseMutationResponse = {
+  bootstrap: AuthorityBootstrapSnapshot;
+  takeoverCase: TakeoverCaseRecord;
+};
+
+export type AuthorityAppendCompanyEventInput = Pick<CompanyEvent, "companyId" | "kind"> &
+  Partial<Omit<CompanyEvent, "companyId" | "kind">>;
+
 export type AuthorityAppendCompanyEventRequest = {
-  event: CompanyEvent;
+  event: AuthorityAppendCompanyEventInput;
 };
 
 export type AuthorityCompanyEventsResponse = {

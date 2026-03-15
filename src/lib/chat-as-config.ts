@@ -1,6 +1,7 @@
 import type { Company } from "../domain/org/types";
+import type { MetaRole } from "../domain/meta-agent/types";
 
-export type MetaTarget = "ceo" | "hr" | "cto" | "coo";
+export type MetaTarget = MetaRole;
 
 export type ConfigPrompt = {
   target: MetaTarget;

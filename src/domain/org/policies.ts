@@ -1,29 +1,11 @@
 import type { Company, Department, EmployeeRef } from "./types";
+import { META_DEPARTMENT_SPECS, resolveCeoAgentId } from "../meta-agent/organization";
 
-export function resolveCeoAgentId(employees: EmployeeRef[]): string | null {
-  const ceo = employees.find((employee) => employee.metaRole === "ceo");
-  return ceo?.agentId ?? null;
-}
+export { resolveCeoAgentId } from "../meta-agent/organization";
 
 function isValidManagerId(managerId: unknown, employeesById: Map<string, EmployeeRef>): managerId is string {
   return typeof managerId === "string" && managerId.trim().length > 0 && employeesById.has(managerId);
 }
-
-type MetaRole = NonNullable<EmployeeRef["metaRole"]>;
-
-const META_DEPARTMENT_SPECS: Array<{
-  metaRole: MetaRole;
-  name: string;
-  kind: Department["kind"];
-  color: string;
-  order: number;
-  missionPolicy: Department["missionPolicy"];
-}> = [
-  { metaRole: "ceo", name: "管理中枢", kind: "meta", color: "slate", order: 0, missionPolicy: "manager_delegated" },
-  { metaRole: "hr", name: "人力资源部", kind: "support", color: "rose", order: 1, missionPolicy: "support_only" },
-  { metaRole: "cto", name: "技术部", kind: "support", color: "indigo", order: 2, missionPolicy: "support_only" },
-  { metaRole: "coo", name: "运营部", kind: "support", color: "emerald", order: 3, missionPolicy: "support_only" },
-];
 
 function ensureMetaDepartments(params: {
   nextDepartments: Department[];

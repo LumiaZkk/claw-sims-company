@@ -92,7 +92,7 @@ Cyber Company 更适合。原因：
 
 ### 3.3 CEO Soul 的关键约束（已内置）
 
-当前 `meta-agent-souls.ts` 中的 CEO Soul 已经具备以下对小说公司至关重要的内置行为：
+当前 `src/domain/meta-agent/souls.ts` 中的 CEO Soul 已经具备以下对小说公司至关重要的内置行为：
 
 1. **业务归属先判定**：CEO 不会把"写小说"错派给 CTO/COO/HR，而是会识别为业务交付，派给创作部
 2. **结构化控制输出**：CEO 的每条回复会附带隐藏的 `metadata.control`，包含 `requirementDraft`（需求草案），系统据此自动形成主线

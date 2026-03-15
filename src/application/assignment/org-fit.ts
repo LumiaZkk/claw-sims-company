@@ -1,10 +1,10 @@
 import type { Company, Department, EmployeeRef } from "../../domain/org/types";
+import { resolveCeoAgentId } from "../../domain/meta-agent/organization";
 import {
   applyBootstrapSingleDepartment,
   applyDepartmentLeadConstraints,
   applyOneClickOrgFixups,
   inferDefaultDepartmentName,
-  resolveCeoAgentId,
   resolveDepartmentLeadCandidate,
   resolveOrgIssues,
 } from "../../domain/org/policies";

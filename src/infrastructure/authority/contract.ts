@@ -19,6 +19,7 @@ import type {
 } from "../../domain/mission/types";
 import type { ApprovalRecord } from "../../domain/governance/types";
 import type { Company, CyberCompanyConfig, Department } from "../../domain/org/types";
+import type { MetaRole } from "../../domain/meta-agent/types";
 import type {
   CanonicalAgentStatusRecord,
   CanonicalAgentStatusHealthRecord,
@@ -556,7 +557,7 @@ export type AuthorityCollaborationActor = {
   agentId: string;
   nickname: string;
   role: string;
-  metaRole: "ceo" | "hr" | "cto" | "coo" | null;
+  metaRole: MetaRole | null;
   isMeta: boolean;
   isDepartmentManager: boolean;
   departmentId: string | null;

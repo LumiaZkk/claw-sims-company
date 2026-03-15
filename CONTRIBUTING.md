@@ -1,6 +1,6 @@
-# Contributing to Cyber Company
+# Contributing to Claw Company
 
-Cyber Company 是一个建立在 OpenClaw 之上的运营控制台。改动代码前，先确认你改的是哪一层，而不是先找“以前放哪”。
+`Claw Company` 是 `Claw Sims` 当前已经落地的第一个可玩子集：一个建立在 OpenClaw 之上的公司模拟与运营控制面。GitHub 仓库现已按家族命名收敛为 `claw-sims-company`；出于兼容性，部分内部 key 和本地数据目录仍保留 `cyber-company` 前缀。
 
 ## Local Setup
 
@@ -44,6 +44,15 @@ npm test
 - `src/lib`
   小型工具，不放新的主业务流。
 
+## 品牌上下文
+
+- `Claw Sims`
+  总世界观和总产品方向。
+- `Claw Company`
+  当前仓库内的主产品面，也是当前默认开发目标。
+- `OpenClaw`
+  Gateway、执行器和底层 agent runtime。
+
 ## 改动应该放哪
 
 - 你在改路由跳转、screen 装配、页面交互：
@@ -63,19 +72,34 @@ npm test
 - `pages` 不直接碰 `domain` 或 `infrastructure`
 - `presentation` 不直接 import `infrastructure`
 - `domain` 不依赖 `application`、`presentation`、`infrastructure`
-- 需要确认边界时，以 ESLint restricted-imports 和 `docs/engineering-onboarding.md` 为准
+- 需要确认边界时，以当前目录结构和 ESLint restricted-imports 为准
 
 ## 推荐阅读顺序
 
-1. `docs/engineering-onboarding.md`
+1. `README.md`
 2. `src/App.tsx`
 3. 对应路由的 `src/pages/*`
 4. 对应 screen 的 `src/presentation/*`
 5. 对应 façade 的 `src/application/*`
 
+## 需求开工前
+
+如果是中等以上需求，先补一张需求评审卡：
+
+- `docs/claw-company-requirement-review-template.md`
+- 如果需求涉及 `CEO / HR / CTO / COO` 角色能力，再先看 `docs/claw-company-meta-agent-subdomain-spec.md`
+
+并至少写清：
+
+- 归属领域
+- 主业务链
+- 影响目录
+- 边界不变量
+- 验收与测试
+
 ## 历史材料
 
-`docs/archive/ddd-boundary-migration/` 下是 2026-03 DDD 收口时的计划、进度和发现，保留用于回溯，不作为当前开发入口。
+本地工作区里可能保留内部策划、归档和过程性文档，但这些材料默认不再同步到 GitHub，也不作为公开仓库的开发入口。
 
 ## 报告问题时请带上
 

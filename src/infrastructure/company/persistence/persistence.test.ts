@@ -21,6 +21,7 @@ import {
   getAuthorityBootstrap,
   saveAuthorityConfig as saveAuthorityConfigRequest,
 } from "../../../application/gateway/authority-control";
+import type { MetaRole } from "../../../domain/meta-agent/types";
 
 vi.mock("../../../application/gateway/authority-control", () => ({
   getAuthorityBootstrap: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock("../../../application/gateway/authority-control", () => ({
 function createCompany(
   id: string,
   name: string,
-  employeeAgentIds: Array<{ agentId: string; metaRole?: "ceo" | "hr" | "cto" | "coo"; isMeta?: boolean }>,
+  employeeAgentIds: Array<{ agentId: string; metaRole?: MetaRole; isMeta?: boolean }>,
 ): Company {
   return {
     id,

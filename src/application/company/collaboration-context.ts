@@ -1,4 +1,5 @@
 import { buildDefaultOrgSettings } from "../../domain/org/autonomy-policy";
+import type { MetaRole } from "../../domain/meta-agent/types";
 import type { Company, EmployeeRef } from "../../domain/org/types";
 import {
   inferDepartmentKind,
@@ -27,7 +28,7 @@ export type CollaborationActorSnapshot = {
   agentId: string;
   nickname: string;
   role: string;
-  metaRole: "ceo" | "hr" | "cto" | "coo" | null;
+  metaRole: MetaRole | null;
   isMeta: boolean;
   isDepartmentManager: boolean;
   departmentId: string | null;

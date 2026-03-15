@@ -1,4 +1,5 @@
 import type { SupportRequestRecord } from "../../domain/delegation/types";
+import { inferMetaDepartmentKind } from "../../domain/meta-agent/organization";
 import type { WorkItemRecord } from "../../domain/mission/types";
 import type { Company, Department, EmployeeRef } from "../../domain/org/types";
 import { isSupportRequestActive } from "../../domain/delegation/support-request";
@@ -43,11 +44,9 @@ export function inferDepartmentKind(
   if (!lead) {
     return "business";
   }
-  if (lead.metaRole === "ceo") {
-    return "meta";
-  }
-  if (lead.metaRole === "hr" || lead.metaRole === "cto" || lead.metaRole === "coo") {
-    return "support";
+  const metaDepartmentKind = inferMetaDepartmentKind(lead.metaRole ?? null);
+  if (metaDepartmentKind) {
+    return metaDepartmentKind;
   }
   return "business";
 }

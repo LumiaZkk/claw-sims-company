@@ -11,6 +11,7 @@ import type { TrackedTask } from "../mission/types";
 import type { RetrospectiveRecord } from "../governance/types";
 import type { ApprovalRecord } from "../governance/types";
 import type { ArtifactResourceType } from "../artifact/types";
+import type { MetaRole } from "../meta-agent/types";
 
 export interface CyberCompanyConfig {
   version: 1;
@@ -129,7 +130,7 @@ export interface CollaborationEdge {
 }
 
 export interface CompanyCollaborationPolicy {
-  globalDispatchMetaRoles?: Array<NonNullable<EmployeeRef["metaRole"]>>;
+  globalDispatchMetaRoles?: MetaRole[];
   allowDepartmentLeadToDispatchWithinDepartment?: boolean;
   allowDepartmentLeadToDispatchToSupportLeads?: boolean;
   allowDepartmentLeadToDispatchToCeo?: boolean;
@@ -160,7 +161,7 @@ export interface EmployeeRef {
   nickname: string;
   role: string;
   isMeta: boolean;
-  metaRole?: "ceo" | "hr" | "cto" | "coo";
+  metaRole?: MetaRole;
   reportsTo?: string;
   departmentId?: string;
   avatarJobId?: string;

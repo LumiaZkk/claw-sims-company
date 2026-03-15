@@ -61,32 +61,34 @@ npm run dev
 1. `README.md`
 2. `CONTRIBUTING.md`
 3. `src/App.tsx`
-4. `src/pages/*` 里对应路由的入口组件
-5. `src/presentation/*` 里对应页面的 screen、hooks 和页面装配
-6. `src/application/*` 里的 façade、命令、查询和业务编排
-7. 纯规则去看 `src/domain/*`，Gateway / runtime / 持久化去看 `src/infrastructure/*`
+4. `src/pages/*` 里对应页面的 screen、hooks 和页面装配
+5. `src/application/*` 里的 façade、命令、查询和业务编排
+6. 纯规则去看 `src/domain/*`，Gateway / runtime / 持久化去看 `src/infrastructure/*`
 
 ## 代码分层
 
 - `src/pages`
-  路由入口层，只负责把 URL 挂到对应 screen。
-- `src/presentation`
   页面 screen、UI 级 hooks、view-models、页面装配逻辑。
 - `src/application`
   面向页面的 query/command façade、业务编排、跨领域读模型。
 - `src/domain`
-  纯类型、领域规则、事件语义，不依赖 presentation 或 infrastructure。
+  纯类型、领域规则、事件语义，不依赖 application 或 infrastructure。
 - `src/infrastructure`
   Gateway、runtime store、持久化、事件日志等外部适配层。
-- `src/components`
-  可复用 UI 和 system host，例如 toast、approval modal、banner。
+- `src/shared`
+  页面间复用的 presentation 组件与公共装配逻辑。
+- `src/ui`
+  可复用 UI 原子组件。
+- `src/system`
+  系统宿主与全局交互（toast、modal、banner）。
 - `src/lib`
   小型辅助工具；这里不放新的业务主流程。
 
 ## 仓库约定
 
 - 不要再新增 `src/features/*`。这个历史层已经退役。
-- 页面功能优先沿着 `pages -> presentation -> application -> domain/infrastructure` 去找。
+- 页面功能优先沿着 `pages -> application -> domain/infrastructure` 去找。
+- 页面代码不要直接依赖 `src/infrastructure`，需要能力时通过 `src/application` 暴露。
 - 想加新规则，先判断它是“纯业务语义”还是“页面装配/外部适配”。
 - 想放不准的代码，先参考 `CONTRIBUTING.md` 里的边界和改动落点说明。
 
@@ -107,5 +109,9 @@ npm test
   英文入口说明。
 - `CONTRIBUTING.md`
   面向贡献者的结构和改动约定。
+- `docs/clawith-platform-runbook.md`
+  平台 operator 的 setup / restore / release / closeout 运行手册。
+- `docs/clawith-platform-acceptance-matrix.md`
+  Clawith 平台优化线的 adopted / closeout 验收矩阵。
 
 `docs/` 下的策划、评审、路线和归档材料会继续保留在本地工作区，但默认不再同步到 GitHub。

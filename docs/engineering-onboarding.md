@@ -9,6 +9,8 @@
 - `docs/claw-company-meta-agent-subdomain-spec.md`
 - `docs/claw-company-requirement-review-template.md`
 - `docs/authority-backend-boundary-spec.md`
+- `docs/clawith-platform-runbook.md`
+- `docs/clawith-platform-acceptance-matrix.md`
 
 在新的对外叙事里，这个仓库承载的是：
 
@@ -29,9 +31,7 @@
 ## 一眼看懂的目录地图
 
 - `src/pages`
-  路由壳。这里不要写业务逻辑。
-- `src/presentation`
-  真正的页面 screen、页面 hooks、view-models、页面装配。
+  页面 screen、页面 hooks、view-models、页面装配。
 - `src/application`
   页面消费的 façade、命令/查询入口、跨模块业务编排。
 - `src/domain`
@@ -40,8 +40,12 @@
   `CEO / HR / CTO / COO` 的角色合同、Meta 部门语义和支持路由所依赖的领域规则。
 - `src/infrastructure`
   Gateway、runtime store、持久化、provider 适配。
-- `src/components`
-  共享 UI 和系统宿主。
+- `src/shared`
+  页面间复用的 presentation 组件与公共装配逻辑。
+- `src/ui`
+  共享 UI 组件。
+- `src/system`
+  系统宿主与全局交互。
 - `src/lib`
   小辅助工具，不承担主流程业务编排。
 
@@ -50,9 +54,8 @@
 ### 先看整体入口
 
 1. `src/App.tsx`
-2. 你关心的路由文件，例如 `src/pages/ChatPage.tsx`
-3. 对应 screen，例如 `src/presentation/chat/Page.tsx`
-4. 如果 screen 很薄，继续看内容组件，例如 `src/presentation/chat/ChatPageContent.tsx`
+2. 你关心的页面入口，例如 `src/pages/chat/Page.tsx`
+3. 如果 screen 很薄，继续看内容组件，例如 `src/pages/chat/ChatPageContent.tsx`
 
 ### 再顺着业务链往下读
 
@@ -62,37 +65,35 @@
   去 `src/infrastructure/*`
 - 某条规则为什么这样判定：
   去 `src/domain/*`
+- 页面层不要直接 import `src/infrastructure`；需要能力时先在 `src/application` 补 façade。
 
 ## 典型链路怎么追
 
 ### Chat
 
 `src/App.tsx`
-→ `src/pages/ChatPage.tsx`
-→ `src/presentation/chat/Page.tsx`
-→ `src/presentation/chat/ChatPageContent.tsx`
-→ `src/presentation/chat/hooks/*`
+→ `src/pages/chat/Page.tsx`
+→ `src/pages/chat/ChatPageContent.tsx`
+→ `src/pages/chat/hooks/*`
 → `src/application/chat/*` / `src/application/mission/*` / `src/application/delegation/*`
 → `src/domain/*` / `src/infrastructure/*`
 
 ### Board
 
-`src/pages/BoardPage.tsx`
-→ `src/presentation/board/Page.tsx`
-→ `src/presentation/board/components/*`
+`src/pages/board/Page.tsx`
+→ `src/pages/board/components/*`
 → `src/application/mission/*`
 → `src/domain/mission/*` + `src/infrastructure/company/runtime/*`
 
 ### Lobby
 
-`src/pages/CompanyLobby.tsx`
-→ `src/presentation/lobby/Page.tsx`
+`src/pages/lobby/Page.tsx`
 → `src/application/lobby/*` + `src/application/governance/*` + `src/application/mission/*`
 
 ## 改动落点速查
 
 - 新增页面交互、页面级状态、局部视图拼装：
-  放 `src/presentation`
+  放 `src/pages`
 - 新增“页面要消费的业务 surface”：
   放 `src/application`
 - 新增纯业务规则或领域对象：
@@ -102,7 +103,7 @@
 - 新增 Gateway / 持久化 / runtime 适配逻辑：
   放 `src/infrastructure`
 - 新增通用 UI 或系统宿主能力：
-  放 `src/components`
+  放 `src/ui` 或 `src/system`
 
 ## 页面职责对照表
 
@@ -129,6 +130,10 @@
 如果你已经准备开工，先补：
 
 - `docs/claw-company-requirement-review-template.md`
+- 如果改的是平台控制面、治理或持续运行能力，再同步回写：
+  - `docs/clawith-platform-optimization-spec.md`
+  - `docs/clawith-platform-runbook.md`
+  - `docs/clawith-platform-acceptance-matrix.md`
 
 后续如果改页面文案或导航，先对照这张表确认有没有重新把主线打散。
 

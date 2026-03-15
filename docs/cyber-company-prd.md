@@ -807,7 +807,7 @@ Proposed module changes:
 - `src/infrastructure/gateway/store.ts`
   - add `connectErrorType`, `connectErrorMessage`, and `connectErrorDebug`
   - keep reconnect phase and typed error separate
-- `src/presentation/connect/Page.tsx`
+- `src/pages/connect/Page.tsx`
   - replace the generic troubleshooting list with per-error guidance blocks
   - render a reconnect-failed state distinct from first-connect failure
 
@@ -891,10 +891,10 @@ Proposed module changes:
 - `src/infrastructure/gateway/openclaw/client.ts`
   - adapt `getUsageCost()` to accept both direct payload and wrapped payload shapes
   - return a single `CostUsageSummary` contract
-- `src/presentation/dashboard/Page.tsx`
+- `src/pages/dashboard/Page.tsx`
   - replace raw `--` placeholder behavior with explicit `loading`, `loaded`, `empty`, and `error` rendering
   - display the last successful refresh time
-- `src/presentation/lobby/Page.tsx`
+- `src/pages/lobby/Page.tsx`
   - reuse the stabilized usage response instead of assuming happy-path totals
 
 Implementation notes:
@@ -925,12 +925,12 @@ Proposed module changes:
 - new shared resolver module, for example `src/application/mission/execution-state.ts`
   - define the normalized state enum
   - expose `resolveExecutionState()` and summary helpers
-- `src/presentation/lobby/Page.tsx`
+- `src/pages/lobby/Page.tsx`
   - replace simple `running | idle | stopped` employee status with normalized states where evidence exists
   - compress the unified stream into blocker-oriented summaries
-- `src/presentation/board/Page.tsx`
+- `src/pages/board/Page.tsx`
   - attach normalized execution state to tracked tasks and session cards
-- `src/presentation/chat/ChatPageContent.tsx`
+- `src/pages/chat/ChatPageContent.tsx`
   - render current execution state near the conversation header and latest run context
 
 Implementation notes:
@@ -966,11 +966,11 @@ Proposed module changes:
 
 - new helper module, for example `src/application/delegation/takeover-pack.ts`
   - build a takeover pack from session metadata, normalized execution state, and recent chat evidence
-- `src/presentation/chat/ChatPageContent.tsx`
+- `src/pages/chat/ChatPageContent.tsx`
   - add a visible takeover panel or action when the current run reaches `manual_takeover_required`
-- `src/presentation/board/Page.tsx`
+- `src/pages/board/Page.tsx`
   - expose takeover actions from blocked tasks
-- `src/presentation/lobby/Page.tsx`
+- `src/pages/lobby/Page.tsx`
   - surface takeover-required items in the top activity slice
 
 Suggested takeover pack shape:

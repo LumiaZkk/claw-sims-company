@@ -61,32 +61,34 @@ If this is your first time in the codebase, use this order:
 1. `README.md`
 2. `CONTRIBUTING.md`
 3. `src/App.tsx`
-4. Route entry components in `src/pages/*`
-5. Screens, hooks, and page assembly in `src/presentation/*`
-6. Facades, commands, queries, and orchestration in `src/application/*`
-7. Pure rules in `src/domain/*`, and Gateway / runtime / persistence code in `src/infrastructure/*`
+4. Screens, hooks, and page assembly in `src/pages/*`
+5. Facades, commands, queries, and orchestration in `src/application/*`
+6. Pure rules in `src/domain/*`, and Gateway / runtime / persistence code in `src/infrastructure/*`
 
 ## Architecture Layers
 
 - `src/pages`
-  Route entry layer. Each file only binds a URL to a screen.
-- `src/presentation`
   Screens, UI-level hooks, view-models, and page assembly logic.
 - `src/application`
   Query/command facades, orchestration, and cross-domain read models consumed by pages.
 - `src/domain`
-  Pure types, domain rules, and event semantics with no presentation or infrastructure dependency.
+  Pure types, domain rules, and event semantics with no application or infrastructure dependency.
 - `src/infrastructure`
   Gateway, runtime stores, persistence, event logs, and other external adapters.
-- `src/components`
-  Reusable UI and system hosts such as toasts, approval modals, and banners.
+- `src/shared`
+  Presentation components and shared page assembly logic.
+- `src/ui`
+  Reusable UI components.
+- `src/system`
+  System hosts such as toasts, approval modals, and banners.
 - `src/lib`
   Small helpers; new business-critical flows should not live here.
 
 ## Repository Conventions
 
 - Do not add new `src/features/*` modules. That legacy layer is retired.
-- For page behavior, follow `pages -> presentation -> application -> domain/infrastructure`.
+- For page behavior, follow `pages -> application -> domain/infrastructure`.
+- Pages should not import `src/infrastructure` directly. Expose required capabilities through `src/application`.
 - Before adding a rule, decide whether it belongs to pure business semantics or page/external integration.
 - When in doubt, check `CONTRIBUTING.md` for the current structure and change-boundary rules.
 

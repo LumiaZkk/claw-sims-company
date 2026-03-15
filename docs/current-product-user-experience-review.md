@@ -106,8 +106,8 @@ Last updated: 2026-03-14
 - `docs/cyber-company-prd.md`
 - `docs/requirement-center-information-architecture.md`
 - `src/App.tsx`
-- `src/presentation/ceo/Page.tsx`
-- `src/presentation/lobby/components/LobbySections.tsx`
+- `src/pages/ceo/Page.tsx`
+- `src/pages/lobby/components/LobbySections.tsx`
 
 ### 建议
 
@@ -149,8 +149,8 @@ Last updated: 2026-03-14
 ### 证据
 
 - `docs/requirement-center-information-architecture.md`
-- `src/presentation/workspace/components/WorkspacePageContent.tsx`
-- `src/presentation/workspace/Page.tsx`
+- `src/pages/workspace/components/WorkspacePageContent.tsx`
+- `src/pages/workspace/Page.tsx`
 
 ### 建议
 
@@ -193,8 +193,8 @@ Last updated: 2026-03-14
 ### 证据
 
 - `docs/requirement-center-interaction-spec.md`
-- `src/presentation/requirement-center/Page.tsx`
-- `src/presentation/workspace/components/WorkspacePageContent.tsx`
+- `src/pages/requirement-center/Page.tsx`
+- `src/pages/workspace/components/WorkspacePageContent.tsx`
 
 ### 建议
 
@@ -234,8 +234,8 @@ Last updated: 2026-03-14
 
 - `docs/cyber-company-prd.md`
 - `docs/requirement-center-information-architecture.md`
-- `src/presentation/lobby/Page.tsx`
-- `src/presentation/lobby/components/LobbySections.tsx`
+- `src/pages/lobby/Page.tsx`
+- `src/pages/lobby/components/LobbySections.tsx`
 
 ### 建议
 
@@ -265,7 +265,7 @@ CEO 深聊中的 `已收敛需求` 卡片同时提供：
 ### 证据
 
 - `docs/requirement-center-interaction-spec.md`
-- `src/presentation/chat/components/ChatSettledRequirementCard.tsx`
+- `src/pages/chat/components/ChatSettledRequirementCard.tsx`
 
 ### 建议
 
@@ -339,8 +339,8 @@ CEO 深聊中的 `已收敛需求` 卡片同时提供：
 
 - `packages/authority-daemon/src/company-ops-engine.ts`
 - `packages/authority-daemon/src/server.ts`
-- `src/presentation/ceo/Page.tsx`
-- `src/presentation/requirement-center/Page.tsx`
+- `src/pages/ceo/Page.tsx`
+- `src/pages/requirement-center/Page.tsx`
 
 ### 建议
 

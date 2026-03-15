@@ -148,13 +148,13 @@ Last updated: 2026-03-14
 
 ### 背景
 
-当前 `src/presentation/requirement-center/Page.tsx` 仍然直接依赖 board runtime、communication sync、task backfill 等跨域 hook，同时承担主线摘要、验收、决策票、Workspace 摘要、Ops 跳转等多类职责。
+当前 `src/pages/requirement-center/Page.tsx` 仍然直接依赖 board runtime、communication sync、task backfill 等跨域 hook，同时承担主线摘要、验收、决策票、Workspace 摘要、Ops 跳转等多类职责。
 
 这说明“需求中心是主线摘要页”的方向在产品上成立了，但代码边界还没有真正落地。
 
 ### 当前证据
 
-- `src/presentation/requirement-center/Page.tsx` 当前 1336 行。
+- `src/pages/requirement-center/Page.tsx` 当前 1336 行。
 - 页面直接引入 `useBoardCommunicationSync`、`useBoardRuntimeState`、`useBoardTaskBackfill`。
 - 同一页面里同时存在主线摘要、验收操作、决策票处理、Workspace 摘要和 Ops 跳转逻辑。
 
@@ -204,9 +204,9 @@ Last updated: 2026-03-14
 
 ### 当前证据
 
-- `src/presentation/requirement-center/Page.tsx` 中 `runAcceptanceAction()` 主要处理状态流转。
+- `src/pages/requirement-center/Page.tsx` 中 `runAcceptanceAction()` 主要处理状态流转。
 - `src/application/company/workspace-apps.ts` 已存在 `规则与校验`、`知识与验收` 等 app 入口。
-- `src/presentation/workspace/components/WorkspacePageContent.tsx` 已展示“自动验收后的知识正文”和“自动验收结果”。
+- `src/pages/workspace/components/WorkspacePageContent.tsx` 已展示“自动验收后的知识正文”和“自动验收结果”。
 - `src/application/workspace/platform-closeout.ts` 已存在 closeout 检查，但未作为 Requirement Center 主验收门禁。
 
 ### 目标
@@ -268,8 +268,8 @@ Last updated: 2026-03-14
 
 ### 当前证据
 
-- `src/presentation/lobby/Page.tsx` 与 `src/presentation/board/Page.tsx` 的人工接管主动作仍是跳转到对应会话。
-- `src/presentation/chat/hooks/useChatCoordinationActions.ts` 的主动作仍是复制 takeover pack。
+- `src/pages/lobby/Page.tsx` 与 `src/pages/board/Page.tsx` 的人工接管主动作仍是跳转到对应会话。
+- `src/pages/chat/hooks/useChatCoordinationActions.ts` 的主动作仍是复制 takeover pack。
 - `src/application/governance/focus-summary.ts` 明确提示用户可以复制接管包并手动继续。
 - `src/application/delegation/closed-loop.ts` 当前更多负责 reconciliation，而不是正式 takeover workflow。
 
@@ -329,7 +329,7 @@ compatibility-owned runtime slice 已归零，但 `CompanyAuthoritySyncHost` 仍
 ### 当前证据
 
 - `src/infrastructure/authority/runtime-slice-ownership.ts` 中 compatibility slice 已为空。
-- `src/components/system/company-authority-sync-host.tsx` 仍保留整份 runtime snapshot 的 push/pull 逻辑。
+- `src/system/company-authority-sync-host.tsx` 仍保留整份 runtime snapshot 的 push/pull 逻辑。
 - `src/infrastructure/authority/runtime-sync-store.ts` 仍保留 `compatibility_snapshot` / `command_preferred` 模式。
 - `src/infrastructure/company/runtime/store.ts` 仍明确标注为 legacy runtime store。
 
@@ -509,8 +509,8 @@ compatibility-owned runtime slice 已归零，但 `CompanyAuthoritySyncHost` 仍
 
 ### 当前证据
 
-- 当前能找到的 presentation tests 主要位于 `src/presentation/chat/**`。
-- `src/presentation/requirement-center`、`src/presentation/workspace`、`src/presentation/runtime`、`src/presentation/board`、`src/presentation/lobby` 下未发现对应测试文件。
+- 当前能找到的 presentation tests 主要位于 `src/pages/chat/**`。
+- `src/pages/requirement-center`、`src/pages/workspace`、`src/pages/runtime`、`src/pages/board`、`src/pages/lobby` 下未发现对应测试文件。
 
 ### 目标
 
@@ -734,9 +734,9 @@ compatibility-owned runtime slice 已归零，但 `CompanyAuthoritySyncHost` 仍
 - `WS-06` 已补第二轮浏览器 smoke：在隔离 `18896` authority 上，`Requirement Center` 的 `需求变更` 动作已能从前台点击一路写回 authority，`revision / updatedAt` 均会增长，说明真实 requirement mutation 主链是通的。
 - 最新浏览器回归：隔离 `18896` authority 的 `/settings` 仍能显示 `Authority 同步诊断`、`恢复 / 导入 / 手工修复入口`、`CEO heartbeat`；当前 `Authority / Executor` 状态仍会因 OpenClaw scope 缺口落到 `degraded / blocked`，但这是环境噪音，不是本轮 executor-status 抽离回归。
 - 最新验证：
-  - `npm test -- src/application/mission/requirement-acceptance-gate.test.ts src/presentation/requirement-center/components/RequirementAcceptancePanel.test.tsx src/application/mission/requirement-closeout-report.test.ts src/application/mission/requirement-center-page-view-model.test.ts src/application/org/company-heartbeat.test.ts src/components/system/gateway-status-banner.test.tsx`
-  - `npm test -- src/application/delegation/takeover-case.test.ts src/presentation/shared/TakeoverCasePanel.test.tsx src/application/delegation/use-takeover-case-workflow.test.ts`
-  - `npm test -- src/infrastructure/authority/bootstrap-command.test.ts src/application/delegation/takeover-case.test.ts src/presentation/shared/TakeoverCasePanel.test.tsx src/application/delegation/use-takeover-case-workflow.test.ts`
+  - `npm test -- src/application/mission/requirement-acceptance-gate.test.ts src/pages/requirement-center/components/RequirementAcceptancePanel.test.tsx src/application/mission/requirement-closeout-report.test.ts src/application/mission/requirement-center-page-view-model.test.ts src/application/org/company-heartbeat.test.ts src/system/gateway-status-banner.test.tsx`
+  - `npm test -- src/application/delegation/takeover-case.test.ts src/shared/presentation/TakeoverCasePanel.test.tsx src/application/delegation/use-takeover-case-workflow.test.ts`
+  - `npm test -- src/infrastructure/authority/bootstrap-command.test.ts src/application/delegation/takeover-case.test.ts src/shared/presentation/TakeoverCasePanel.test.tsx src/application/delegation/use-takeover-case-workflow.test.ts`
   - `npm run build`
   - 浏览器验收：重连本机 authority 后，确认 `/requirement` 展示 closeout 门禁说明与证据面板，`/settings` 展示 heartbeat 策略卡和单一权威文案。
   - 浏览器验收：在 `18890` authority 上构造 smoke takeover case，并通过 `Board -> Ops -> Chat` 完成 `assigned -> in_progress -> resolved -> archived` 全链路验证；`Board` 归档后已不再显示接管项。
@@ -744,20 +744,20 @@ compatibility-owned runtime slice 已归零，但 `CompanyAuthoritySyncHost` 仍
   - 浏览器验收：打开 `/runtime`，确认运行态总览正常渲染，authority canonical badge 与来源说明仍可正常显示。
   - 浏览器 smoke：打开 `/chat/z1-8776e4-ceo?cid=8776e452-17bd-4034-b0f1-e423a3a21407`，确认聊天页、消息流和输入区正常渲染。
   - 浏览器 smoke：重启本机 `18890` authority 后重新打开 `/chat/z1-8776e4-ceo?cid=8776e452-17bd-4034-b0f1-e423a3a21407`，确认页面恢复后消息流、输入区和控制台都正常，控制台 error 为 `0`。
-  - `npm test -- src/application/gateway/authority-health.test.ts src/presentation/shared/AuthorityOperatorControlPlaneCard.test.tsx`
-  - `npm test -- src/application/delegation/takeover-case.test.ts src/application/delegation/use-takeover-case-workflow.test.ts src/presentation/shared/TakeoverCasePanel.test.tsx`
+  - `npm test -- src/application/gateway/authority-health.test.ts src/shared/presentation/AuthorityOperatorControlPlaneCard.test.tsx`
+  - `npm test -- src/application/delegation/takeover-case.test.ts src/application/delegation/use-takeover-case-workflow.test.ts src/shared/presentation/TakeoverCasePanel.test.tsx`
   - 浏览器验收：使用隔离的 `4173` 前端 + `18892` authority，先完成“回填人工结论并恢复”，再完成“重新派发给 COO”，并确认 Board 面板出现“最近人工结论 / 最近重新派发”以及 authority 中新增 `redispatched` 审计和 `dispatch:takeover:*` 记录。
   - 浏览器验收：在 `Connect` 页面确认新的 `恢复 / 导入 / 手工修复入口` 卡片可见，显示 `doctor / backup / restore --plan / rehearse` 标准命令。
   - 浏览器验收：切回已在线的 `18790` authority 后打开 `/settings`，确认 `Settings Doctor` 里同样出现 operator control plane 卡片，浏览器控制台 error 为 `0`。
-  - `npm test -- src/presentation/workspace/components/WorkspaceCloseoutStatusCard.test.tsx src/application/gateway/authority-health.test.ts src/presentation/shared/AuthorityOperatorControlPlaneCard.test.tsx src/application/runtime-inspector/index.test.ts`
+  - `npm test -- src/pages/workspace/components/WorkspaceCloseoutStatusCard.test.tsx src/application/gateway/authority-health.test.ts src/shared/presentation/AuthorityOperatorControlPlaneCard.test.tsx src/application/runtime-inspector/index.test.ts`
   - 浏览器验收：`/workspace` 正常加载，新的 Workspace closeout surface 未引入白屏；当前 console error 主要来自隔离 authority 缺 OpenClaw token 的已知环境限制。
   - 浏览器验收：在稳定连接的 `/settings` 停留页主动停掉 `18894` authority，只出现顶部连接告警和页内“连接中断，正在重连”，没有重新进入整页 restoring overlay；恢复 authority 后手动点“重连”，页面可回到 `Gateway 已连接 / Runtime · ready`。
   - 浏览器验收：`/settings` 保持可区分“正常 command_preferred 主路径”与“restore / import / manual recovery 只应在 Doctor 入口触发”的产品边界，并继续展示 heartbeat 单一权威源文案。
-  - `npm test -- src/application/org/company-heartbeat-history.test.ts src/application/org/company-heartbeat.test.ts src/presentation/requirement-center/components/RequirementHeartbeatCard.test.tsx packages/authority-daemon/src/company-ops-engine.test.ts packages/authority-daemon/src/operator-actions.test.ts`
+  - `npm test -- src/application/org/company-heartbeat-history.test.ts src/application/org/company-heartbeat.test.ts src/pages/requirement-center/components/RequirementHeartbeatCard.test.tsx packages/authority-daemon/src/company-ops-engine.test.ts packages/authority-daemon/src/operator-actions.test.ts`
   - `npm run build`
   - 浏览器验收：在隔离 `18894` authority 的 `/settings` 页面确认 `CEO heartbeat` 出现“最近巡检审计”区块，能同时看到“已跳过 / 已运行”状态、触发方式和动作明细。
   - 浏览器验收：打开 `/ops`，确认页面标题、左侧导航和主线提示文案都已统一使用 `Ops`。
-  - `npm test -- src/presentation/shared/HeartbeatAuditList.test.tsx src/presentation/requirement-center/components/RequirementHeartbeatCard.test.tsx src/application/org/company-heartbeat-history.test.ts src/application/org/company-heartbeat.test.ts`
+  - `npm test -- src/shared/presentation/HeartbeatAuditList.test.tsx src/pages/requirement-center/components/RequirementHeartbeatCard.test.tsx src/application/org/company-heartbeat-history.test.ts src/application/org/company-heartbeat.test.ts`
   - `npm run build`
   - 浏览器验收：在 `18895` authority + `4174` preview 的 `/settings` 页面确认 `CEO heartbeat` 继续展示“最近巡检审计”，且新的共享审计列表和 `Authority 同步诊断` 同时可见。
   - `npm test -- packages/authority-daemon/src/runtime-command-routes.test.ts packages/authority-daemon/src/control-routes.test.ts packages/authority-daemon/src/company-state-routes.test.ts packages/authority-daemon/src/executor-status.test.ts`

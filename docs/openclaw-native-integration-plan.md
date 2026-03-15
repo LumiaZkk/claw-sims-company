@@ -312,6 +312,12 @@ type AuthorityExecutorUsageSnapshot = {
 - 把原生 DTO 收成 authority 内部统一的 `ExecutorSnapshot`
 - 但仍然保持 OpenClaw 原生字段
 
+补充规则（2026-03-15）：
+
+- authority 必须保留 canonical 的 `ROLE.md / SOUL.md / ONBOARDING.md`
+- 同步到 OpenClaw 只发送兼容的 projection 文件（`AGENTS.md / MEMORY.md / SOUL.md`）
+- projection 内容应由 canonical 侧推导，保证强一致，而不是由 OpenClaw 反向成为真相源
+
 ### C. `AuthorityBusinessOrchestrator`
 
 职责：

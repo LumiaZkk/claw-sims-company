@@ -22,6 +22,7 @@ import { usePageVisibility } from "../../lib/use-page-visibility";
 import { useBoardCommunicationSync } from "./board-communication-sync";
 import { useBoardRuntimeState } from "./board-runtime-state";
 import { useBoardTaskBackfill } from "./board-task-backfill";
+import { isApprovalPending } from "../../domain/governance/approval";
 import type { GatewaySessionRow } from "../gateway";
 import type { ResolvedExecutionState } from "./execution-state";
 import type { ManualTakeoverPack } from "../delegation/takeover-pack";
@@ -320,10 +321,12 @@ export function buildRequirementCenterPageSurface(input: {
     Boolean(aggregate) &&
     (aggregate?.acceptanceStatus === "pending" || aggregate?.status === "completed");
   const canRequestChange = Boolean(aggregate) && aggregate?.status !== "archived";
+  const pendingApprovalCount = (input.activeCompany.approvals ?? []).filter(isApprovalPending).length;
   const activityInboxSummary = buildActivityInboxSummary({
     scopeLabel: "当前主线",
     handoffCount: boardTaskSurface.visiblePendingHandoffs.length,
     escalationCount: boardTaskSurface.visibleSlaAlerts.length,
+    pendingHumanDecisionCount: pendingApprovalCount,
     manualTakeoverCount: boardTaskSurface.visibleTakeoverCount,
   });
   const roomPreviewText = room

@@ -10,8 +10,8 @@ const guardedFiles = [
   "src/application/workspace/platform-closeout.ts",
   "src/application/workspace/skill-executor.ts",
   "src/application/workspace/workflow-capability-bindings.ts",
-  "src/presentation/workspace/Page.tsx",
-  "src/presentation/workspace/components/WorkspacePageContent.tsx",
+  "src/pages/workspace/Page.tsx",
+  "src/pages/workspace/components/WorkspacePageContent.tsx",
 ];
 
 const forbiddenTokens = [

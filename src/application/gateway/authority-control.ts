@@ -30,6 +30,8 @@ import type {
   AuthorityWorkItemDeleteRequest,
   AuthorityWorkItemUpsertRequest,
   AuthorityBootstrapSnapshot,
+  AuthorityBatchPreviewHireRequest,
+  AuthorityBatchPreviewHireResponse,
   AuthorityBatchHireEmployeesRequest,
   AuthorityBatchHireEmployeesResponse,
   AuthorityCompanyRuntimeSnapshot,
@@ -38,6 +40,8 @@ import type {
   AuthorityRetryCompanyProvisioningResponse,
   AuthorityExecutorConfig,
   AuthorityExecutorConfigPatch,
+  AuthorityPreviewHireRequest,
+  AuthorityPreviewHireResponse,
   AuthorityHireEmployeeRequest,
   AuthorityHireEmployeeResponse,
 } from "../../infrastructure/authority/contract";
@@ -63,6 +67,17 @@ export function retryAuthorityCompanyProvisioning(companyId: string) {
 
 export function hireAuthorityEmployee(input: AuthorityHireEmployeeRequest) {
   return gateway.request<AuthorityHireEmployeeResponse>("authority.company.employee.hire", input);
+}
+
+export function previewAuthorityHireEmployee(input: AuthorityPreviewHireRequest) {
+  return gateway.request<AuthorityPreviewHireResponse>("authority.company.employee.preview_hire", input);
+}
+
+export function previewAuthorityBatchHireEmployees(input: AuthorityBatchPreviewHireRequest) {
+  return gateway.request<AuthorityBatchPreviewHireResponse>(
+    "authority.company.employee.preview_batch_hire",
+    input,
+  );
 }
 
 export function batchHireAuthorityEmployees(input: AuthorityBatchHireEmployeesRequest) {

@@ -9,7 +9,7 @@ import type { Company } from "../domain/org/types";
 import { readCompanyRuntimeCommands } from "../infrastructure/company/runtime/commands";
 import { readCompanyRuntimeState } from "../infrastructure/company/runtime/selectors";
 import { CONFIG_PROMPTS, resolveMetaAgentId, type MetaTarget } from "./chat-as-config";
-import { toast } from "../components/system/toast-store";
+import { toast } from "../system/toast-store";
 import { resolveLocalServiceOrigin } from "./utils";
 
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
@@ -150,6 +150,11 @@ export const AgentOps = {
     traits?: string;
     budget?: number;
     avatarFile?: File;
+    templateId?: string | null;
+    compiledDraft?: import("../domain/org/types").CompiledHireDraft;
+    bootstrapBundle?: import("../domain/org/types").HireBootstrapBundle;
+    provenance?: import("../domain/org/types").HireProvenance;
+    templateBinding?: import("../domain/org/types").EmployeeTemplateBinding;
   }) {
     try {
       let avatarJobId: string | undefined;
@@ -182,12 +187,18 @@ export const AgentOps = {
         traits: config.traits,
         budget: config.budget,
         avatarJobId,
+        templateId: config.templateId ?? null,
+        compiledDraft: config.compiledDraft,
+        bootstrapBundle: config.bootstrapBundle,
+        provenance: config.provenance,
+        templateBinding: config.templateBinding,
       });
 
       const store = { ...readCompanyRuntimeState(), ...readCompanyRuntimeCommands() };
       await store.updateCompany({
         employees: result.company.employees,
         departments: result.company.departments,
+        system: result.company.system,
       });
 
       for (const warning of result.warnings) {

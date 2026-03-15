@@ -11,7 +11,7 @@ import type {
 } from "../../infrastructure/authority/runtime-sync-store";
 import { buildAuthorityHealthGuidance } from "../../infrastructure/authority/health-guidance";
 
-export type AuthorityUiState = "ready" | "degraded" | "blocked";
+export type AuthorityUiState = "ready" | "attention" | "degraded" | "blocked";
 export type AuthorityGuidanceItem = AuthorityHealthGuidanceItem;
 export type AuthorityBannerModel = {
   state: AuthorityUiState;
@@ -48,11 +48,37 @@ export type AuthorityRuntimeSyncDiagnosticsModel = {
   metrics: Array<{ label: string; value: string }>;
   warning: string | null;
 };
+export type AuthorityControlPlaneSummaryLayer = {
+  id: string;
+  label: string;
+  state: AuthorityUiState;
+  summary: string;
+};
+export type AuthorityControlPlaneSummaryModel = {
+  state: AuthorityUiState;
+  title: string;
+  summary: string;
+  detail: string;
+  steps: string[];
+  layers: AuthorityControlPlaneSummaryLayer[];
+};
 
 export type AuthorityExecutorOnboardingIssue =
   | "missing-token"
   | "executor-blocked"
   | "missing-scope";
+
+export function formatAuthorityIntegrityLabel(
+  status: AuthorityHealthSnapshot["authority"]["doctor"]["integrityStatus"],
+): string {
+  if (status === "ok") {
+    return "通过";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  return "未知";
+}
 
 export function extractAuthorityHealthSnapshot(value: unknown): AuthorityHealthSnapshot | null {
   if (!value || typeof value !== "object") {
@@ -71,6 +97,9 @@ export function foldAuthorityUiStates(states: AuthorityUiState[]): AuthorityUiSt
   }
   if (states.includes("degraded")) {
     return "degraded";
+  }
+  if (states.includes("attention")) {
+    return "attention";
   }
   return "ready";
 }
@@ -146,6 +175,18 @@ export function collectAuthorityGuidance(
   return [...deduped];
 }
 
+function resolveExecutorReadinessState(
+  issues: AuthorityExecutorReadinessCheck[],
+): AuthorityUiState {
+  if (issues.some((issue) => issue.state === "blocked")) {
+    return "blocked";
+  }
+  if (issues.some((issue) => issue.state === "degraded")) {
+    return "degraded";
+  }
+  return "ready";
+}
+
 export function collectAuthorityRepairSteps(
   health: AuthorityHealthSnapshot,
   limit = 5,
@@ -163,36 +204,105 @@ export function buildAuthorityBannerModel(
   health: AuthorityHealthSnapshot,
   limit = 2,
 ): AuthorityBannerModel | null {
-  const state = resolveAuthorityControlState(health);
+  const controlSummary = buildAuthorityControlPlaneSummaryModel(health, limit);
+  const state = controlSummary.state;
   if (state === "ready") {
     return null;
   }
 
   const primary = buildAuthorityGuidanceItems(health, 1)[0] ?? null;
-  const steps = collectAuthorityRepairSteps(health, limit);
-  const detailParts = [
-    `${health.authority.dbPath}`,
-    `schema v${health.authority.doctor.schemaVersion ?? "?"}`,
-    `integrity ${health.authority.doctor.integrityStatus}`,
-    `备份 ${health.authority.doctor.backupCount} 份`,
-  ];
-  if (primary?.command) {
-    detailParts.push(`推荐命令 ${primary.command}`);
-  } else if (primary?.action) {
-    detailParts.push(primary.action);
-  }
 
   return {
     state,
     title: primary
       ? `Authority 当前${state === "blocked" ? "阻断运行" : "有待处理项"}：${primary.title}`
       : `Authority 当前${state === "blocked" ? "阻断运行" : "有待处理项"}`,
-    summary:
-      primary?.summary ??
-      collectAuthorityGuidance(health, 1)[0] ??
-      "Authority 当前还有待处理项，建议先完成诊断建议再继续推进。",
+    summary: controlSummary.summary,
+    detail: controlSummary.detail,
+    steps: controlSummary.steps,
+  };
+}
+
+export function buildAuthorityControlPlaneSummaryModel(
+  health: AuthorityHealthSnapshot,
+  limit = 3,
+): AuthorityControlPlaneSummaryModel {
+  const controlState = resolveAuthorityControlState(health);
+  const storageState = resolveAuthorityStorageState(health);
+  const primary = buildAuthorityGuidanceItems(health, 1)[0] ?? null;
+  const readinessIssues = collectExecutorReadinessIssues(health, limit);
+  const readinessState = resolveExecutorReadinessState(readinessIssues);
+  const latestBackupAt = health.authority.doctor.latestBackupAt;
+  const state: AuthorityUiState =
+    controlState === "ready" && readinessIssues.length > 0 ? "attention" : controlState;
+
+  const summary =
+    state === "ready"
+      ? readinessIssues.length > 0
+        ? `控制面已经响应，但执行器原生能力还有 ${readinessIssues.length} 项降级检查需要关注。`
+        : "控制面已经响应，数据库、备份目录和执行器状态都已通过当前检查。"
+      : state === "attention"
+        ? `控制面已可继续运行，但执行器原生能力还有 ${readinessIssues.length} 项降级检查需要关注。`
+      : primary?.summary ??
+        collectAuthorityGuidance(health, 1)[0] ??
+        health.executor.note ??
+        "Authority 当前还有待处理项，建议先完成诊断建议再继续推进。";
+
+  const detailParts = [
+    health.authority.dbPath,
+    `schema v${health.authority.doctor.schemaVersion ?? "?"}`,
+    `完整性 ${formatAuthorityIntegrityLabel(health.authority.doctor.integrityStatus)}`,
+    `备份 ${health.authority.doctor.backupCount} 份`,
+    latestBackupAt ? `最新备份 ${new Date(latestBackupAt).toLocaleString()}` : "最新备份 尚无",
+  ];
+  if (primary?.command) {
+    detailParts.push(`推荐动作 ${primary.command}`);
+  } else if (readinessIssues[0]?.detail) {
+    detailParts.push(readinessIssues[0].detail);
+  }
+
+  const layers: AuthorityControlPlaneSummaryLayer[] = [
+    {
+      id: "authority-storage",
+      label: "Authority",
+      state: storageState,
+      summary:
+        health.authority.preflight.warnings[0] ??
+        health.authority.preflight.issues[0] ??
+        health.authority.doctor.issues[0] ??
+        `schema v${health.authority.preflight.schemaVersion ?? "?"} · 完整性 ${formatAuthorityIntegrityLabel(
+          health.authority.preflight.integrityStatus,
+        )}`,
+    },
+    {
+      id: "executor-connection",
+      label: "Executor",
+      state: health.executor.state,
+      summary: health.executor.note,
+    },
+  ];
+
+  if (health.executorReadiness?.length) {
+    layers.push({
+      id: "executor-readiness",
+      label: "原生能力",
+      state: readinessState,
+      summary:
+        readinessIssues[0]?.summary ??
+        "执行器原生能力检查已通过当前基线。",
+    });
+  }
+
+  return {
+    state,
+    title: "Authority 控制面摘要",
+    summary,
     detail: detailParts.join(" · "),
-    steps,
+    steps:
+      state === "ready" && readinessIssues.length === 0
+        ? []
+        : collectAuthorityRepairSteps(health, limit),
+    layers,
   };
 }
 
@@ -295,9 +405,11 @@ export function buildAuthorityOperatorControlPlaneModel(
     summary:
       "所有 restore / import / manual recovery 都应该在 Connect 或 Settings Doctor 里判断并发起；Runtime、工作看板和 Ops 只负责观察与业务推进。",
     detail: health
-      ? `${health.authority.dbPath} · schema v${health.authority.doctor.schemaVersion ?? "?"} · integrity ${
-          health.authority.doctor.integrityStatus
-        } · 标准备份 ${health.authority.doctor.backupCount} 份`
+      ? `${health.authority.dbPath} · schema v${
+          health.authority.doctor.schemaVersion ?? "?"
+        } · 完整性 ${formatAuthorityIntegrityLabel(health.authority.doctor.integrityStatus)} · 标准备份 ${
+          health.authority.doctor.backupCount
+        } 份`
       : "还没拿到 Authority 运维快照时，也应先回到 Connect / Settings Doctor 判断控制面状态。",
     entries,
   };

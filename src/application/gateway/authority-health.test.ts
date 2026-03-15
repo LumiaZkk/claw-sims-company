@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AuthorityHealthSnapshot } from "../../infrastructure/authority/contract";
 import {
   buildAuthorityBannerModel,
+  buildAuthorityControlPlaneSummaryModel,
   buildAuthorityGuidanceItems,
   buildAuthorityOperatorControlPlaneModel,
   buildAuthorityRuntimeSyncDiagnosticsModel,
@@ -377,6 +378,53 @@ describe("authority health helpers", () => {
       title: "Authority 当前有待处理项：还没有标准备份",
     });
     expect(buildAuthorityBannerModel(health)?.steps[0]).toContain("npm run authority:backup");
+  });
+
+  it("builds a shared control plane summary model for healthy authority state", () => {
+    const summary = buildAuthorityControlPlaneSummaryModel(createHealthSnapshot());
+
+    expect(summary).toMatchObject({
+      state: "ready",
+      title: "Authority 控制面摘要",
+      summary: "控制面已经响应，数据库、备份目录和执行器状态都已通过当前检查。",
+    });
+    expect(summary.layers.map((layer) => layer.label)).toEqual([
+      "Authority",
+      "Executor",
+      "原生能力",
+    ]);
+    expect(summary.steps).toEqual([]);
+  });
+
+  it("surfaces executor readiness degradation in the shared control plane summary", () => {
+    const summary = buildAuthorityControlPlaneSummaryModel(
+      createHealthSnapshot({
+        executorReadiness: [
+          {
+            id: "connection",
+            label: "执行器连接",
+            state: "ready",
+            summary: "Authority 已接入 OpenClaw。",
+            detail: "ws://localhost:18789",
+          },
+          {
+            id: "session-status",
+            label: "运行态探针",
+            state: "degraded",
+            summary: "当前执行器不支持 session_status。",
+            detail: "Authority 会退回 lifecycle/chat 驱动的降级修复模式。",
+          },
+        ],
+      }),
+    );
+
+    expect(summary.state).toBe("attention");
+    expect(summary.summary).toContain("控制面已可继续运行，但执行器原生能力还有 1 项降级检查需要关注");
+    expect(summary.layers[2]).toMatchObject({
+      label: "原生能力",
+      state: "degraded",
+      summary: "当前执行器不支持 session_status。",
+    });
   });
 
   it("requires executor onboarding when token is missing or executor is blocked", () => {

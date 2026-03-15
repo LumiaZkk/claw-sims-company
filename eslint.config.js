@@ -45,11 +45,7 @@ export default defineConfig([
         'error',
         {
           patterns: [
-            '**/application/**',
-            '**/domain/**',
             '**/infrastructure/**',
-            '**/components/**',
-            '**/lib/**',
             '**/features/backend/**',
             '**/features/gateway/**',
             '**/features/execution/**',
@@ -63,24 +59,6 @@ export default defineConfig([
     },
   },
   {
-    files: ['src/presentation/**/*.{ts,tsx}'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            '**/infrastructure/**',
-            '**/features/backend/**',
-            '**/features/gateway/**',
-            '**/features/execution/**',
-            '**/features/org/**',
-            '**/features/company/**',
-          ],
-        },
-      ],
-    },
-  },
-  {
     files: ['src/application/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
@@ -88,7 +66,6 @@ export default defineConfig([
         {
           patterns: [
             '**/pages/**',
-            '**/presentation/**',
             '**/features/backend/**',
             '**/features/gateway/**',
             '**/features/execution/**',
@@ -108,7 +85,9 @@ export default defineConfig([
             '**/application/**',
             '**/infrastructure/**',
             '**/pages/**',
-            '**/components/**',
+            '**/shared/presentation/**',
+            '**/system/**',
+            '**/ui/**',
             '**/features/company/types',
             '**/features/company/legacy-types',
           ],
@@ -118,12 +97,12 @@ export default defineConfig([
   },
   {
     files: [
-      'src/pages/AutomationPage.tsx',
-      'src/pages/WorkspacePage.tsx',
-      'src/presentation/board/Page.tsx',
-      'src/presentation/ceo/Page.tsx',
-      'src/presentation/chat/Page.tsx',
-      'src/presentation/lobby/Page.tsx',
+      'src/pages/automation/Page.tsx',
+      'src/pages/workspace/Page.tsx',
+      'src/pages/board/Page.tsx',
+      'src/pages/ceo/Page.tsx',
+      'src/pages/chat/Page.tsx',
+      'src/pages/lobby/Page.tsx',
     ],
     rules: {
       'react-hooks/exhaustive-deps': 'off',

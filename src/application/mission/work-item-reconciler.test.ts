@@ -277,7 +277,7 @@ describe("reconcileWorkItemRecord", () => {
       batonLabel: "CEO",
       nextAction: "负责人收口并决定下一步。",
     });
-    expect(reconciled?.summary).toContain("等待负责人收口");
+    expect(reconciled?.summary).toContain("等待主线收口");
   });
 
   it("lets a room conclusion override stale open dispatch state", () => {

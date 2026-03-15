@@ -319,7 +319,7 @@ describe("work-item helpers", () => {
       batonActorId: "co-ceo",
       batonLabel: "CEO",
       nextAction: "负责人收口并决定下一步。",
-      summary: "co-cto 已回传结果，等待负责人收口。",
+      summary: "co-cto 已交回结果，等待主线收口。",
     });
   });
 

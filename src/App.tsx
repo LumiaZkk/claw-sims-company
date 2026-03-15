@@ -6,6 +6,7 @@ import {
   BarChart,
   BookOpen,
   BookOpenCheck,
+  Folder,
   Settings,
   CalendarClock,
   Menu,
@@ -14,13 +15,13 @@ import {
 } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
-import { ApprovalModalHost } from "./components/system/approval-modal-host";
-import { AuthorityHealthBanner } from "./components/system/authority-health-banner";
-import { CompanyAuthoritySyncHost } from "./components/system/company-authority-sync-host";
-import { GatewayNotificationHost } from "./components/system/gateway-notification-host";
-import { RequirementAggregateHost } from "./components/system/requirement-aggregate-host";
-import { GatewayStatusBanner } from "./components/system/gateway-status-banner";
-import { ToastHost } from "./components/ui/toast-host";
+import { ApprovalModalHost } from "./system/approval-modal-host";
+import { AuthorityHealthBanner } from "./system/authority-health-banner";
+import { CompanyAuthoritySyncHost } from "./system/company-authority-sync-host";
+import { GatewayNotificationHost } from "./system/gateway-notification-host";
+import { RequirementAggregateHost } from "./system/requirement-aggregate-host";
+import { GatewayStatusBanner } from "./system/gateway-status-banner";
+import { ToastHost } from "./ui/toast-host";
 import {
   clearLiveChatSession,
   readLiveChatSession,
@@ -36,67 +37,89 @@ import { useCompanyShellCommands, useCompanyShellQuery } from "./application/com
 import { useGatewayStore } from "./application/gateway";
 import { peekCachedCompanyConfig } from "./infrastructure/company/persistence/persistence";
 import { getCompanyWorkspaceApps } from "./application/company/workspace-apps";
-import { OrgAutopilotHost } from "./presentation/org/OrgAutopilotHost";
-import { extractTextFromMessage } from "./presentation/chat/view-models/messages";
-import { toast } from "./components/system/toast-store";
+import { OrgAutopilotHost } from "./pages/org/OrgAutopilotHost";
+import { extractTextFromMessage } from "./pages/chat/view-models/messages";
+import { toast } from "./system/toast-store";
 import { resolveSessionActorId } from "./lib/sessions";
 
 const AutomationPage = lazy(() =>
-  import("./pages/AutomationPage").then((module) => ({ default: module.AutomationPage })),
+  import("./pages/automation/Page").then((module) => ({
+    default: module.AutomationPresentationPage,
+  })),
 );
 const BoardPage = lazy(() =>
-  import("./pages/BoardPage").then((module) => ({ default: module.BoardPage })),
+  import("./pages/board/Page").then((module) => ({ default: module.BoardPageScreen })),
 );
 const ChatPage = lazy(() =>
-  import("./pages/ChatPage").then((module) => ({ default: module.ChatPage })),
+  import("./pages/chat/Page").then((module) => ({ default: module.ChatPageScreen })),
 );
 const CompanyCreate = lazy(() =>
-  import("./pages/CompanyCreate").then((module) => ({ default: module.CompanyCreate })),
+  import("./pages/company-create/Page").then((module) => ({
+    default: module.CompanyCreatePresentationPage,
+  })),
 );
 const CompanyLobby = lazy(() =>
-  import("./pages/CompanyLobby").then((module) => ({ default: module.CompanyLobby })),
+  import("./pages/lobby/Page").then((module) => ({ default: module.CompanyLobbyPageScreen })),
 );
 const CompanySelect = lazy(() =>
-  import("./pages/CompanySelect").then((module) => ({ default: module.CompanySelect })),
+  import("./pages/company-select/Page").then((module) => ({
+    default: module.CompanySelectPresentationPage,
+  })),
 );
 const ConnectPage = lazy(() =>
-  import("./pages/ConnectPage").then((module) => ({ default: module.ConnectPage })),
+  import("./pages/connect/Page").then((module) => ({ default: module.ConnectPresentationPage })),
 );
 const CodexOAuthCallbackPage = lazy(() =>
-  import("./pages/CodexOAuthCallbackPage").then((module) => ({
-    default: module.CodexOAuthCallbackPage,
+  import("./pages/oauth-callback/Page").then((module) => ({
+    default: module.CodexOAuthCallbackPresentationPage,
   })),
 );
 const CEOHomePage = lazy(() =>
-  import("./pages/CEOHomePage").then((module) => ({ default: module.CEOHomePage })),
+  import("./pages/ceo/Page").then((module) => ({ default: module.CEOHomePageScreen })),
 );
 const DashboardPage = lazy(() =>
-  import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })),
-);
-const EmployeeList = lazy(() =>
-  import("./pages/EmployeeList").then((module) => ({ default: module.EmployeeList })),
-);
-const EmployeeProfile = lazy(() =>
-  import("./pages/EmployeeProfile").then((module) => ({ default: module.EmployeeProfile })),
-);
-const ExecutorSetupPage = lazy(() =>
-  import("./pages/ExecutorSetupPage").then((module) => ({ default: module.ExecutorSetupPage })),
-);
-const RequirementCenterPage = lazy(() =>
-  import("./pages/RequirementCenterPage").then((module) => ({
-    default: module.RequirementCenterPage,
+  import("./pages/dashboard/Page").then((module) => ({
+    default: module.DashboardPresentationPage,
   })),
 );
+const EmployeeList = lazy(() =>
+  import("./pages/org/EmployeeListPage").then((module) => ({ default: module.EmployeeListPage })),
+);
+const EmployeeProfile = lazy(() =>
+  import("./pages/org/EmployeeProfilePage").then((module) => ({
+    default: module.EmployeeProfilePage,
+  })),
+);
+const ExecutorSetupPage = lazy(() =>
+  import("./pages/executor-setup/Page").then((module) => ({
+    default: module.ExecutorSetupPresentationPage,
+  })),
+);
+const RequirementCenterPage = lazy(() =>
+  import("./pages/requirement-center/Page").then((module) => ({
+    default: module.RequirementCenterScreen,
+  })),
+);
+const ProjectsPage = lazy(() =>
+  import("./pages/projects/Page").then((module) => ({ default: module.ProjectsScreen })),
+);
+const ProjectDetailPage = lazy(() =>
+  import("./pages/projects/Page").then((module) => ({ default: module.ProjectDetailScreen })),
+);
 const RuntimeInspectorPage = lazy(() =>
-  import("./pages/RuntimeInspectorPage").then((module) => ({
-    default: module.RuntimeInspectorPage,
+  import("./pages/runtime/Page").then((module) => ({
+    default: module.RuntimeInspectorPageScreen,
   })),
 );
 const SettingsPage = lazy(() =>
-  import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })),
+  import("./pages/settings/Page").then((module) => ({
+    default: module.SettingsPresentationPage,
+  })),
 );
 const WorkspacePage = lazy(() =>
-  import("./pages/WorkspacePage").then((module) => ({ default: module.WorkspacePage })),
+  import("./pages/workspace/Page").then((module) => ({
+    default: module.WorkspacePresentationPage,
+  })),
 );
 
 function CompanyBootstrapScreen() {
@@ -199,6 +222,7 @@ export default function App() {
       : null;
   const previousConnectedRef = useRef(connected);
   const hasSeenStableConnectionRef = useRef(connected);
+  const lastKnownCompanyRef = useRef(activeCompany);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [authorityHealth, setAuthorityHealth] = useState<ReturnType<typeof extractAuthorityHealthSnapshot>>(null);
   const currentProvider = providers.find((provider) => provider.id === providerId);
@@ -218,6 +242,12 @@ export default function App() {
   useEffect(() => {
     bootstrapAutoConnect();
   }, [bootstrapAutoConnect]);
+
+  useEffect(() => {
+    if (activeCompany) {
+      lastKnownCompanyRef.current = activeCompany;
+    }
+  }, [activeCompany]);
 
   useEffect(() => {
     if (connected) {
@@ -379,12 +409,13 @@ export default function App() {
         phase === "connecting" ||
         phase === "reconnecting"
       );
-    const currentCompany = activeCompany ?? cachedBootstrapCompany;
+    const fallbackCompany = activeCompany ?? cachedBootstrapCompany ?? lastKnownCompanyRef.current;
+    const currentCompany = fallbackCompany;
     const shouldUseSilentRestoreShell = companyBootstrapPending && Boolean(currentCompany);
 
     if (companyBootstrapPending && !shouldUseSilentRestoreShell) {
       content = <CompanyBootstrapScreen />;
-    } else if (!activeCompany && !shouldUseSilentRestoreShell) {
+    } else if (!currentCompany && !shouldUseSilentRestoreShell) {
       content = <Navigate to="/select" replace />;
     } else {
       const resolvedCompany = currentCompany!;
@@ -427,6 +458,10 @@ export default function App() {
               ? [{ path: "/workspace", label: "工作目录", icon: BookOpen }]
               : []),
           ],
+        },
+        {
+          label: "项目",
+          items: [{ path: "/projects", label: "项目追踪", icon: Folder }],
         },
         {
           label: "组织",
@@ -608,6 +643,8 @@ export default function App() {
                   <Route path="/employees/:id" element={<EmployeeProfile />} />
                   <Route path="/board" element={<BoardPage />} />
                   <Route path="/requirement" element={<RequirementCenterPage />} />
+                  <Route path="/projects" element={<ProjectsPage />} />
+                  <Route path="/projects/:id" element={<ProjectDetailPage />} />
                   <Route path="/workspace" element={<WorkspacePage />} />
                   <Route path="/automation" element={<AutomationPage />} />
                   <Route path="/dashboard" element={<DashboardPage />} />

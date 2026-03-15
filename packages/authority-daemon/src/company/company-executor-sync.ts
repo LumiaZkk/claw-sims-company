@@ -91,11 +91,6 @@ function readManagedExecutorWorkspacePluginAsset(relativePath: string) {
   throw new Error(`Missing managed executor workspace plugin asset: ${relativePath}`);
 }
 
-const MANAGED_EXECUTOR_WORKSPACE_PLUGIN_FILES = MANAGED_EXECUTOR_WORKSPACE_PLUGIN_PATHS.map((name) => ({
-  name,
-  content: readManagedExecutorWorkspacePluginAsset(name),
-}));
-
 function isSystemMappedEmployee(company: Company, employee: EmployeeRef) {
   return isReservedSystemCompany(company) && company.system?.mappedAgentId === employee.agentId;
 }
@@ -275,9 +270,9 @@ export function buildManagedExecutorProjectionFilesForCompany(
 }
 
 export function listManagedExecutorWorkspacePluginFiles(): ManagedExecutorWorkspacePluginFile[] {
-  return MANAGED_EXECUTOR_WORKSPACE_PLUGIN_FILES.map((file) => ({
-    name: file.name,
-    content: file.content,
+  return MANAGED_EXECUTOR_WORKSPACE_PLUGIN_PATHS.map((name) => ({
+    name,
+    content: readManagedExecutorWorkspacePluginAsset(name),
   }));
 }
 

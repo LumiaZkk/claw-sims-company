@@ -168,7 +168,7 @@ describe("openclaw-local-auth", () => {
       JSON.stringify({
         plugins: {
           entries: {
-            "company-dispatch": {
+            "sims-company": {
               enabled: true,
               config: { authorityUrl: "http://127.0.0.1:19789" },
             },

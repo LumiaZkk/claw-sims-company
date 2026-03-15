@@ -1,5 +1,5 @@
 {
-  "id": "company-dispatch",
+  "id": "sims-company",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -9,11 +9,11 @@
       },
       "companyId": {
         "type": "string",
-        "description": "Default companyId for dispatch/report"
+        "description": "Default companyId for sims-company tools"
       },
       "timeoutMs": {
         "type": "number",
-        "description": "Default timeout for authority calls"
+        "description": "Default timeout for dispatch and report authority calls"
       }
     }
   }

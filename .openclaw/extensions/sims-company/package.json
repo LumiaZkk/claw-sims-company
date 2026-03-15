@@ -1,5 +1,5 @@
 {
-  "name": "@cyber-company/company-dispatch",
+  "name": "@cyber-company/sims-company",
   "version": "0.1.0",
   "openclaw": {
     "extensions": ["./index.js"]

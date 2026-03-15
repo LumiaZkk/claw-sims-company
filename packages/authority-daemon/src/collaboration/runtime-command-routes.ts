@@ -10,6 +10,10 @@ import type {
   AuthorityArtifactDeleteRequest,
   AuthorityArtifactMirrorSyncRequest,
   AuthorityArtifactUpsertRequest,
+  AuthorityCompanyDispatchRequest,
+  AuthorityCompanyDispatchResponse,
+  AuthorityCompanyReportRequest,
+  AuthorityCompanyReportResponse,
   AuthorityConversationStateDeleteRequest,
   AuthorityConversationStateUpsertRequest,
   AuthorityDecisionTicketCancelRequest,
@@ -83,6 +87,8 @@ export type AuthorityRuntimeCommandRouteDependencies = {
   deleteDecisionTicket: (body: AuthorityDecisionTicketDeleteRequest) => unknown;
   transitionTakeoverCase: (body: AuthorityTakeoverCaseCommandRequest) => unknown;
   appendCompanyEvent: (event: CompanyEvent) => unknown;
+  runCompanyDispatch: (body: AuthorityCompanyDispatchRequest) => Promise<AuthorityCompanyDispatchResponse> | AuthorityCompanyDispatchResponse;
+  runCompanyReport: (body: AuthorityCompanyReportRequest) => Promise<AuthorityCompanyReportResponse> | AuthorityCompanyReportResponse;
 };
 
 export type AuthorityRuntimeCommandRouteResult = AuthorityRouteResult;
@@ -585,6 +591,40 @@ export async function resolveAuthorityRuntimeCommandRoute(input: {
 
   if (simpleCommandRoute) {
     return simpleCommandRoute;
+  }
+
+  if (method === "POST" && pathname === "/commands/company.dispatch") {
+    const body = await readJsonBody<AuthorityCompanyDispatchRequest>(request);
+    const timestamp = now();
+    const result = await deps.runCompanyDispatch(body);
+    return {
+      status: 200,
+      payload: result,
+      postCommit: {
+        broadcasts: buildBroadcasts(
+          timestamp,
+          ["company.updated", "dispatch.updated", "conversation.updated"],
+          body.companyId,
+        ),
+      },
+    };
+  }
+
+  if (method === "POST" && pathname === "/commands/company.report") {
+    const body = await readJsonBody<AuthorityCompanyReportRequest>(request);
+    const timestamp = now();
+    const result = await deps.runCompanyReport(body);
+    return {
+      status: 200,
+      payload: result,
+      postCommit: {
+        broadcasts: buildBroadcasts(
+          timestamp,
+          ["company.updated", "dispatch.updated", "conversation.updated"],
+          body.companyId,
+        ),
+      },
+    };
   }
 
   if (method === "POST" && pathname === "/commands/company-event.append") {

@@ -49,6 +49,12 @@ type LocalCodexAuthSyncResult = {
   accountId?: string;
 };
 
+type LocalOpenClawPluginEnableResult = {
+  configPath: string;
+  enabledPluginIds: string[];
+  changed: boolean;
+};
+
 const OPENCLAW_STATE_DIR_NAME = ".openclaw";
 const OPENCLAW_CONFIG_FILE_NAME = "openclaw.json";
 const CODEX_HOME_DIR_NAME = ".codex";
@@ -219,6 +225,24 @@ function parseConfigFile(raw: string): unknown {
     } catch {
       return null;
     }
+  }
+}
+
+function readParsedOpenClawConfigRoot(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+  fileExists: (filePath: string) => boolean,
+  readFile: (filePath: string) => string,
+): Record<string, unknown> {
+  const configPath = resolveOpenClawConfigPath(env, homedir);
+  if (!fileExists(configPath)) {
+    return {};
+  }
+  try {
+    const parsed = parseConfigFile(readFile(configPath));
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
 }
 
@@ -620,6 +644,57 @@ export function syncLocalCodexAuthToAgents(
     syncedAgentIds: normalizedAgentIds,
     changed,
     ...(credential.accountId ? { accountId: credential.accountId } : {}),
+  };
+}
+
+export function ensureLocalOpenClawPluginEntriesEnabled(
+  pluginIds: string[],
+  options: OpenClawLocalAuthOptions = {},
+): LocalOpenClawPluginEnableResult {
+  const env = options.env ?? process.env;
+  const homedir = options.homedir ?? os.homedir;
+  const fileExists = options.fileExists ?? ((filePath: string) => fs.existsSync(filePath));
+  const readFile = options.readFile ?? ((filePath: string) => fs.readFileSync(filePath, "utf8"));
+  const writeFile = options.writeFile ?? ((filePath: string, content: string) => fs.writeFileSync(filePath, content, "utf8"));
+  const mkdir = options.mkdir ?? ((dirPath: string) => fs.mkdirSync(dirPath, { recursive: true }));
+  const configPath = resolveOpenClawConfigPath(env, homedir);
+  const enabledPluginIds = dedupeStrings(pluginIds.map((pluginId) => pluginId.trim()));
+  const nextConfig = readParsedOpenClawConfigRoot(env, homedir, fileExists, readFile);
+
+  let changed = false;
+  const plugins = isRecord(nextConfig.plugins) ? nextConfig.plugins : {};
+  if (nextConfig.plugins !== plugins) {
+    nextConfig.plugins = plugins;
+    changed = true;
+  }
+  const entries = isRecord(plugins.entries) ? plugins.entries : {};
+  if (plugins.entries !== entries) {
+    plugins.entries = entries;
+    changed = true;
+  }
+
+  for (const pluginId of enabledPluginIds) {
+    const current = isRecord(entries[pluginId]) ? entries[pluginId] : {};
+    if (entries[pluginId] !== current) {
+      entries[pluginId] = current;
+      changed = true;
+    }
+    if (current.enabled !== true) {
+      current.enabled = true;
+      entries[pluginId] = current;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    mkdir(path.dirname(configPath));
+    writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`);
+  }
+
+  return {
+    configPath,
+    enabledPluginIds,
+    changed,
   };
 }
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ensureLocalOpenClawPluginEntriesEnabled,
   readLocalCodexCredential,
   resolveLocalOpenClawGatewayToken,
   resolveOpenClawAgentDir,
@@ -99,6 +100,91 @@ describe("openclaw-local-auth", () => {
         homedir: () => "/unused",
       }),
     ).toBe("shell-token");
+  });
+
+  it("enables workspace plugin entries inside local openclaw config", () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const stateDir = path.join(root, ".openclaw");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        plugins: {
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      }),
+    );
+
+    const result = ensureLocalOpenClawPluginEntriesEnabled(["sims-company"], {
+      env: { OPENCLAW_HOME: root } as NodeJS.ProcessEnv,
+      homedir: () => "/unused",
+    });
+
+    expect(result).toEqual({
+      configPath: path.join(stateDir, "openclaw.json"),
+      enabledPluginIds: ["sims-company"],
+      changed: true,
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(stateDir, "openclaw.json"), "utf8"))).toMatchObject({
+      plugins: {
+        entries: {
+          feishu: { enabled: true },
+          "sims-company": { enabled: true },
+        },
+      },
+    });
+  });
+
+  it("creates the local openclaw config file when enabling a plugin entry from scratch", () => {
+    const root = createTempRoot();
+    roots.push(root);
+
+    const result = ensureLocalOpenClawPluginEntriesEnabled(["sims-company"], {
+      env: { OPENCLAW_HOME: root } as NodeJS.ProcessEnv,
+      homedir: () => "/unused",
+    });
+
+    expect(result.changed).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".openclaw", "openclaw.json"), "utf8"))).toMatchObject({
+      plugins: {
+        entries: {
+          "sims-company": { enabled: true },
+        },
+      },
+    });
+  });
+
+  it("does not rewrite local openclaw config when plugin entry is already enabled", () => {
+    const root = createTempRoot();
+    roots.push(root);
+    const stateDir = path.join(root, ".openclaw");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          entries: {
+            "company-dispatch": {
+              enabled: true,
+              config: { authorityUrl: "http://127.0.0.1:19789" },
+            },
+          },
+        },
+      }),
+    );
+    const before = fs.readFileSync(configPath, "utf8");
+
+    const result = ensureLocalOpenClawPluginEntriesEnabled(["sims-company"], {
+      env: { OPENCLAW_HOME: root } as NodeJS.ProcessEnv,
+      homedir: () => "/unused",
+    });
+
+    expect(result.changed).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(before);
   });
 
   it("does not return a token when local gateway auth is password mode", () => {

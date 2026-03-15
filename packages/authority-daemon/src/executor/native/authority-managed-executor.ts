@@ -11,12 +11,13 @@ import {
 } from "../../persistence/authority-persistence-shared";
 import type { AuthorityRepository } from "../../persistence/authority-repository";
 import {
-  buildManagedExecutorFiles,
-  buildManagedExecutorFilesForCompany,
+  buildManagedExecutorProjectionFiles,
+  buildManagedExecutorProjectionFilesForCompany,
   listDesiredManagedExecutorAgents,
   planManagedExecutorReconcile,
   resolveManagedExecutorProvisioningState,
 } from "../../company/company-executor-sync";
+import { syncManagedExecutorWorkspacePlugin } from "../../company/company-workspace-plugin-sync";
 import { waitForExecutorAgentsAbsent } from "../../company/company-delete";
 import { createOpenClawExecutorBridge } from "../openclaw-bridge";
 
@@ -203,6 +204,14 @@ export function createAuthorityManagedExecutor(input: {
     return grouped;
   }
 
+  function dedupeFilesByKey(files: Array<{ agentId: string; name: string; content: string }>) {
+    const deduped = new Map<string, { agentId: string; name: string; content: string }>();
+    for (const file of files) {
+      deduped.set(`${file.agentId}:${file.name}`, file);
+    }
+    return [...deduped.values()];
+  }
+
   async function ensureExecutorAgentVisible(
     target: { agentId: string; workspace: string },
     reason: string,
@@ -251,6 +260,19 @@ export function createAuthorityManagedExecutor(input: {
     }
   }
 
+  async function syncManagedWorkspacePluginForTarget(
+    target: { agentId: string; workspace: string },
+    reason: string,
+  ) {
+    try {
+      await syncManagedExecutorWorkspacePlugin(target);
+    } catch (error) {
+      throw new Error(
+        `无法安装 sims-company 插件到 ${target.agentId}（${reason}）：${stringifyError(error)}`,
+      );
+    }
+  }
+
   async function ensureManagedCompanyExecutorProvisioned(
     company: Company,
     runtime: AuthorityCompanyRuntimeSnapshot,
@@ -262,7 +284,7 @@ export function createAuthorityManagedExecutor(input: {
 
     const targets = listDesiredManagedExecutorAgents(buildStandaloneCompanyConfig(company));
     const filesByAgent = groupManagedFilesByAgent(
-      buildManagedExecutorFilesForCompany(company, {
+      buildManagedExecutorProjectionFilesForCompany(company, {
         activeWorkItems: runtime.activeWorkItems,
         activeSupportRequests: runtime.activeSupportRequests,
         activeEscalations: runtime.activeEscalations,
@@ -272,6 +294,7 @@ export function createAuthorityManagedExecutor(input: {
 
     for (const target of targets) {
       await ensureExecutorAgentVisible(target, reason);
+      await syncManagedWorkspacePluginForTarget(target, reason);
       await syncManagedFilesForAgent(target.agentId, filesByAgent.get(target.agentId) ?? [], reason);
     }
   }
@@ -287,7 +310,7 @@ export function createAuthorityManagedExecutor(input: {
 
     const targets = listDesiredManagedExecutorAgents(buildStandaloneCompanyConfig(company));
     const filesByAgent = groupManagedFilesByAgent(
-      buildManagedExecutorFilesForCompany(company, {
+      buildManagedExecutorProjectionFilesForCompany(company, {
         activeWorkItems: runtime.activeWorkItems,
         activeSupportRequests: runtime.activeSupportRequests,
         activeEscalations: runtime.activeEscalations,
@@ -330,6 +353,7 @@ export function createAuthorityManagedExecutor(input: {
     }
 
     for (const target of targets) {
+      await syncManagedWorkspacePluginForTarget(target, reason);
       await syncManagedFilesForAgent(target.agentId, filesByAgent.get(target.agentId) ?? [], reason);
     }
   }
@@ -401,15 +425,44 @@ export function createAuthorityManagedExecutor(input: {
     const runtimeByCompanyId = new Map(
       currentConfig.companies.map((company) => [company.id, repository.loadRuntime(company.id)] as const),
     );
-    const managedFiles = buildManagedExecutorFiles(currentConfig, runtimeByCompanyId).filter((file) =>
+    const managedFiles = buildManagedExecutorProjectionFiles(currentConfig, runtimeByCompanyId).filter((file) =>
       existingAgentIds.has(file.agentId),
     );
-    const fileResults = await Promise.allSettled(managedFiles.map((file) => syncAgentFileToExecutor(file)));
+    const pluginTargets = new Map(
+      listDesiredManagedExecutorAgents(currentConfig)
+        .filter((target) => existingAgentIds.has(target.agentId))
+        .map((target) => [target.agentId, target] as const),
+    );
+    const pluginSyncFailedAgentIds = new Set<string>();
+    for (const target of pluginTargets.values()) {
+      try {
+        await syncManagedWorkspacePluginForTarget(target, reason);
+      } catch (error) {
+        pluginSyncFailedAgentIds.add(target.agentId);
+        console.warn(
+          `Failed to install managed workspace plugin for ${target.agentId} (${reason}).`,
+          error,
+        );
+      }
+    }
+    const projectionKeys = new Set(managedFiles.map((file) => `${file.agentId}:${file.name}`));
+    const storedAgentFiles = [...existingAgentIds].flatMap((agentId) =>
+      repository.listAgentFiles(agentId).files.map((file) => ({
+        agentId,
+        name: file.name,
+        content: file.content ?? "",
+      })),
+    );
+    const filesToSync = dedupeFilesByKey([
+      ...managedFiles,
+      ...storedAgentFiles.filter((file) => projectionKeys.has(`${file.agentId}:${file.name}`)),
+    ]);
+    const fileResults = await Promise.allSettled(filesToSync.map((file) => syncAgentFileToExecutor(file)));
     const failures = fileResults.filter((result) => result.status === "rejected");
-    const fileSyncFailedAgentIds = new Set<string>();
+    const fileSyncFailedAgentIds = new Set<string>(pluginSyncFailedAgentIds);
     fileResults.forEach((result, index) => {
       if (result.status === "rejected") {
-        const agentId = managedFiles[index]?.agentId;
+        const agentId = filesToSync[index]?.agentId;
         if (agentId) {
           fileSyncFailedAgentIds.add(agentId);
         }

@@ -1,8 +1,5 @@
-import type {
-  DecisionTicketRecord,
-  EscalationRecord,
-  SupportRequestRecord,
-} from "../../../../src/domain/delegation/types";
+import path from "node:path";
+import { readFileSync } from "node:fs";
 import {
   COMPANY_CONTEXT_FILE_NAME,
   CEO_OPERATIONS_FILE_NAME,
@@ -17,13 +14,13 @@ import {
   COLLABORATION_CONTEXT_FILE_NAME,
   buildCollaborationContextSnapshot,
 } from "../../../../src/application/company/collaboration-context";
-import type { WorkItemRecord } from "../../../../src/domain/mission/types";
 import {
   generateDepartmentManagerSoul,
   generateCeoSoul,
   generateCooSoul,
   generateCtoSoul,
   generateHrSoul,
+  generateIndividualContributorSoul,
 } from "../../../../src/domain/meta-agent/souls";
 import { isReservedSystemCompany } from "../../../../src/domain/org/system-company";
 import type {
@@ -32,6 +29,10 @@ import type {
   CyberCompanyConfig,
   EmployeeRef,
 } from "../../../../src/domain/org/types";
+import {
+  compileManagedExecutorProjection,
+  type ManagedExecutorRuntimeFacts,
+} from "./company-executor-projection";
 
 export type ManagedExecutorAgentTarget = {
   agentId: string;
@@ -55,18 +56,45 @@ export type ManagedExecutorReconcilePlan = {
   createTargets: ManagedExecutorAgentTarget[];
 };
 
+export type ManagedExecutorWorkspacePluginFile = {
+  name: string;
+  content: string;
+};
+
 export type ManagedExecutorProvisioningResolution = NonNullable<
   CompanySystemMetadata["executorProvisioning"]
 >;
 
-export type ManagedCompanyRuntimeSnapshot = {
-  activeWorkItems?: WorkItemRecord[];
-  activeSupportRequests?: SupportRequestRecord[];
-  activeEscalations?: EscalationRecord[];
-  activeDecisionTickets?: DecisionTicketRecord[];
-};
+export type ManagedCompanyRuntimeSnapshot = ManagedExecutorRuntimeFacts;
 
 const MANAGED_EXECUTOR_WORKSPACE_ROOT = "~/.openclaw/workspaces/cyber-company";
+const MANAGED_EXECUTOR_WORKSPACE_PLUGIN_ROOT = ".openclaw/extensions/sims-company";
+const MANAGED_EXECUTOR_WORKSPACE_PLUGIN_PATHS = [
+  `${MANAGED_EXECUTOR_WORKSPACE_PLUGIN_ROOT}/index.js`,
+  `${MANAGED_EXECUTOR_WORKSPACE_PLUGIN_ROOT}/openclaw.plugin.json`,
+  `${MANAGED_EXECUTOR_WORKSPACE_PLUGIN_ROOT}/package.json`,
+] as const;
+
+function readManagedExecutorWorkspacePluginAsset(relativePath: string) {
+  const repoRelativeAsset = new URL(`../../../../${relativePath}`, import.meta.url);
+  const cwdRelativeAsset = path.resolve(process.cwd(), relativePath);
+  const candidates: Array<string | URL> = [repoRelativeAsset, cwdRelativeAsset];
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, "utf8");
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(`Missing managed executor workspace plugin asset: ${relativePath}`);
+}
+
+const MANAGED_EXECUTOR_WORKSPACE_PLUGIN_FILES = MANAGED_EXECUTOR_WORKSPACE_PLUGIN_PATHS.map((name) => ({
+  name,
+  content: readManagedExecutorWorkspacePluginAsset(name),
+}));
 
 function isSystemMappedEmployee(company: Company, employee: EmployeeRef) {
   return isReservedSystemCompany(company) && company.system?.mappedAgentId === employee.agentId;
@@ -83,8 +111,24 @@ function buildMetaSoul(company: Company, employee: EmployeeRef): string | null {
     case "coo":
       return generateCooSoul(company.name);
     default:
-      return null;
+      return managesDepartment(company, employee)
+        ? generateDepartmentManagerSoul(
+            company.name,
+            (company.departments ?? [])
+              .filter((department) => !department.archived && department.leadAgentId === employee.agentId)
+              .map((department) => department.name)
+              .join(" / "),
+          )
+        : generateIndividualContributorSoul(company.name, employee.role, employee.nickname);
   }
+}
+
+function resolveEmployeeSoul(company: Company, employee: EmployeeRef): string | null {
+  const canonicalSoul = employee.bootstrapBundle?.soulMd?.trim();
+  if (canonicalSoul) {
+    return canonicalSoul;
+  }
+  return buildMetaSoul(company, employee);
 }
 
 function managesDepartment(company: Company, employee: EmployeeRef): boolean {
@@ -142,17 +186,7 @@ export function buildManagedExecutorFilesForCompany(
   const files: ManagedExecutorFile[] = [];
 
   for (const employee of company.employees) {
-    const soul =
-      buildMetaSoul(company, employee) ??
-      (managesDepartment(company, employee)
-        ? generateDepartmentManagerSoul(
-            company.name,
-            (company.departments ?? [])
-              .filter((department) => !department.archived && department.leadAgentId === employee.agentId)
-              .map((department) => department.name)
-              .join(" / "),
-          )
-        : null);
+    const soul = resolveEmployeeSoul(company, employee);
     if (soul) {
       files.push({
         agentId: employee.agentId,
@@ -218,7 +252,33 @@ export function buildManagedExecutorFilesForCompany(
     });
   }
 
-  return files;
+  const deduped = new Map<string, ManagedExecutorFile>();
+  for (const file of [...files, ...buildManagedExecutorProjectionFilesForCompany(company, runtime)]) {
+    deduped.set(`${file.agentId}:${file.name}`, file);
+  }
+
+  return [...deduped.values()];
+}
+
+export function buildManagedExecutorProjectionFilesForCompany(
+  company: Company,
+  runtime?: ManagedCompanyRuntimeSnapshot,
+): ManagedExecutorFile[] {
+  return company.employees.flatMap((employee) =>
+    compileManagedExecutorProjection({
+      company,
+      employee,
+      soul: resolveEmployeeSoul(company, employee),
+      runtime,
+    }),
+  );
+}
+
+export function listManagedExecutorWorkspacePluginFiles(): ManagedExecutorWorkspacePluginFile[] {
+  return MANAGED_EXECUTOR_WORKSPACE_PLUGIN_FILES.map((file) => ({
+    name: file.name,
+    content: file.content,
+  }));
 }
 
 export function buildManagedExecutorFiles(
@@ -230,6 +290,18 @@ export function buildManagedExecutorFiles(
   }
   return config.companies.flatMap((company) =>
     buildManagedExecutorFilesForCompany(company, runtimeByCompanyId?.get(company.id)),
+  );
+}
+
+export function buildManagedExecutorProjectionFiles(
+  config: CyberCompanyConfig | null | undefined,
+  runtimeByCompanyId?: ReadonlyMap<string, ManagedCompanyRuntimeSnapshot>,
+): ManagedExecutorFile[] {
+  if (!config) {
+    return [];
+  }
+  return config.companies.flatMap((company) =>
+    buildManagedExecutorProjectionFilesForCompany(company, runtimeByCompanyId?.get(company.id)),
   );
 }
 

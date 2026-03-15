@@ -33,6 +33,8 @@ function createDeps() {
     deleteDecisionTicket: vi.fn().mockReturnValue({ ok: true }),
     transitionTakeoverCase: vi.fn().mockReturnValue({ ok: true }),
     appendCompanyEvent: vi.fn().mockReturnValue({ ok: true }),
+    runCompanyDispatch: vi.fn().mockResolvedValue({ ok: true, dispatchId: "dispatch-1", workItemId: "work-1", sessionKey: "agent:cto:main", status: "sent" }),
+    runCompanyReport: vi.fn().mockResolvedValue({ ok: true, dispatchId: "dispatch-1", status: "acknowledged", eventId: "report-1", sessionKey: "agent:ceo:main" }),
   };
 }
 
@@ -164,6 +166,80 @@ describe("resolveAuthorityRuntimeCommandRoute", () => {
         broadcasts: [
           { type: "company.updated", companyId: "company-1", timestamp: 333 },
           { type: "dispatch.updated", companyId: "company-1", timestamp: 333 },
+        ],
+      },
+    });
+  });
+
+  it("routes company.dispatch and emits dispatch broadcasts", async () => {
+    const deps = createDeps();
+    const readJsonBody = vi.fn().mockResolvedValue({
+      companyId: "company-1",
+      fromActorId: "ceo",
+      targetActorId: "cto",
+      message: "ship it",
+    });
+    const result = await resolveAuthorityRuntimeCommandRoute({
+      method: "POST",
+      url: new URL("http://authority.local/commands/company.dispatch"),
+      request: {} as IncomingMessage,
+      readJsonBody,
+      deps,
+      now: () => 555,
+    });
+
+    expect(deps.runCompanyDispatch).toHaveBeenCalledWith({
+      companyId: "company-1",
+      fromActorId: "ceo",
+      targetActorId: "cto",
+      message: "ship it",
+    });
+    expect(result).toEqual({
+      status: 200,
+      payload: { ok: true, dispatchId: "dispatch-1", workItemId: "work-1", sessionKey: "agent:cto:main", status: "sent" },
+      postCommit: {
+        broadcasts: [
+          { type: "company.updated", companyId: "company-1", timestamp: 555 },
+          { type: "dispatch.updated", companyId: "company-1", timestamp: 555 },
+          { type: "conversation.updated", companyId: "company-1", timestamp: 555 },
+        ],
+      },
+    });
+  });
+
+  it("routes company.report and emits dispatch broadcasts", async () => {
+    const deps = createDeps();
+    const readJsonBody = vi.fn().mockResolvedValue({
+      companyId: "company-1",
+      dispatchId: "dispatch-1",
+      fromActorId: "cto",
+      status: "acknowledged",
+      summary: "收到",
+    });
+    const result = await resolveAuthorityRuntimeCommandRoute({
+      method: "POST",
+      url: new URL("http://authority.local/commands/company.report"),
+      request: {} as IncomingMessage,
+      readJsonBody,
+      deps,
+      now: () => 777,
+    });
+
+    expect(deps.runCompanyReport).toHaveBeenCalledWith({
+      companyId: "company-1",
+      dispatchId: "dispatch-1",
+      fromActorId: "cto",
+      status: "acknowledged",
+      summary: "收到",
+    });
+    expect(result).toEqual({
+      status: 200,
+      payload: { ok: true, dispatchId: "dispatch-1", status: "acknowledged", eventId: "report-1", sessionKey: "agent:ceo:main" },
+      postCommit: {
+        broadcasts: [
+          { type: "company.updated", companyId: "company-1", timestamp: 777 },
+          { type: "dispatch.updated", companyId: "company-1", timestamp: 777 },
+          { type: "conversation.updated", companyId: "company-1", timestamp: 777 },
         ],
       },
     });

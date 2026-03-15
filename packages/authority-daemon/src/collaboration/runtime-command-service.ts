@@ -2,6 +2,7 @@ import type { AuthorityAgentFilesResponse } from "../../../../src/infrastructure
 import type { AuthorityRuntimeCommandRouteDependencies } from "./runtime-command-routes";
 import type { AuthorityRepository } from "../persistence/authority-repository";
 import { runAgentWorkspaceEntry } from "../executor/agent-file-runner";
+import { runAuthorityCompanyDispatchCommand, runAuthorityCompanyReportCommand } from "./company-dispatch-command";
 
 export function createAuthorityRuntimeCommandService(input: {
   repository: AuthorityRepository;
@@ -47,5 +48,21 @@ export function createAuthorityRuntimeCommandService(input: {
     deleteDecisionTicket: (body) => repository.deleteDecisionTicket(body),
     transitionTakeoverCase: (body) => repository.transitionTakeoverCase(body),
     appendCompanyEvent: (event) => repository.appendCompanyEvent(event),
+    runCompanyDispatch: (body) =>
+      runAuthorityCompanyDispatchCommand({
+        body,
+        deps: {
+          repository,
+          proxyGatewayRequest,
+        },
+      }),
+    runCompanyReport: (body) =>
+      runAuthorityCompanyReportCommand({
+        body,
+        deps: {
+          repository,
+          proxyGatewayRequest,
+        },
+      }),
   };
 }

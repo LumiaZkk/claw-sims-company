@@ -1,0 +1,20 @@
+{
+  "id": "company-dispatch",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "authorityUrl": {
+        "type": "string",
+        "description": "Authority HTTP base URL (default: http://127.0.0.1:19789)"
+      },
+      "companyId": {
+        "type": "string",
+        "description": "Default companyId for dispatch/report"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Default timeout for authority calls"
+      }
+    }
+  }
+}

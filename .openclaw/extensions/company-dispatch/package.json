@@ -1,0 +1,7 @@
+{
+  "name": "@cyber-company/company-dispatch",
+  "version": "0.1.0",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

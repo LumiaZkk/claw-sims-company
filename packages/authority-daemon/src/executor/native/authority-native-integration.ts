@@ -24,6 +24,7 @@ import {
 import { createManagedFileMirrorQueue } from "../managed-file-mirror";
 import { createOpenClawExecutorBridge } from "../openclaw-bridge";
 import {
+  ensureLocalOpenClawPluginEntriesEnabled,
   resolveLocalOpenClawGatewayToken,
   syncLocalCodexAuthToAgents,
 } from "../openclaw-local-auth";
@@ -33,12 +34,23 @@ import { registerAuthorityNativeEventStream } from "./authority-native-event-str
 type AuthorityNativeIntegrationDependencies = {
   repository: AuthorityRepository;
   broadcast: (event: AuthorityEvent) => void;
+  ensureLocalPluginEntriesEnabled?: typeof ensureLocalOpenClawPluginEntriesEnabled;
+  refreshGatewayRuntimeSnapshot?: typeof refreshGatewayAuthRuntimeSnapshot;
+  waitForGatewayReconnect?: typeof waitForGatewayReconnect;
 };
+
+const MANAGED_WORKSPACE_PLUGIN_IDS = ["sims-company"] as const;
 
 export function createAuthorityNativeIntegration(
   deps: AuthorityNativeIntegrationDependencies,
 ) {
   const { repository, broadcast } = deps;
+  const ensureLocalPluginEntriesEnabled =
+    deps.ensureLocalPluginEntriesEnabled ?? ensureLocalOpenClawPluginEntriesEnabled;
+  const refreshGatewayRuntimeSnapshot =
+    deps.refreshGatewayRuntimeSnapshot ?? refreshGatewayAuthRuntimeSnapshot;
+  const waitForGatewayReconnectAfterRefresh =
+    deps.waitForGatewayReconnect ?? waitForGatewayReconnect;
   const executorBridge = createOpenClawExecutorBridge(repository.loadExecutorConfig(), {
     resolveFallbackToken: () => resolveLocalOpenClawGatewayToken(),
   });
@@ -125,6 +137,43 @@ export function createAuthorityNativeIntegration(
     normalizeProviderSessionStatus,
   });
 
+  let managedWorkspacePluginTrustPromise: Promise<unknown> | null = null;
+
+  async function ensureManagedWorkspacePluginTrust(reason: string) {
+    if (managedWorkspacePluginTrustPromise) {
+      return managedWorkspacePluginTrustPromise;
+    }
+
+    managedWorkspacePluginTrustPromise = (async () => {
+      const result = ensureLocalPluginEntriesEnabled([...MANAGED_WORKSPACE_PLUGIN_IDS]);
+      if (!result.changed) {
+        return result;
+      }
+
+      try {
+        const gatewayRefresh = await refreshGatewayRuntimeSnapshot(
+          proxyGatewayRequest,
+          `启用 managed workspace 插件后刷新 OpenClaw auth/runtime snapshot（${reason}）`,
+        );
+        const gatewayReconnect = await waitForGatewayReconnectAfterRefresh(() => executorBridge.reconnect());
+        return {
+          ...result,
+          gatewayRefresh: {
+            ...gatewayRefresh,
+            ...gatewayReconnect,
+          },
+        };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`已写入 OpenClaw 插件启用配置，但刷新 Gateway 失败：${detail}`);
+      }
+    })().finally(() => {
+      managedWorkspacePluginTrustPromise = null;
+    });
+
+    return managedWorkspacePluginTrustPromise;
+  }
+
   registerAuthorityNativeEventStream({
     repository,
     executorBridge,
@@ -143,11 +192,11 @@ export function createAuthorityNativeIntegration(
     if (!result.changed) {
       return result;
     }
-    const gatewayRefresh = await refreshGatewayAuthRuntimeSnapshot(
+    const gatewayRefresh = await refreshGatewayRuntimeSnapshot(
       proxyGatewayRequest,
       `刷新 Codex 授权后重载 OpenClaw auth/runtime snapshot（company=${companyId} source=${source}）`,
     );
-    const gatewayReconnect = await waitForGatewayReconnect(() => executorBridge.reconnect());
+    const gatewayReconnect = await waitForGatewayReconnectAfterRefresh(() => executorBridge.reconnect());
     return {
       ...result,
       gatewayRefresh: {
@@ -155,6 +204,29 @@ export function createAuthorityNativeIntegration(
         ...gatewayReconnect,
       },
     };
+  }
+
+  async function ensureManagedCompanyExecutorProvisioned(
+    company: Company,
+    runtime: Parameters<typeof managedExecutor.ensureManagedCompanyExecutorProvisioned>[1],
+    reason: string,
+  ) {
+    await ensureManagedWorkspacePluginTrust(`company=${company.id} reason=${reason}`);
+    return managedExecutor.ensureManagedCompanyExecutorProvisioned(company, runtime, reason);
+  }
+
+  async function ensureManagedCompanyExecutorProvisionedBestEffort(
+    company: Company,
+    runtime: Parameters<typeof managedExecutor.ensureManagedCompanyExecutorProvisionedBestEffort>[1],
+    reason: string,
+  ) {
+    await ensureManagedWorkspacePluginTrust(`company=${company.id} reason=${reason}`);
+    return managedExecutor.ensureManagedCompanyExecutorProvisionedBestEffort(company, runtime, reason);
+  }
+
+  async function queueManagedExecutorSync(reason: string) {
+    await ensureManagedWorkspacePluginTrust(reason);
+    return managedExecutor.queueManagedExecutorSync(reason);
   }
 
   function patchExecutorConfig(body: AuthorityExecutorConfigPatch): Promise<AuthorityExecutorConfig> {
@@ -188,10 +260,9 @@ export function createAuthorityNativeIntegration(
     listManagedProvisioningAgentIds: managedExecutor.listManagedProvisioningAgentIds,
     updateCompanyExecutorProvisioning: managedExecutor.updateCompanyExecutorProvisioning,
     resolveProvisioningFailureState: managedExecutor.resolveProvisioningFailureState,
-    ensureManagedCompanyExecutorProvisioned: managedExecutor.ensureManagedCompanyExecutorProvisioned,
-    ensureManagedCompanyExecutorProvisionedBestEffort:
-      managedExecutor.ensureManagedCompanyExecutorProvisionedBestEffort,
-    queueManagedExecutorSync: managedExecutor.queueManagedExecutorSync,
+    ensureManagedCompanyExecutorProvisioned,
+    ensureManagedCompanyExecutorProvisionedBestEffort,
+    queueManagedExecutorSync,
     connectExecutor: () => executorBridge.reconnect(),
     requestSessionStatus: (sessionKey: string) => executorBridge.request("session_status", { sessionKey }),
     getSessionStatusCapabilityState: () => sessionStatusCapabilityState,

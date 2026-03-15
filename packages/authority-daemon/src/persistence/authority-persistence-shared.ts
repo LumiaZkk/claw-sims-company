@@ -5,6 +5,11 @@ import type { AuthorityCompanyRuntimeSnapshot, AuthorityHireEmployeeInput } from
 import type { DecisionTicketRecord } from "../../../../src/domain/delegation/types";
 import type { ApprovalRecord } from "../../../../src/domain/governance/types";
 import { buildDefaultOrgSettings } from "../../../../src/domain/org/autonomy-policy";
+import {
+  buildCanonicalAgentIdMigrationMap,
+  rewriteKnownAgentReferences,
+} from "../../../../src/domain/org/agent-id";
+import { buildDefaultTalentMarketTemplates } from "../../../../src/domain/org/talent-market";
 import { normalizeEscalationRecord } from "../../../../src/domain/delegation/escalation";
 import { isSupportRequestActive, normalizeSupportRequestRecord } from "../../../../src/domain/delegation/support-request";
 import { sortApprovals } from "../../../../src/domain/governance/approval";
@@ -212,17 +217,30 @@ export function parseJson<T>(value: string | null | undefined, fallback: T): T {
 }
 
 export function normalizeCompany(company: Company): Company {
+  const agentIdMapping = buildCanonicalAgentIdMigrationMap(
+    company.employees.map((employee) => employee.agentId),
+  );
+  const canonicalAgentIds = new Set(agentIdMapping.values());
+  const migratedCompany = rewriteKnownAgentReferences(company, {
+    exactMap: agentIdMapping,
+    canonicalIds: canonicalAgentIds,
+  });
+  const talentMarket = migratedCompany.talentMarket ?? {
+    templates: buildDefaultTalentMarketTemplates(Date.now()),
+    updatedAt: Date.now(),
+  };
   return {
-    ...company,
-    orgSettings: buildDefaultOrgSettings(company.orgSettings),
-    approvals: sortApprovals(company.approvals ?? []),
-    supportRequests: (company.supportRequests ?? [])
+    ...migratedCompany,
+    talentMarket,
+    orgSettings: buildDefaultOrgSettings(migratedCompany.orgSettings),
+    approvals: sortApprovals(migratedCompany.approvals ?? []),
+    supportRequests: (migratedCompany.supportRequests ?? [])
       .map(normalizeSupportRequestRecord)
       .filter(isSupportRequestActive),
-    escalations: (company.escalations ?? [])
+    escalations: (migratedCompany.escalations ?? [])
       .map(normalizeEscalationRecord)
       .filter((item) => item.status === "open" || item.status === "acknowledged"),
-    decisionTickets: (company.decisionTickets ?? []).filter(
+    decisionTickets: (migratedCompany.decisionTickets ?? []).filter(
       (item) => item.status === "open" || item.status === "pending_human",
     ),
   };
@@ -234,48 +252,54 @@ export function normalizeRuntimeSnapshot(
 ): AuthorityCompanyRuntimeSnapshot {
   const normalizeRevision = (value: number | null | undefined) =>
     Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
+  const canonicalAgentIds = new Set(company?.employees.map((employee) => employee.agentId) ?? []);
+  const migratedSnapshot = canonicalAgentIds.size > 0
+    ? rewriteKnownAgentReferences(snapshot, {
+      canonicalIds: canonicalAgentIds,
+    })
+    : snapshot;
   return {
-    ...snapshot,
-    activeWorkItems: snapshot.activeWorkItems.map((workItem) =>
+    ...migratedSnapshot,
+    activeWorkItems: migratedSnapshot.activeWorkItems.map((workItem) =>
       normalizeWorkItemDepartmentOwnership({
         company,
         workItem,
       }),
     ),
-    activeRoomRecords: (snapshot.activeRoomRecords ?? []).map((room) => ({
+    activeRoomRecords: (migratedSnapshot.activeRoomRecords ?? []).map((room) => ({
       ...room,
       revision: normalizeRevision(room.revision),
     })),
-    activeArtifacts: (snapshot.activeArtifacts ?? []).map((artifact) => ({
+    activeArtifacts: (migratedSnapshot.activeArtifacts ?? []).map((artifact) => ({
       ...artifact,
       revision: normalizeRevision(artifact.revision),
     })),
-    activeDispatches: (snapshot.activeDispatches ?? []).map((dispatch) => ({
+    activeDispatches: (migratedSnapshot.activeDispatches ?? []).map((dispatch) => ({
       ...dispatch,
       revision: normalizeRevision(dispatch.revision),
     })),
-    activeSupportRequests: (snapshot.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
-    activeEscalations: (snapshot.activeEscalations ?? []).map(normalizeEscalationRecord),
-    activeDecisionTickets: (snapshot.activeDecisionTickets ?? []).map((ticket) => ({
+    activeSupportRequests: (migratedSnapshot.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
+    activeEscalations: (migratedSnapshot.activeEscalations ?? []).map(normalizeEscalationRecord),
+    activeDecisionTickets: (migratedSnapshot.activeDecisionTickets ?? []).map((ticket) => ({
       ...ticket,
       revision: normalizeRevision(ticket.revision),
     })),
-    activeAgentSessions: [...(snapshot.activeAgentSessions ?? [])].sort(
+    activeAgentSessions: [...(migratedSnapshot.activeAgentSessions ?? [])].sort(
       (left, right) => (right.lastSeenAt ?? 0) - (left.lastSeenAt ?? 0),
     ),
-    activeAgentRuns: [...(snapshot.activeAgentRuns ?? [])].sort(
+    activeAgentRuns: [...(migratedSnapshot.activeAgentRuns ?? [])].sort(
       (left, right) => right.lastEventAt - left.lastEventAt,
     ),
-    activeAgentRuntime: [...(snapshot.activeAgentRuntime ?? [])].sort((left, right) =>
+    activeAgentRuntime: [...(migratedSnapshot.activeAgentRuntime ?? [])].sort((left, right) =>
       left.agentId.localeCompare(right.agentId),
     ),
-    activeAgentStatuses: [...(snapshot.activeAgentStatuses ?? [])].sort((left, right) =>
+    activeAgentStatuses: [...(migratedSnapshot.activeAgentStatuses ?? [])].sort((left, right) =>
       left.agentId.localeCompare(right.agentId),
     ),
-    activeAgentStatusHealth: snapshot.activeAgentStatusHealth
+    activeAgentStatusHealth: migratedSnapshot.activeAgentStatusHealth
       ? {
-          ...snapshot.activeAgentStatusHealth,
-          missingAgentIds: [...snapshot.activeAgentStatusHealth.missingAgentIds].sort((left, right) =>
+          ...migratedSnapshot.activeAgentStatusHealth,
+          missingAgentIds: [...migratedSnapshot.activeAgentStatusHealth.missingAgentIds].sort((left, right) =>
             left.localeCompare(right),
           ),
         }
@@ -307,33 +331,71 @@ export function isAgentAlreadyExistsError(error: unknown) {
   return stringifyError(error).includes("already exists");
 }
 
-export function buildEmployeeBootstrapFile(input: AuthorityHireEmployeeInput & { agentId: string }) {
-  const lines = [
-    `# ${input.nickname?.trim() || input.role.trim()}`,
-    "",
-    "## Role",
-    input.role.trim(),
-    "",
-    "## Responsibilities",
-    input.description.trim(),
-  ];
+export function buildEmployeeBootstrapFiles(input: AuthorityHireEmployeeInput & { agentId: string }) {
+  const files: Array<{ agentId: string; name: string; content: string }> = [];
+  const roleMd =
+    input.bootstrapBundle?.roleMd
+    ?? [
+      `# ${input.nickname?.trim() || input.role.trim()}`,
+      "",
+      "## Role",
+      input.role.trim(),
+      "",
+      "## Responsibilities",
+      input.description.trim(),
+    ].join("\n");
 
-  if (input.traits?.trim()) {
-    lines.push("", "## Traits", input.traits.trim());
-  }
-  if (typeof input.budget === "number") {
-    lines.push("", "## Budget", `Daily budget target: ${input.budget} USD`);
-  }
-  if (input.modelTier) {
-    lines.push("", "## Model Tier", input.modelTier);
+  const lines = roleMd.split("\n");
+  const hasReporting = lines.some((line) => line.trim().toLowerCase() === "## reporting");
+
+  if (!input.bootstrapBundle?.roleMd) {
+    if (input.traits?.trim()) {
+      lines.push("", "## Traits", input.traits.trim());
+    }
+    if (typeof input.budget === "number") {
+      lines.push("", "## Budget", `Daily budget target: ${input.budget} USD`);
+    }
+    if (input.modelTier) {
+      lines.push("", "## Model Tier", input.modelTier);
+    }
+    if (input.bootstrapBundle?.recommendedSkills?.length) {
+      lines.push(
+        "",
+        "## Recommended Skills",
+        ...input.bootstrapBundle.recommendedSkills.map((skill) => `- ${skill}`),
+      );
+    }
+    if (!hasReporting) {
+      lines.push(
+        "",
+        "## Reporting",
+        "Follow company dispatch and use `company_report` for structured status replies.",
+      );
+    }
   }
 
-  lines.push("", "## Reporting", "Follow company dispatch and use `company_report` for structured status replies.");
-  return {
+  files.push({
     agentId: input.agentId,
     name: "ROLE.md",
     content: lines.join("\n"),
-  };
+  });
+
+  if (input.bootstrapBundle?.soulMd?.trim()) {
+    files.push({
+      agentId: input.agentId,
+      name: "SOUL.md",
+      content: input.bootstrapBundle.soulMd.trim(),
+    });
+  }
+  if (input.bootstrapBundle?.onboardingMd?.trim()) {
+    files.push({
+      agentId: input.agentId,
+      name: "ONBOARDING.md",
+      content: input.bootstrapBundle.onboardingMd.trim(),
+    });
+  }
+
+  return files;
 }
 
 export function isAgentNotFoundError(error: unknown) {

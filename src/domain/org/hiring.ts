@@ -1,4 +1,15 @@
-import type { Company, Department, EmployeeRef } from "./types";
+import type {
+  Company,
+  Department,
+  EmployeeRef,
+  EmployeeTemplateBinding,
+  HireBootstrapBundle,
+  HireProvenance,
+} from "./types";
+import {
+  buildCompanyAgentNamespace,
+  normalizeCompanyAgentId,
+} from "./agent-id";
 import { applyOneClickOrgFixups } from "./policies";
 
 export type HireEmployeePlanInput = {
@@ -12,6 +23,9 @@ export type HireEmployeePlanInput = {
   departmentColor?: string | null;
   makeDepartmentLead?: boolean;
   avatarJobId?: string;
+  templateBinding?: EmployeeTemplateBinding;
+  hireProvenance?: HireProvenance;
+  bootstrapBundle?: HireBootstrapBundle;
 };
 
 export type HireEmployeePlanResult = {
@@ -45,22 +59,21 @@ function inferNamespace(company: Company) {
   if (ceoAgentId.endsWith("-ceo")) {
     return ceoAgentId.slice(0, -"-ceo".length);
   }
-  const base = slugify(company.name) || "company";
-  return `${base}-${company.id.slice(0, 6)}`;
+  return buildCompanyAgentNamespace(company.name, company.id);
 }
 
 function buildUniqueAgentId(company: Company, role: string) {
   const namespace = inferNamespace(company);
-  const roleSlug = slugify(role) || "employee";
   const taken = new Set(company.employees.map((employee) => employee.agentId));
-  const base = `${namespace}-${roleSlug}`;
+  const normalizedBase = normalizeCompanyAgentId(`${namespace}-${role}`);
+  const base = normalizedBase === "main" ? `${namespace}-employee` : normalizedBase;
   if (!taken.has(base)) {
     return base;
   }
   for (let index = 2; index < 10_000; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!taken.has(candidate)) {
-      return candidate;
+    const next = `${base}-${index}`;
+    if (!taken.has(next)) {
+      return next;
     }
   }
   throw new Error(`无法为岗位 ${role} 生成唯一 agentId。`);
@@ -200,6 +213,9 @@ export function planHiredEmployee(company: Company, input: HireEmployeePlanInput
       : (input.reportsTo?.trim() || preferredManager || defaultManager || undefined),
     departmentId: department?.id ?? undefined,
     ...(input.avatarJobId ? { avatarJobId: input.avatarJobId } : {}),
+    ...(input.templateBinding ? { templateBinding: input.templateBinding } : {}),
+    ...(input.hireProvenance ? { hireProvenance: input.hireProvenance } : {}),
+    ...(input.bootstrapBundle ? { bootstrapBundle: input.bootstrapBundle } : {}),
   };
 
   const normalized = applyOneClickOrgFixups({

@@ -76,9 +76,10 @@ describe("planHiredEmployee", () => {
 
     expect(result.department).toMatchObject({
       name: "内容创作事业部",
-      leadAgentId: "nl-0845da-内容总监",
+      leadAgentId: "nl-0845da",
       kind: "business",
     });
+    expect(result.employee.agentId).toBe("nl-0845da");
     expect(result.employee.departmentId).toBe(result.department?.id);
     expect(result.employee.reportsTo).toBe("nl-0845da-ceo");
   });
@@ -129,15 +130,17 @@ describe("planHiredEmployeesBatch", () => {
       "内容编辑",
     ]);
     expect(result.company.departments?.find((department) => department.name === "内容创作事业部")).toMatchObject({
-      leadAgentId: "nl-0845da-内容总监",
+      leadAgentId: "nl-0845da",
     });
     expect(result.company.employees.find((employee) => employee.role === "内容主笔")).toMatchObject({
       departmentId: result.company.departments?.find((department) => department.name === "内容创作事业部")?.id,
-      reportsTo: "nl-0845da-内容总监",
+      reportsTo: "nl-0845da",
     });
     expect(result.company.employees.find((employee) => employee.role === "内容编辑")).toMatchObject({
-      reportsTo: "nl-0845da-内容总监",
+      reportsTo: "nl-0845da",
     });
+    expect(result.company.employees.find((employee) => employee.role === "内容主笔")?.agentId).toBe("nl-0845da-2");
+    expect(result.company.employees.find((employee) => employee.role === "内容编辑")?.agentId).toBe("nl-0845da-3");
   });
 
   it("rejects a new department batch when no lead hire is present", () => {

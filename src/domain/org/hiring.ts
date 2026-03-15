@@ -1,4 +1,5 @@
 import type { Company, Department, EmployeeRef } from "./types";
+import { buildCompanyAgentNamespace, normalizeCompanyAgentId } from "./agent-id";
 import { applyOneClickOrgFixups } from "./policies";
 
 export type HireEmployeePlanInput = {
@@ -45,15 +46,14 @@ function inferNamespace(company: Company) {
   if (ceoAgentId.endsWith("-ceo")) {
     return ceoAgentId.slice(0, -"-ceo".length);
   }
-  const base = slugify(company.name) || "company";
-  return `${base}-${company.id.slice(0, 6)}`;
+  return buildCompanyAgentNamespace(company.name, company.id);
 }
 
 function buildUniqueAgentId(company: Company, role: string) {
   const namespace = inferNamespace(company);
-  const roleSlug = slugify(role) || "employee";
   const taken = new Set(company.employees.map((employee) => employee.agentId));
-  const base = `${namespace}-${roleSlug}`;
+  const normalizedBase = normalizeCompanyAgentId(`${namespace}-${role}`);
+  const base = normalizedBase === "main" ? `${namespace}-employee` : normalizedBase;
   if (!taken.has(base)) {
     return base;
   }

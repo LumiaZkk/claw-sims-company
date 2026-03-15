@@ -114,6 +114,12 @@ import type {
 } from "../../../src/domain/mission/types";
 import { buildDefaultOrgSettings } from "../../../src/domain/org/autonomy-policy";
 import {
+  buildCanonicalAgentIdMigrationMap,
+  buildCompanyAgentNamespace,
+  normalizeCompanyAgentId,
+  rewriteKnownAgentReferences,
+} from "../../../src/domain/org/agent-id";
+import {
   planHiredEmployeesBatch,
 } from "../../../src/domain/org/hiring";
 import {
@@ -448,19 +454,27 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 }
 
 function normalizeCompany(company: Company): Company {
+  const agentIdMapping = buildCanonicalAgentIdMigrationMap(
+    company.employees.map((employee) => employee.agentId),
+  );
+  const canonicalAgentIds = new Set(agentIdMapping.values());
+  const migratedCompany = rewriteKnownAgentReferences(company, {
+    exactMap: agentIdMapping,
+    canonicalIds: canonicalAgentIds,
+  });
   return {
-    ...company,
-    orgSettings: buildDefaultOrgSettings(company.orgSettings),
-    approvals: sortApprovals(company.approvals ?? []),
-    supportRequests: (company.supportRequests ?? [])
+    ...migratedCompany,
+    orgSettings: buildDefaultOrgSettings(migratedCompany.orgSettings),
+    approvals: sortApprovals(migratedCompany.approvals ?? []),
+    supportRequests: (migratedCompany.supportRequests ?? [])
       .map(normalizeSupportRequestRecord)
       .filter(isSupportRequestActive),
-    escalations: (company.escalations ?? [])
+    escalations: (migratedCompany.escalations ?? [])
       .map(normalizeEscalationRecord)
       .filter(
       (item) => item.status === "open" || item.status === "acknowledged",
       ),
-    decisionTickets: (company.decisionTickets ?? []).filter(
+    decisionTickets: (migratedCompany.decisionTickets ?? []).filter(
       (item) => item.status === "open" || item.status === "pending_human",
     ),
   };
@@ -472,48 +486,54 @@ function normalizeRuntimeSnapshot(
 ): AuthorityCompanyRuntimeSnapshot {
   const normalizeRevision = (value: number | null | undefined) =>
     Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : 1;
+  const canonicalAgentIds = new Set(company?.employees.map((employee) => employee.agentId) ?? []);
+  const migratedSnapshot = canonicalAgentIds.size > 0
+    ? rewriteKnownAgentReferences(snapshot, {
+      canonicalIds: canonicalAgentIds,
+    })
+    : snapshot;
   return {
-    ...snapshot,
-    activeWorkItems: snapshot.activeWorkItems.map((workItem) =>
+    ...migratedSnapshot,
+    activeWorkItems: migratedSnapshot.activeWorkItems.map((workItem) =>
       normalizeWorkItemDepartmentOwnership({
         company,
         workItem,
       }),
     ),
-    activeRoomRecords: (snapshot.activeRoomRecords ?? []).map((room) => ({
+    activeRoomRecords: (migratedSnapshot.activeRoomRecords ?? []).map((room) => ({
       ...room,
       revision: normalizeRevision(room.revision),
     })),
-    activeArtifacts: (snapshot.activeArtifacts ?? []).map((artifact) => ({
+    activeArtifacts: (migratedSnapshot.activeArtifacts ?? []).map((artifact) => ({
       ...artifact,
       revision: normalizeRevision(artifact.revision),
     })),
-    activeDispatches: (snapshot.activeDispatches ?? []).map((dispatch) => ({
+    activeDispatches: (migratedSnapshot.activeDispatches ?? []).map((dispatch) => ({
       ...dispatch,
       revision: normalizeRevision(dispatch.revision),
     })),
-    activeSupportRequests: (snapshot.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
-    activeEscalations: (snapshot.activeEscalations ?? []).map(normalizeEscalationRecord),
-    activeDecisionTickets: (snapshot.activeDecisionTickets ?? []).map((ticket) => ({
+    activeSupportRequests: (migratedSnapshot.activeSupportRequests ?? []).map(normalizeSupportRequestRecord),
+    activeEscalations: (migratedSnapshot.activeEscalations ?? []).map(normalizeEscalationRecord),
+    activeDecisionTickets: (migratedSnapshot.activeDecisionTickets ?? []).map((ticket) => ({
       ...ticket,
       revision: normalizeRevision(ticket.revision),
     })),
-    activeAgentSessions: [...(snapshot.activeAgentSessions ?? [])].sort(
+    activeAgentSessions: [...(migratedSnapshot.activeAgentSessions ?? [])].sort(
       (left, right) => (right.lastSeenAt ?? 0) - (left.lastSeenAt ?? 0),
     ),
-    activeAgentRuns: [...(snapshot.activeAgentRuns ?? [])].sort(
+    activeAgentRuns: [...(migratedSnapshot.activeAgentRuns ?? [])].sort(
       (left, right) => right.lastEventAt - left.lastEventAt,
     ),
-    activeAgentRuntime: [...(snapshot.activeAgentRuntime ?? [])].sort((left, right) =>
+    activeAgentRuntime: [...(migratedSnapshot.activeAgentRuntime ?? [])].sort((left, right) =>
       left.agentId.localeCompare(right.agentId),
     ),
-    activeAgentStatuses: [...(snapshot.activeAgentStatuses ?? [])].sort((left, right) =>
+    activeAgentStatuses: [...(migratedSnapshot.activeAgentStatuses ?? [])].sort((left, right) =>
       left.agentId.localeCompare(right.agentId),
     ),
-    activeAgentStatusHealth: snapshot.activeAgentStatusHealth
+    activeAgentStatusHealth: migratedSnapshot.activeAgentStatusHealth
       ? {
-          ...snapshot.activeAgentStatusHealth,
-          missingAgentIds: [...snapshot.activeAgentStatusHealth.missingAgentIds].sort((left, right) =>
+          ...migratedSnapshot.activeAgentStatusHealth,
+          missingAgentIds: [...migratedSnapshot.activeAgentStatusHealth.missingAgentIds].sort((left, right) =>
             left.localeCompare(right),
           ),
         }
@@ -3475,7 +3495,7 @@ function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
     COMPANY_TEMPLATES[0];
   const companyId = crypto.randomUUID();
   const companyName = input.companyName.trim() || blueprint?.sourceCompanyName || "新公司";
-  const namespace = `${slugify(companyName)}-${companyId.slice(0, 6)}`;
+  const namespace = buildCompanyAgentNamespace(companyName, companyId);
 
   const departments: Department[] = [
     {
@@ -3569,7 +3589,10 @@ function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
     blueprintIdMap.set("meta:coo", `${namespace}-coo`);
 
     for (const employee of blueprint.employees.filter((entry) => !entry.isMeta)) {
-      const agentId = `${namespace}-${slugify(employee.nickname || employee.role)}-${employees.length}`;
+      const normalizedAgentId = normalizeCompanyAgentId(`${namespace}-${employee.nickname || employee.role}`);
+      const agentId = normalizedAgentId === "main"
+        ? `${namespace}-employee-${employees.length}`
+        : `${normalizedAgentId}-${employees.length}`;
       blueprintIdMap.set(employee.blueprintId, agentId);
       employees.push({
         agentId,
@@ -3600,8 +3623,11 @@ function buildCompanyDefinition(input: AuthorityCreateCompanyRequest): {
   } else {
     for (const employee of template?.employees ?? []) {
       const reportsTo = employee.reportsToRole ? reportsToMap[employee.reportsToRole] : reportsToMap.ceo;
+      const normalizedAgentId = normalizeCompanyAgentId(`${namespace}-${employee.nickname || employee.role}`);
       employees.push({
-        agentId: `${namespace}-${slugify(employee.nickname || employee.role)}-${employees.length}`,
+        agentId: normalizedAgentId === "main"
+          ? `${namespace}-employee-${employees.length}`
+          : `${normalizedAgentId}-${employees.length}`,
         nickname: employee.nickname,
         role: employee.role,
         isMeta: false,

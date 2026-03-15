@@ -24,7 +24,7 @@ vi.mock("../../application/org/employee-ops", () => ({
   },
 }));
 
-vi.mock("../../components/system/toast-store", () => ({
+vi.mock("../../system/toast-store", () => ({
   toast: {
     info: toastInfo,
   },

@@ -1,6 +1,8 @@
 import { StrongCompanyDeleteError, deleteCompanyStrongConsistency } from "./company-delete";
 import type { Company, CyberCompanyConfig } from "../../../../src/domain/org/types";
 import type {
+  AuthorityBatchPreviewHireRequest,
+  AuthorityBatchPreviewHireResponse,
   AuthorityBatchHireEmployeesRequest,
   AuthorityBatchHireEmployeesResponse,
   AuthorityBootstrapSnapshot,
@@ -10,6 +12,8 @@ import type {
   AuthorityEvent,
   AuthorityExecutorStatus,
   AuthorityHireEmployeeInput,
+  AuthorityPreviewHireRequest,
+  AuthorityPreviewHireResponse,
   AuthorityHireEmployeeRequest,
   AuthorityHireEmployeeResponse,
   AuthorityRetryCompanyProvisioningResponse,
@@ -63,10 +67,23 @@ type AuthorityCompanyManagementCommandDependencies = {
   hireCompanyEmployeeStrongConsistency: (
     input: AuthorityHireEmployeeRequest,
   ) => Promise<AuthorityHireEmployeeResponse>;
+  previewCompanyEmployeeHire: (
+    input: AuthorityPreviewHireRequest,
+  ) => AuthorityPreviewHireResponse;
+  previewCompanyEmployeesHire: (
+    input: AuthorityBatchPreviewHireRequest,
+  ) => AuthorityBatchPreviewHireResponse;
   hireCompanyEmployeesStrongConsistency: (input: {
     companyId: string;
     hires: AuthorityHireEmployeeInput[];
   }) => Promise<AuthorityBatchHireEmployeesResponse>;
+  hireCompanyEmployeeWithProvisioningFallback: (
+    input: AuthorityHireEmployeeRequest,
+  ) => Promise<{ payload: AuthorityHireEmployeeResponse; provisioningFailure: unknown | null }>;
+  hireCompanyEmployeesWithProvisioningFallback: (input: {
+    companyId: string;
+    hires: AuthorityHireEmployeeInput[];
+  }) => Promise<{ payload: AuthorityBatchHireEmployeesResponse; provisioningFailure: unknown | null }>;
   buildBootstrapSnapshot: () => AuthorityBootstrapSnapshot;
   getExecutorState: () => AuthorityExecutorStatus["state"];
   deleteManagedAgentFromExecutor: (agentId: string) => Promise<void>;
@@ -131,14 +148,13 @@ export function createAuthorityCompanyManagementCommands(
             preferences: { theme: "classic", locale: "zh-CN" },
           };
 
-      let provisioningFailure: unknown = null;
       let provisionedCompany: Company | null = null;
 
       await deps.runManagedExecutorMutation(async () => {
         deps.repository.saveConfig(nextConfig);
         deps.repository.saveRuntime(seededRuntime);
         try {
-          await deps.ensureManagedCompanyExecutorProvisionedBestEffort(
+          await deps.ensureManagedCompanyExecutorProvisioned(
             company,
             deps.repository.loadRuntime(company.id),
             "company.create",
@@ -151,18 +167,19 @@ export function createAuthorityCompanyManagementCommands(
             activeCompanyId: company.id,
           });
         } catch (error) {
-          provisioningFailure = error;
-          provisionedCompany = deps.updateCompanyExecutorProvisioning({
-            companyId: company.id,
-            state: deps.resolveProvisioningFailureState(),
-            pendingAgentIds: deps.listManagedProvisioningAgentIds(company),
-            lastError: deps.stringifyError(error),
-            activeCompanyId: company.id,
-          });
-          deps.logWarn?.(
-            `Managed OpenClaw provisioning for ${company.id} degraded during company create.`,
-            error,
-          );
+          for (const agentId of [...deps.listManagedProvisioningAgentIds(company)].reverse()) {
+            try {
+              await deps.deleteManagedAgentFromExecutor(agentId);
+            } catch (rollbackError) {
+              deps.logWarn?.(
+                `Failed to roll back managed OpenClaw agent ${agentId} after company create failure.`,
+                rollbackError,
+              );
+            }
+          }
+          deps.repository.deleteCompany(company.id);
+          deps.repository.clearManagedExecutorAgentsForCompany(company.id);
+          throw new Error(`创建公司失败，已回滚：${deps.stringifyError(error)}`);
         }
       });
 
@@ -173,7 +190,7 @@ export function createAuthorityCompanyManagementCommands(
           ?? company,
         config: deps.repository.loadConfig() ?? nextConfig,
         runtime: deps.repository.loadRuntime(company.id),
-        warnings: provisioningFailure ? [`执行器仍在补齐：${deps.stringifyError(provisioningFailure)}`] : [],
+        warnings: [],
       };
 
       return {
@@ -181,8 +198,7 @@ export function createAuthorityCompanyManagementCommands(
         payload,
         postCommit: {
           schedule: { reason: "company.create", companyId: company.id },
-          managedExecutorSyncReason:
-            provisioningFailure ? "company.create.degraded" : "company.create",
+          managedExecutorSyncReason: "company.create",
           broadcasts: buildEvents(["bootstrap.updated", "company.updated"], now(), company.id),
         },
       };
@@ -255,17 +271,78 @@ export function createAuthorityCompanyManagementCommands(
       companyId: string;
       body: AuthorityHireEmployeeRequest;
     }): Promise<AuthorityCompanyManagementCommandResult> {
-      const payload = await deps.hireCompanyEmployeeStrongConsistency({
-        ...input.body,
-        companyId: input.companyId,
-      });
+      const { payload: basePayload, provisioningFailure } =
+        await deps.hireCompanyEmployeeWithProvisioningFallback({
+          ...input.body,
+          companyId: input.companyId,
+        });
+      const payload: AuthorityHireEmployeeResponse = provisioningFailure
+        ? {
+            ...basePayload,
+            company:
+              deps.updateCompanyExecutorProvisioning({
+                companyId: input.companyId,
+                state: deps.resolveProvisioningFailureState(),
+                pendingAgentIds: deps.listManagedProvisioningAgentIds(basePayload.company),
+                lastError: deps.stringifyError(provisioningFailure),
+              }) ?? basePayload.company,
+            warnings: [
+              ...basePayload.warnings,
+              `执行器仍在补齐：${deps.stringifyError(provisioningFailure)}`,
+            ],
+          }
+        : {
+            ...basePayload,
+            company:
+              deps.updateCompanyExecutorProvisioning({
+                companyId: input.companyId,
+                state: "ready",
+                pendingAgentIds: [],
+                lastError: null,
+              }) ?? basePayload.company,
+          };
+      if (provisioningFailure) {
+        deps.logWarn?.(
+          `Managed OpenClaw provisioning for ${input.companyId} degraded during employee hire.`,
+          provisioningFailure,
+        );
+      }
       return {
         status: 200,
         payload,
         postCommit: {
           schedule: { reason: "company.employee.hire", companyId: input.companyId },
+          ...(provisioningFailure
+            ? { managedExecutorSyncReason: "company.employee.hire.degraded" }
+            : {}),
           broadcasts: buildEvents(["bootstrap.updated", "company.updated"], now(), input.companyId),
         },
+      };
+    },
+
+    async previewHireEmployee(input: {
+      companyId: string;
+      body: AuthorityPreviewHireRequest;
+    }): Promise<AuthorityCompanyManagementCommandResult> {
+      return {
+        status: 200,
+        payload: deps.previewCompanyEmployeeHire({
+          ...input.body,
+          companyId: input.companyId,
+        }),
+      };
+    },
+
+    async previewBatchHireEmployees(input: {
+      companyId: string;
+      body: AuthorityBatchPreviewHireRequest;
+    }): Promise<AuthorityCompanyManagementCommandResult> {
+      return {
+        status: 200,
+        payload: deps.previewCompanyEmployeesHire({
+          companyId: input.companyId,
+          hires: Array.isArray(input.body.hires) ? input.body.hires : [],
+        }),
       };
     },
 
@@ -273,15 +350,50 @@ export function createAuthorityCompanyManagementCommands(
       companyId: string;
       body: AuthorityBatchHireEmployeesRequest;
     }): Promise<AuthorityCompanyManagementCommandResult> {
-      const payload = await deps.hireCompanyEmployeesStrongConsistency({
-        companyId: input.companyId,
-        hires: Array.isArray(input.body.hires) ? input.body.hires : [],
-      });
+      const { payload: basePayload, provisioningFailure } =
+        await deps.hireCompanyEmployeesWithProvisioningFallback({
+          companyId: input.companyId,
+          hires: Array.isArray(input.body.hires) ? input.body.hires : [],
+        });
+      const payload: AuthorityBatchHireEmployeesResponse = provisioningFailure
+        ? {
+            ...basePayload,
+            company:
+              deps.updateCompanyExecutorProvisioning({
+                companyId: input.companyId,
+                state: deps.resolveProvisioningFailureState(),
+                pendingAgentIds: deps.listManagedProvisioningAgentIds(basePayload.company),
+                lastError: deps.stringifyError(provisioningFailure),
+              }) ?? basePayload.company,
+            warnings: [
+              ...basePayload.warnings,
+              `执行器仍在补齐：${deps.stringifyError(provisioningFailure)}`,
+            ],
+          }
+        : {
+            ...basePayload,
+            company:
+              deps.updateCompanyExecutorProvisioning({
+                companyId: input.companyId,
+                state: "ready",
+                pendingAgentIds: [],
+                lastError: null,
+              }) ?? basePayload.company,
+          };
+      if (provisioningFailure) {
+        deps.logWarn?.(
+          `Managed OpenClaw provisioning for ${input.companyId} degraded during batch hire.`,
+          provisioningFailure,
+        );
+      }
       return {
         status: 200,
         payload,
         postCommit: {
           schedule: { reason: "company.employee.batch_hire", companyId: input.companyId },
+          ...(provisioningFailure
+            ? { managedExecutorSyncReason: "company.employee.batch_hire.degraded" }
+            : {}),
           broadcasts: buildEvents(["bootstrap.updated", "company.updated"], now(), input.companyId),
         },
       };

@@ -48,6 +48,12 @@ describe("company-workspace-plugin-sync", () => {
         "utf8",
       ),
     ).toContain('name: "company_dispatch"');
+    expect(
+      fs.readFileSync(
+        path.join(result.workspaceDir, ".openclaw/extensions/sims-company/index.js"),
+        "utf8",
+      ),
+    ).toContain('name: "authority.company.employee.preview_hire"');
   });
 
   it("removes the legacy company-dispatch plugin directory during sync", async () => {

@@ -73,6 +73,12 @@ const AUTHORITY_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     payload_json TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    payload_json TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS requirement_aggregates (
     id TEXT PRIMARY KEY,
     company_id TEXT NOT NULL,

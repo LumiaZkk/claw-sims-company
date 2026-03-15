@@ -574,6 +574,7 @@ export class AuthorityCompanyStore {
       "conversation_messages",
       "conversation_states",
       "work_items",
+      "projects",
       "requirement_aggregates",
       "requirement_evidence",
       "rooms",

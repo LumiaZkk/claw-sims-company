@@ -7,7 +7,7 @@ const WORKSPACE_ROOT = "/Users/zkk/openclaw/cyber-company";
 describe("company workspace bootstrap boundary", () => {
   it("keeps scenario-specific smoke fixtures out of the main bootstrap module", () => {
     const content = readFileSync(
-      join(WORKSPACE_ROOT, "packages/authority-daemon/src/company-workspace-bootstrap.ts"),
+      join(WORKSPACE_ROOT, "packages/authority-daemon/src/company/company-workspace-bootstrap.ts"),
       "utf8",
     );
 

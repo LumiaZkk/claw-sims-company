@@ -19,6 +19,20 @@ function readActorIdFromSession(value: { actorId?: unknown; key?: unknown }) {
       : null);
 }
 
+function isOptionalAgentFileError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("unsupported file") ||
+    message.includes("no such file") ||
+    message.includes("not found") ||
+    message.includes("missing") ||
+    message.includes("enoent")
+  );
+}
+
 type AuthorityGatewayProxyRepository = {
   getCompanyAgentIds: (companyId?: string | null) => string[];
   getConversationContext: (sessionKey: string) => { companyId: string; actorId: string | null } | null;
@@ -153,6 +167,27 @@ export function createAuthorityGatewayProxy<TStatus extends { agentId?: string |
         repository.deleteSession(sessionKey);
       }
       return result;
+    }
+
+    if (method === "agents.files.get" && isRecord(params)) {
+      const agentId = readString(params.agentId);
+      const name = readString(params.name);
+      try {
+        return await requestExecutor<T>(method, params ?? {});
+      } catch (error) {
+        if (agentId && name && isOptionalAgentFileError(error)) {
+          return {
+            agentId,
+            workspace: "",
+            file: {
+              name,
+              path: name,
+              missing: true,
+            },
+          } as T;
+        }
+        throw error;
+      }
     }
 
     if (method === "agents.files.set" && isRecord(params)) {

@@ -1,17 +1,12 @@
-import { useMemo, useState } from "react";
-import { useCompanyShellCommands, useCompanyShellQuery } from "./shell";
-import { parseCompanyBlueprint } from "./blueprint";
-import { COMPANY_TEMPLATES } from "./templates";
+import { useState } from "react";
+import { useCompanyShellCommands } from "./shell";
 import { createAuthorityCompany } from "../gateway/authority-control";
-
-export const BLUEPRINT_TEMPLATE_ID = "__blueprint__";
 
 export function useCompanyCreateApp(input: {
   companyName: string;
-  blueprintText: string;
-  selectedTemplate: string;
+  mode?: "blank" | "blueprint";
+  blueprintText?: string | null;
 }) {
-  const { config } = useCompanyShellQuery();
   const { loadConfig, switchCompany } = useCompanyShellCommands();
   const creationTotalSteps = 4;
   const [isCreating, setIsCreating] = useState(false);
@@ -26,13 +21,6 @@ export function useCompanyCreateApp(input: {
     history: [],
   });
 
-  const importedBlueprint = useMemo(
-    () => parseCompanyBlueprint(input.blueprintText),
-    [input.blueprintText],
-  );
-  const isBlueprintTemplate = input.selectedTemplate === BLUEPRINT_TEMPLATE_ID;
-  const selectedTemplateIsKnown = COMPANY_TEMPLATES.some((template) => template.id === input.selectedTemplate);
-
   const updateProgress = (current: number, message: string) => {
     setCreationProgress((state) => ({
       current,
@@ -42,31 +30,32 @@ export function useCompanyCreateApp(input: {
   };
 
   const handleCreate = async () => {
-    const blueprint = isBlueprintTemplate ? importedBlueprint : null;
-    const finalCompanyName = (input.companyName || blueprint?.sourceCompanyName || "").trim();
-    if (!finalCompanyName) {
+    const finalCompanyName = (input.companyName || "").trim();
+    const mode = input.mode ?? "blank";
+    const blueprintText = mode === "blueprint" ? (input.blueprintText || "").trim() : "";
+
+    if (mode !== "blueprint" && !finalCompanyName) {
       return null;
     }
-    if (isBlueprintTemplate && !blueprint) {
-      setCreationError("蓝图解析失败，请粘贴有效的 cyber-company.blueprint.v1 JSON。");
+    if (mode === "blueprint" && !blueprintText) {
       return null;
     }
     setIsCreating(true);
     setCreationError(null);
     setCreationProgress({ current: 0, message: "等待开始...", history: [] });
-    updateProgress(1, `正在创建公司「${finalCompanyName}」...`);
+    updateProgress(
+      1,
+      mode === "blueprint"
+        ? `正在导入蓝图并创建公司${finalCompanyName ? `「${finalCompanyName}」` : ""}...`
+        : `正在创建公司「${finalCompanyName}」...`,
+    );
 
     try {
-      const templateId =
-        blueprint?.template
-        || (selectedTemplateIsKnown ? input.selectedTemplate : null)
-        || config?.companies[0]?.template
-        || "blank";
-      updateProgress(2, blueprint ? "正在解析蓝图并在 authority 中建库..." : "正在在 authority 中初始化组织...");
+      updateProgress(2, "正在在 authority 中初始化组织...");
       const created = await createAuthorityCompany({
-        companyName: finalCompanyName,
-        templateId,
-        blueprintText: blueprint ? input.blueprintText : undefined,
+        companyName: mode === "blueprint" ? finalCompanyName : (finalCompanyName || "新公司"),
+        templateId: "blank",
+        blueprintText: mode === "blueprint" ? blueprintText : undefined,
       });
 
       updateProgress(
@@ -94,14 +83,10 @@ export function useCompanyCreateApp(input: {
   };
 
   return {
-    BLUEPRINT_TEMPLATE_ID,
-    COMPANY_TEMPLATES,
     creationError,
     creationProgress,
     creationTotalSteps,
     handleCreate,
-    importedBlueprint,
-    isBlueprintTemplate,
     isCreating,
   };
 }

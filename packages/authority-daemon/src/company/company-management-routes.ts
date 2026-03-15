@@ -1,8 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import type { AuthorityCompanyManagementCommandResult } from "./company-management-commands";
 import type {
+  AuthorityBatchPreviewHireRequest,
   AuthorityBatchHireEmployeesRequest,
   AuthorityCreateCompanyRequest,
+  AuthorityPreviewHireRequest,
   AuthorityHireEmployeeRequest,
   AuthoritySwitchCompanyRequest,
 } from "../../../../src/infrastructure/authority/contract";
@@ -14,6 +16,14 @@ export type AuthorityCompanyManagementRouteDependencies = {
   saveConfig: (config: CyberCompanyConfig) => Promise<AuthorityCompanyManagementRouteResult> | AuthorityCompanyManagementRouteResult;
   createCompany: (body: AuthorityCreateCompanyRequest) => Promise<AuthorityCompanyManagementRouteResult> | AuthorityCompanyManagementRouteResult;
   retryCompanyProvisioning: (companyId: string) => Promise<AuthorityCompanyManagementRouteResult> | AuthorityCompanyManagementRouteResult;
+  previewHireEmployee: (input: {
+    companyId: string;
+    body: AuthorityPreviewHireRequest;
+  }) => Promise<AuthorityCompanyManagementRouteResult> | AuthorityCompanyManagementRouteResult;
+  previewBatchHireEmployees: (input: {
+    companyId: string;
+    body: AuthorityBatchPreviewHireRequest;
+  }) => Promise<AuthorityCompanyManagementRouteResult> | AuthorityCompanyManagementRouteResult;
   hireEmployee: (input: {
     companyId: string;
     body: AuthorityHireEmployeeRequest;
@@ -54,6 +64,18 @@ export async function resolveAuthorityCompanyManagementRoute(input: {
     const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
     const body = await readJsonBody<AuthorityHireEmployeeRequest>(request);
     return deps.hireEmployee({ companyId, body });
+  }
+
+  if (method === "POST" && /\/companies\/[^/]+\/employees\/preview$/.test(url.pathname)) {
+    const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+    const body = await readJsonBody<AuthorityPreviewHireRequest>(request);
+    return deps.previewHireEmployee({ companyId, body });
+  }
+
+  if (method === "POST" && /\/companies\/[^/]+\/employees\/preview-batch$/.test(url.pathname)) {
+    const companyId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+    const body = await readJsonBody<AuthorityBatchPreviewHireRequest>(request);
+    return deps.previewBatchHireEmployees({ companyId, body });
   }
 
   if (method === "POST" && /\/companies\/[^/]+\/employees\/batch$/.test(url.pathname)) {

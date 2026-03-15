@@ -18,8 +18,20 @@ import type {
   WorkItemRecord,
 } from "../../domain/mission/types";
 import type { ApprovalRecord } from "../../domain/governance/types";
-import type { Company, CyberCompanyConfig, Department } from "../../domain/org/types";
+import type {
+  AgentTemplateDefinition,
+  Company,
+  CyberCompanyConfig,
+  HireIntent,
+  Department,
+  EmployeeTemplateBinding,
+  CompiledHireDraft,
+  HireBootstrapBundle,
+  HireProvenance,
+  TemplateMatch,
+} from "../../domain/org/types";
 import type { MetaRole } from "../../domain/meta-agent/types";
+import type { ProjectArchiveSummary, ProjectPriority, ProjectRecord, ProjectStatus } from "../../domain/project/types";
 import type {
   CanonicalAgentStatusRecord,
   CanonicalAgentStatusHealthRecord,
@@ -312,11 +324,61 @@ export type AuthorityHireEmployeeInput = {
   modelTier?: "standard" | "reasoning" | "ultra";
   traits?: string;
   budget?: number;
+  templateId?: string | null;
+  templateBinding?: EmployeeTemplateBinding;
+  compiledDraft?: CompiledHireDraft;
+  bootstrapBundle?: HireBootstrapBundle;
+  provenance?: HireProvenance;
 };
 
 export type AuthorityHireEmployeeRequest = {
   companyId: string;
 } & AuthorityHireEmployeeInput;
+
+export type AuthorityPreviewHireRequest = {
+  companyId: string;
+  role: string;
+  description: string;
+  nickname?: string;
+  reportsTo?: string | null;
+  departmentId?: string | null;
+  departmentName?: string | null;
+  departmentKind?: Department["kind"];
+  departmentColor?: string | null;
+  makeDepartmentLead?: boolean;
+  avatarJobId?: string;
+  modelTier?: "standard" | "reasoning" | "ultra";
+  traits?: string;
+  budget?: number;
+  templateId?: string | null;
+};
+
+export type AuthorityPreviewHireResponse = {
+  companyId: string;
+  intent: HireIntent;
+  matches: Array<{
+    template: AgentTemplateDefinition;
+    match: TemplateMatch;
+  }>;
+  selectionMode: "explicit" | "auto" | "blank";
+  selectedTemplateId: string | null;
+  selectedTemplateBinding: EmployeeTemplateBinding | null;
+  selectedDraft: CompiledHireDraft | null;
+  blankTemplateBinding: EmployeeTemplateBinding;
+  blankDraft: CompiledHireDraft;
+  warnings: string[];
+};
+
+export type AuthorityBatchPreviewHireRequest = {
+  companyId: string;
+  hires: AuthorityPreviewHireRequest[];
+};
+
+export type AuthorityBatchPreviewHireResponse = {
+  companyId: string;
+  previews: Array<AuthorityPreviewHireResponse & { inputIndex: number }>;
+  warnings: string[];
+};
 
 export type AuthorityHireEmployeeResponse = {
   company: Company;
@@ -602,6 +664,58 @@ export type AuthorityCompanyEventsResponse = {
   companyId: string;
   events: CompanyEvent[];
   nextCursor: string | null;
+};
+
+export type AuthorityCompanyProjectsResponse = {
+  companyId: string;
+  projects: ProjectRecord[];
+  updatedAt: number;
+};
+
+export type AuthorityProjectCreateRequest = {
+  companyId: string;
+  title: string;
+  goal: string;
+  summary?: string | null;
+  status?: ProjectStatus | null;
+  priority?: ProjectPriority | null;
+  ownerActorId?: string | null;
+  ownerLabel?: string | null;
+  participantActorIds?: string[] | null;
+  requirementAggregateId?: string | null;
+  workItemId?: string | null;
+  roomId?: string | null;
+  tagIds?: string[] | null;
+};
+
+export type AuthorityProjectPatchRequest = {
+  companyId: string;
+  projectId: string;
+  patch: Partial<{
+    title: string;
+    goal: string;
+    summary: string;
+    status: ProjectStatus;
+    priority: ProjectPriority;
+    ownerActorId: string | null;
+    ownerLabel: string;
+    participantActorIds: string[];
+    currentRunId: string | null;
+    latestAcceptedRunId: string | null;
+    requirementAggregateId: string | null;
+    workItemId: string | null;
+    roomId: string | null;
+    tagIds: string[];
+    closedAt: number | null;
+    archivedAt: number | null;
+    archiveSummary: ProjectArchiveSummary | null;
+  }>;
+  timestamp?: number;
+};
+
+export type AuthorityProjectMutationResponse = {
+  companyId: string;
+  project: ProjectRecord;
 };
 
 export type AuthorityCollaborationActor = {

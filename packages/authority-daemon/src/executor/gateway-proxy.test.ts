@@ -129,6 +129,31 @@ describe("createAuthorityGatewayProxy", () => {
     expect(repository.setAgentFile).toHaveBeenCalledWith("ceo", "brief.md", "hello");
   });
 
+  it("returns a missing file record when agent file fetch is optional", async () => {
+    const proxy = createAuthorityGatewayProxy({
+      requestExecutor: (vi.fn(async () => {
+        throw new Error("Unsupported file");
+      }) as unknown) as <R>(method: string, params?: unknown) => Promise<R>,
+      repository: createRepository(),
+      providerId: "openclaw",
+      getSessionStatusCapabilityState: () => "unknown",
+      updateSessionStatusCapability: vi.fn(),
+      normalizeProviderSessionStatus: vi.fn(),
+    });
+
+    const result = await proxy("agents.files.get", { agentId: "ceo", name: "TASK-BOARD.md" });
+
+    expect(result).toEqual({
+      agentId: "ceo",
+      workspace: "",
+      file: {
+        name: "TASK-BOARD.md",
+        path: "TASK-BOARD.md",
+        missing: true,
+      },
+    });
+  });
+
   it("rejects session_status when capability is unsupported", async () => {
     const proxy = createAuthorityGatewayProxy({
       requestExecutor: vi.fn(),

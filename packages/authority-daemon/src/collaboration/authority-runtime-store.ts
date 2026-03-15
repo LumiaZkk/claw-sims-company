@@ -84,7 +84,10 @@ import { isSameMissionRecord } from "../../../../src/infrastructure/company/runt
 import { reconcileStoredWorkItems } from "../../../../src/infrastructure/company/runtime/work-items";
 import type { ProviderRuntimeEvent } from "../../../../src/infrastructure/gateway/runtime/types";
 import type { AuthorityCompanyEventStore } from "../company/authority-company-event-store";
-import { buildManagedExecutorFilesForCompany } from "../company/company-executor-sync";
+import {
+  buildManagedExecutorFilesForCompany,
+  buildManagedExecutorProjectionFilesForCompany,
+} from "../company/company-executor-sync";
 import {
   decisionTicketMaterialChanged,
   EXECUTOR_PROVIDER_ID,
@@ -1194,14 +1197,23 @@ export class AuthorityRuntimeStore {
       return;
     }
     const syncAuthorityAgentFileMirror = getSyncAuthorityAgentFileMirror();
-    for (const file of buildManagedExecutorFilesForCompany(company, {
+    const files = buildManagedExecutorFilesForCompany(company, {
       activeWorkItems: runtime.activeWorkItems,
       activeSupportRequests: runtime.activeSupportRequests,
       activeEscalations: runtime.activeEscalations,
       activeDecisionTickets: runtime.activeDecisionTickets,
-    })) {
+    });
+    const projectionKeys = new Set(
+      buildManagedExecutorProjectionFilesForCompany(company, {
+        activeWorkItems: runtime.activeWorkItems,
+        activeSupportRequests: runtime.activeSupportRequests,
+        activeEscalations: runtime.activeEscalations,
+        activeDecisionTickets: runtime.activeDecisionTickets,
+      }).map((file) => `${file.agentId}:${file.name}`),
+    );
+    for (const file of files) {
       const saved = this.deps.setAgentFile(file.agentId, file.name, file.content);
-      if (!saved.changed) {
+      if (!saved.changed || !projectionKeys.has(`${file.agentId}:${file.name}`)) {
         continue;
       }
       syncAuthorityAgentFileMirror?.({

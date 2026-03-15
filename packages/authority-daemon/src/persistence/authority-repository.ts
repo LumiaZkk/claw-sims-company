@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import type { ProjectRecord } from "../../../../src/domain/project/types";
 import type {
   AuthorityBootstrapSnapshot,
   AuthorityCollaborationScopeResponse,
@@ -12,6 +13,7 @@ import type {
 import { AuthorityChatConversationStore } from "../agent/authority-chat-conversation-store";
 import { AuthorityCompanyEventStore } from "../company/authority-company-event-store";
 import { AuthorityCompanyStore } from "../company/authority-company-store";
+import { AuthorityProjectStore } from "../company/authority-project-store";
 import { AuthorityExecutorStateStore } from "../executor/authority-executor-state-store";
 import {
   buildAuthorityBootstrapSnapshot,
@@ -24,7 +26,7 @@ export {
   DATA_DIR,
   DEFAULT_OPENCLAW_URL,
   EXECUTOR_PROVIDER_ID,
-  buildEmployeeBootstrapFile,
+  buildEmployeeBootstrapFiles,
   createDefaultStoredExecutorConfig,
   decisionTicketMaterialChanged,
   getSyncAuthorityAgentFileMirror,
@@ -77,6 +79,7 @@ export class AuthorityRepository {
   private readonly chatStore: AuthorityChatConversationStore;
   private readonly eventStore: AuthorityCompanyEventStore;
   private readonly companyStore: AuthorityCompanyStore;
+  private readonly projectStore: AuthorityProjectStore;
   private readonly executorStateStore: AuthorityExecutorStateStore;
   private readonly runtimeStore: AuthorityRuntimeStore;
 
@@ -84,6 +87,7 @@ export class AuthorityRepository {
     mkdirSync(DATA_DIR, { recursive: true });
     this.db = this.openDbConnection();
     this.initSchema();
+    this.projectStore = new AuthorityProjectStore({ getDb: () => this.db });
     this.chatStore = new AuthorityChatConversationStore({
       getDb: () => this.db,
       dbPath: this.dbPath,
@@ -534,6 +538,22 @@ export class AuthorityRepository {
 
   deleteDecisionTicket(input: Parameters<AuthorityRuntimeStore["deleteDecisionTicket"]>[0]) {
     return this.runtimeStore.deleteDecisionTicket(input);
+  }
+
+  listCompanyProjects(companyId: string) {
+    return this.projectStore.listProjects(companyId);
+  }
+
+  loadCompanyProject(companyId: string, projectId: string) {
+    return this.projectStore.loadProject(companyId, projectId);
+  }
+
+  createCompanyProject(project: Omit<ProjectRecord, "createdAt" | "updatedAt">) {
+    return this.projectStore.createProject(project);
+  }
+
+  patchCompanyProject(companyId: string, projectId: string, patch: Partial<ProjectRecord>) {
+    return this.projectStore.patchProject(companyId, projectId, patch);
   }
 }
 

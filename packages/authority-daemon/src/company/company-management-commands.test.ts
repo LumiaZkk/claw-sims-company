@@ -124,9 +124,14 @@ function createDeps() {
       }),
       deleteCompany: vi.fn((companyId: string) => {
         if (currentConfig) {
+          const nextCompanies = currentConfig.companies.filter((company) => company.id !== companyId);
           currentConfig = {
             ...currentConfig,
-            companies: currentConfig.companies.filter((company) => company.id !== companyId),
+            companies: nextCompanies,
+            activeCompanyId:
+              currentConfig.activeCompanyId === companyId
+                ? (nextCompanies[0]?.id ?? currentConfig.activeCompanyId)
+                : currentConfig.activeCompanyId,
           };
         }
       }),
@@ -159,6 +164,40 @@ function createDeps() {
     listManagedProvisioningAgentIds: vi.fn(() => ["agent-1", "agent-2"]),
     resolveProvisioningFailureState: vi.fn(() => "degraded" as const),
     stringifyError: vi.fn((error: unknown) => (error instanceof Error ? error.message : String(error))),
+    previewCompanyEmployeeHire: vi.fn((input: { companyId: string; role: string; description: string }) => ({
+      companyId: input.companyId,
+      intent: {
+        companyId: input.companyId,
+        rolePrompt: input.role,
+        businessContext: input.description,
+      },
+      matches: [],
+      selectionMode: "blank" as const,
+      selectedTemplateId: null,
+      selectedTemplateBinding: null,
+      selectedDraft: null,
+      blankTemplateBinding: {
+        templateId: null,
+        sourceType: "blank" as const,
+        compiledAt: 1,
+        compilerVersion: "tm-compiler@1",
+        confidence: null,
+      },
+      blankDraft: {
+        companyId: input.companyId,
+        sourceType: "blank",
+        role: input.role,
+        description: input.description,
+        bootstrapBundle: { roleMd: "# blank" },
+        provenance: { sourceType: "blank", reasons: [] },
+      },
+      warnings: [],
+    })),
+    previewCompanyEmployeesHire: vi.fn((input: { companyId: string }) => ({
+      companyId: input.companyId,
+      previews: [],
+      warnings: [],
+    })),
     hireCompanyEmployeeStrongConsistency: vi.fn(
       async (): Promise<AuthorityHireEmployeeResponse> =>
         ({
@@ -186,6 +225,39 @@ function createDeps() {
         role: "Writer",
         isMeta: false,
       })),
+    })),
+    hireCompanyEmployeeWithProvisioningFallback: vi.fn(
+      async (): Promise<{ payload: AuthorityHireEmployeeResponse; provisioningFailure: unknown | null }> => ({
+        payload: {
+          company: createCompany(),
+          config: currentConfig!,
+          runtime: createRuntime(currentConfig?.activeCompanyId ?? "company-1"),
+          warnings: [],
+          employees: [],
+          employee: {
+            agentId: "employee-1",
+            nickname: "Employee",
+            role: "Writer",
+            isMeta: false,
+          },
+        } as AuthorityHireEmployeeResponse,
+        provisioningFailure: null,
+      }),
+    ),
+    hireCompanyEmployeesWithProvisioningFallback: vi.fn(async ({ companyId, hires }) => ({
+      payload: {
+        company: createCompany(companyId),
+        config: currentConfig!,
+        runtime: createRuntime(companyId),
+        warnings: [],
+        employees: hires.map((_: AuthorityHireEmployeeInput, index: number) => ({
+          agentId: `employee-${index + 1}`,
+          nickname: `Employee ${index + 1}`,
+          role: "Writer",
+          isMeta: false,
+        })),
+      },
+      provisioningFailure: null,
     })),
     buildBootstrapSnapshot: vi.fn(() => createBootstrapSnapshot(currentConfig ?? createConfig(existingCompany))),
     getExecutorState: vi.fn<() => AuthorityExecutorStatus["state"]>(() => executorState),
@@ -222,39 +294,27 @@ describe("createAuthorityCompanyManagementCommands", () => {
     });
   });
 
-  it("marks company create as degraded when executor provisioning falls back", async () => {
+  it("fails company create and rolls back local state when executor provisioning fails", async () => {
     const deps = createDeps();
-    deps.ensureManagedCompanyExecutorProvisionedBestEffort.mockRejectedValueOnce(
+    deps.ensureManagedCompanyExecutorProvisioned.mockRejectedValueOnce(
       new Error("executor down"),
     );
     const commands = createAuthorityCompanyManagementCommands(deps);
 
-    const result = await commands.createCompany({
-      companyName: "Nova",
-    } as Parameters<typeof commands.createCompany>[0]);
+    await expect(
+      commands.createCompany({
+        companyName: "Nova",
+      } as Parameters<typeof commands.createCompany>[0]),
+    ).rejects.toThrow("创建公司失败，已回滚：executor down");
 
     expect(deps.repository.saveConfig).toHaveBeenCalled();
     expect(deps.repository.saveRuntime).toHaveBeenCalled();
-    expect(deps.updateCompanyExecutorProvisioning).toHaveBeenCalledWith(
-      expect.objectContaining({
-        companyId: "company-new",
-        state: "degraded",
-        pendingAgentIds: ["agent-1", "agent-2"],
-        lastError: "executor down",
-      }),
-    );
-    expect(deps.logWarn).toHaveBeenCalled();
-    expect(result.postCommit).toEqual({
-      schedule: { reason: "company.create", companyId: "company-new" },
-      managedExecutorSyncReason: "company.create.degraded",
-      broadcasts: [
-        { type: "bootstrap.updated", companyId: "company-new", timestamp: 1234567890 },
-        { type: "company.updated", companyId: "company-new", timestamp: 1234567890 },
-      ],
-    });
-    expect((result.payload as { warnings: string[] }).warnings).toEqual([
-      "执行器仍在补齐：executor down",
-    ]);
+    expect(deps.repository.deleteCompany).toHaveBeenCalledWith("company-new");
+    expect(deps.repository.clearManagedExecutorAgentsForCompany).toHaveBeenCalledWith("company-new");
+    expect(deps.deleteManagedAgentFromExecutor).toHaveBeenNthCalledWith(1, "agent-2");
+    expect(deps.deleteManagedAgentFromExecutor).toHaveBeenNthCalledWith(2, "agent-1");
+    expect(deps.updateCompanyExecutorProvisioning).not.toHaveBeenCalled();
+    expect(deps.repository.loadConfig()).toEqual(createConfig(createCompany("company-1")));
   });
 
   it("maps strong company delete failures to response payloads", async () => {
@@ -267,6 +327,165 @@ describe("createAuthorityCompanyManagementCommands", () => {
     expect(result).toEqual({
       status: 503,
       payload: { error: "OpenClaw 未就绪，未执行本地删除。" },
+    });
+  });
+
+  it("returns degraded hire payload with warning and executor sync hint", async () => {
+    const deps = createDeps();
+    deps.hireCompanyEmployeeWithProvisioningFallback.mockResolvedValueOnce({
+      payload: {
+        company: createCompany("company-1"),
+        config: createConfig(createCompany("company-1")),
+        runtime: createRuntime("company-1"),
+        warnings: [],
+        employee: {
+          agentId: "employee-1",
+          nickname: "Employee",
+          role: "Writer",
+          isMeta: false,
+        },
+      },
+      provisioningFailure: new Error("executor offline"),
+    });
+    const commands = createAuthorityCompanyManagementCommands(deps);
+
+    const result = await commands.hireEmployee({
+      companyId: "company-1",
+      body: {
+        companyId: "company-1",
+        role: "Writer",
+        description: "Draft release notes",
+      },
+    });
+
+    expect(deps.updateCompanyExecutorProvisioning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        state: "degraded",
+        pendingAgentIds: ["agent-1", "agent-2"],
+        lastError: "executor offline",
+      }),
+    );
+    expect(result).toEqual({
+      status: 200,
+      payload: expect.objectContaining({
+        warnings: ["执行器仍在补齐：executor offline"],
+      }),
+      postCommit: {
+        schedule: { reason: "company.employee.hire", companyId: "company-1" },
+        managedExecutorSyncReason: "company.employee.hire.degraded",
+        broadcasts: [
+          { type: "bootstrap.updated", companyId: "company-1", timestamp: 1234567890 },
+          { type: "company.updated", companyId: "company-1", timestamp: 1234567890 },
+        ],
+      },
+    });
+    expect(deps.logWarn).toHaveBeenCalled();
+  });
+
+  it("returns preview payload without post-commit side effects", async () => {
+    const deps = createDeps();
+    const commands = createAuthorityCompanyManagementCommands(deps);
+
+    const result = await commands.previewHireEmployee({
+      companyId: "company-1",
+      body: {
+        companyId: "company-1",
+        role: "Writer",
+        description: "Draft release notes",
+      },
+    });
+
+    expect(deps.previewCompanyEmployeeHire).toHaveBeenCalledWith({
+      companyId: "company-1",
+      role: "Writer",
+      description: "Draft release notes",
+    });
+    expect(result).toEqual({
+      status: 200,
+      payload: expect.objectContaining({
+        companyId: "company-1",
+        selectionMode: "blank",
+      }),
+    });
+    expect(result.postCommit).toBeUndefined();
+  });
+
+  it("returns batch preview payload without post-commit side effects", async () => {
+    const deps = createDeps();
+    const commands = createAuthorityCompanyManagementCommands(deps);
+
+    const result = await commands.previewBatchHireEmployees({
+      companyId: "company-1",
+      body: {
+        companyId: "company-1",
+        hires: [
+          {
+            companyId: "company-1",
+            role: "Writer",
+            description: "Draft release notes",
+          },
+          {
+            companyId: "company-1",
+            role: "Designer",
+            description: "Own visual delivery",
+          },
+        ],
+      },
+    });
+
+    expect(deps.previewCompanyEmployeesHire).toHaveBeenCalledWith({
+      companyId: "company-1",
+      hires: [
+        {
+          companyId: "company-1",
+          role: "Writer",
+          description: "Draft release notes",
+        },
+        {
+          companyId: "company-1",
+          role: "Designer",
+          description: "Own visual delivery",
+        },
+      ],
+    });
+    expect(result).toEqual({
+      status: 200,
+      payload: expect.objectContaining({
+        companyId: "company-1",
+        previews: [],
+      }),
+    });
+    expect(result.postCommit).toBeUndefined();
+  });
+
+  it("marks hire provisioning ready when fallback path succeeds cleanly", async () => {
+    const deps = createDeps();
+    const commands = createAuthorityCompanyManagementCommands(deps);
+
+    const result = await commands.hireEmployee({
+      companyId: "company-1",
+      body: {
+        companyId: "company-1",
+        role: "Writer",
+        description: "Draft release notes",
+      },
+    });
+
+    expect(deps.updateCompanyExecutorProvisioning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        state: "ready",
+        pendingAgentIds: [],
+        lastError: null,
+      }),
+    );
+    expect(result.postCommit).toEqual({
+      schedule: { reason: "company.employee.hire", companyId: "company-1" },
+      broadcasts: [
+        { type: "bootstrap.updated", companyId: "company-1", timestamp: 1234567890 },
+        { type: "company.updated", companyId: "company-1", timestamp: 1234567890 },
+      ],
     });
   });
 });

@@ -10,15 +10,22 @@ import type {
   AuthorityArtifactUpsertRequest,
   AuthorityDecisionTicketCancelRequest,
   AuthorityBootstrapSnapshot,
+  AuthorityBatchPreviewHireRequest,
+  AuthorityBatchPreviewHireResponse,
   AuthorityBatchHireEmployeesRequest,
   AuthorityBatchHireEmployeesResponse,
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
   AuthorityCompanyCodexAuthSyncResponse,
+  AuthorityCompanyDispatchRequest,
+  AuthorityCompanyDispatchResponse,
   AuthorityCollaborationScopeResponse,
+  AuthorityCompanyReportRequest,
+  AuthorityCompanyReportResponse,
   AuthorityConversationStateDeleteRequest,
   AuthorityConversationStateUpsertRequest,
   AuthorityCompanyEventsResponse,
+  AuthorityCompanyProjectsResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityCreateCompanyRequest,
   AuthorityCreateCompanyResponse,
@@ -32,6 +39,8 @@ import type {
   AuthorityExecutorConfig,
   AuthorityExecutorConfigPatch,
   AuthorityHealthSnapshot,
+  AuthorityPreviewHireRequest,
+  AuthorityPreviewHireResponse,
   AuthorityHireEmployeeRequest,
   AuthorityHireEmployeeResponse,
   AuthorityMissionDeleteRequest,
@@ -42,6 +51,9 @@ import type {
   AuthorityRequirementTransitionRequest,
   AuthorityRoundDeleteRequest,
   AuthorityRoundUpsertRequest,
+  AuthorityProjectCreateRequest,
+  AuthorityProjectPatchRequest,
+  AuthorityProjectMutationResponse,
   AuthorityRoomDeleteRequest,
   AuthorityRoomBindingsUpsertRequest,
   AuthorityRuntimeSyncRequest,
@@ -277,6 +289,26 @@ export class AuthorityClient {
   async hireEmployee(body: AuthorityHireEmployeeRequest) {
     return this.requestJson<AuthorityHireEmployeeResponse>(
       `/companies/${encodeURIComponent(body.companyId)}/employees`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  async previewHireEmployee(body: AuthorityPreviewHireRequest) {
+    return this.requestJson<AuthorityPreviewHireResponse>(
+      `/companies/${encodeURIComponent(body.companyId)}/employees/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  async previewBatchHireEmployees(body: AuthorityBatchPreviewHireRequest) {
+    return this.requestJson<AuthorityBatchPreviewHireResponse>(
+      `/companies/${encodeURIComponent(body.companyId)}/employees/preview-batch`,
       {
         method: "POST",
         body: JSON.stringify(body),
@@ -547,6 +579,38 @@ export class AuthorityClient {
     );
   }
 
+  async listCompanyProjects(companyId: string) {
+    return this.requestJson<AuthorityCompanyProjectsResponse>(
+      `/companies/${encodeURIComponent(companyId)}/projects`,
+    );
+  }
+
+  async getCompanyProject(companyId: string, projectId: string) {
+    return this.requestJson<AuthorityProjectMutationResponse>(
+      `/companies/${encodeURIComponent(companyId)}/projects/${encodeURIComponent(projectId)}`,
+    );
+  }
+
+  async createProject(body: AuthorityProjectCreateRequest) {
+    return this.requestJson<AuthorityProjectMutationResponse>(
+      `/companies/${encodeURIComponent(body.companyId)}/projects`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
+  async patchProject(body: AuthorityProjectPatchRequest) {
+    return this.requestJson<AuthorityProjectMutationResponse>(
+      `/companies/${encodeURIComponent(body.companyId)}/projects/${encodeURIComponent(body.projectId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    );
+  }
+
   async getCollaborationScope(companyId: string, agentId: string) {
     return this.requestJson<AuthorityCollaborationScopeResponse>(
       `/companies/${encodeURIComponent(companyId)}/collaboration-scope/${encodeURIComponent(agentId)}`,
@@ -561,6 +625,20 @@ export class AuthorityClient {
         body: JSON.stringify(body),
       },
     );
+  }
+
+  async companyDispatch(body: AuthorityCompanyDispatchRequest) {
+    return this.requestJson<AuthorityCompanyDispatchResponse>("/commands/company.dispatch", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async companyReport(body: AuthorityCompanyReportRequest) {
+    return this.requestJson<AuthorityCompanyReportResponse>("/commands/company.report", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   async listActors() {

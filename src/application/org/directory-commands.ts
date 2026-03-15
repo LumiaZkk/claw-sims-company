@@ -8,13 +8,15 @@ import { requestAuthorityApproval } from "../../application/gateway/authority-co
 import { AgentOps } from "../../application/org/employee-ops";
 import type { ApprovalRecord } from "../../domain/governance/types";
 import type { Company } from "../../domain/org/types";
+import type { TemplateMatch } from "../../domain/org/types";
 import {
   buildHrDepartmentBootstrapPrompt,
   extractChatMessageText,
   resolveHrBootstrapAgentId,
 } from "./organization-commands";
-import { toast } from "../../components/system/toast-store";
+import { toast } from "../../system/toast-store";
 import { readCompanyRuntimeState } from "../../infrastructure/company/runtime/selectors";
+import { resolveTalentMarketHire } from "./talent-market-hire";
 
 export type HireEmployeeConfig = {
   avatarFile?: File;
@@ -23,6 +25,11 @@ export type HireEmployeeConfig = {
   modelTier: "standard" | "reasoning" | "ultra";
   role: string;
   traits: string;
+  templateSelection?: {
+    templateId: string | null;
+    sourceType: "template" | "blank";
+    match?: TemplateMatch | null;
+  };
 };
 
 export type HrPlanRuntimeState =
@@ -48,7 +55,15 @@ export async function saveAgentWorkspaceFile(agentId: string, fileName: string, 
 }
 
 export async function hireCompanyEmployee(company: Company, config: HireEmployeeConfig) {
-  return AgentOps.hireEmployee(company, config);
+  const resolved = resolveTalentMarketHire(company, config);
+  return AgentOps.hireEmployee(company, {
+    ...config,
+    templateId: resolved.templateId,
+    templateBinding: resolved.templateBinding,
+    compiledDraft: resolved.compiledDraft,
+    bootstrapBundle: resolved.compiledDraft.bootstrapBundle,
+    provenance: resolved.compiledDraft.provenance,
+  });
 }
 
 export async function updateEmployeeRolePrompt(agentId: string, role: string, description: string) {

@@ -8,6 +8,8 @@ export function createAuthorityCompanyManagementRouteService(
     saveConfig: commands.saveConfig,
     createCompany: commands.createCompany,
     retryCompanyProvisioning: commands.retryCompanyProvisioning,
+    previewHireEmployee: commands.previewHireEmployee,
+    previewBatchHireEmployees: commands.previewBatchHireEmployees,
     hireEmployee: commands.hireEmployee,
     batchHireEmployees: commands.batchHireEmployees,
     deleteCompany: commands.deleteCompany,

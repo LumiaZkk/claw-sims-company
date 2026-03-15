@@ -248,6 +248,8 @@ describe("buildDepartmentOperationsGuide", () => {
     });
 
     expect(guide).toContain("HR 招聘硬规则");
+    expect(guide).toContain("authority.company.employee.preview_hire");
+    expect(guide).toContain("authority.company.employee.preview_batch_hire");
     expect(guide).toContain("authority.company.employee.hire");
     expect(guide).toContain("authority.company.employee.batch_hire");
     expect(guide).toContain("不要走 `agents.create` + 手工补文件的旧流程");

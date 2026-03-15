@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authorityControl from "../../../application/gateway/authority-control";
 import { useAuthorityRuntimeSyncStore } from "../../authority/runtime-sync-store";
+import { normalizeDispatchRecord } from "../persistence/dispatch-persistence";
 import { useCompanyRuntimeStore } from "./store";
 import type { Company, DispatchRecord, WorkItemRecord } from "./types";
 
@@ -147,6 +148,7 @@ describe("useCompanyRuntimeStore upsertDispatchRecord", () => {
 
   it("routes authority-backed dispatch writes through authority and applies the returned runtime", async () => {
     const dispatch = createDispatch();
+    const normalizedDispatch = normalizeDispatchRecord(dispatch);
     const upsertDispatchSpy = vi
       .spyOn(authorityControl, "upsertAuthorityDispatch")
       .mockResolvedValue({
@@ -178,7 +180,7 @@ describe("useCompanyRuntimeStore upsertDispatchRecord", () => {
     await vi.waitFor(() => {
       expect(upsertDispatchSpy).toHaveBeenCalledWith({
         companyId: "company-1",
-        dispatch,
+        dispatch: normalizedDispatch,
       });
       const state = useCompanyRuntimeStore.getState();
       expect(state.activeDispatches).toEqual([dispatch]);

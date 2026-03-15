@@ -71,19 +71,21 @@ function registerToolsForAgent(fetchImpl: typeof fetch, agentId: string) {
 }
 
 describe("sims-company plugin", () => {
-  it("registers dispatch, report, and authority hire tools together", () => {
+  it("registers dispatch, report, preview, and authority hire tools together", () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const tools = registerTools(fetchImpl);
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "company_dispatch",
       "company_report",
+      "authority.company.employee.preview_hire",
+      "authority.company.employee.preview_batch_hire",
       "authority.company.employee.hire",
       "authority.company.employee.batch_hire",
     ]);
   });
 
-  it("only exposes authority hire tools to hr agents", () => {
+  it("only exposes preview and hire tools to hr agents", () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const tools = registerToolsForAgent(fetchImpl, "company-1-ceo");
 
@@ -91,6 +93,201 @@ describe("sims-company plugin", () => {
       "company_dispatch",
       "company_report",
     ]);
+  });
+
+  it("maps authority.company.employee.preview_hire to the preview endpoint", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        companyId: "company-1",
+        matches: [
+          {
+            template: { id: "tm-template-designer", title: "Designer" },
+            match: { templateId: "tm-template-designer", score: 0.9, confidence: 0.9, reasons: [], gaps: [], autoAdoptEligible: true },
+          },
+        ],
+        selectionMode: "auto",
+        selectedTemplateId: "tm-template-designer",
+        selectedTemplateBinding: {
+          templateId: "tm-template-designer",
+          sourceType: "template",
+          confidence: 0.9,
+        },
+        selectedDraft: {
+          sourceType: "template",
+          templateId: "tm-template-designer",
+          role: "Designer",
+          modelTier: "reasoning",
+          budget: 9,
+          traits: "visual",
+          bootstrapBundle: {
+            recommendedSkills: ["figma"],
+          },
+        },
+        blankTemplateBinding: {
+          templateId: null,
+          sourceType: "blank",
+          confidence: null,
+        },
+        blankDraft: {
+          sourceType: "blank",
+          templateId: null,
+          role: "Designer",
+          modelTier: "standard",
+          budget: 5,
+          traits: "visual",
+          bootstrapBundle: {
+            recommendedSkills: [],
+          },
+        },
+        warnings: [],
+      }),
+    } as Response));
+    const tools = registerTools(fetchImpl);
+
+    const result = await tools.find((tool) => tool.name === "authority.company.employee.preview_hire")?.execute("1", {
+      role: "Designer",
+      description: "Own visual delivery",
+      departmentName: "Design",
+      makeDepartmentLead: true,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:19789/companies/company-1/employees/preview",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toMatchObject({
+      companyId: "company-1",
+      role: "Designer",
+      description: "Own visual delivery",
+      departmentName: "Design",
+      makeDepartmentLead: true,
+    });
+    expect(result).toMatchObject({
+      content: [{
+        type: "text",
+        text: expect.stringContaining("Preview ready: auto matched tm-template-designer"),
+      }],
+    });
+    const text = (result as { content: Array<{ text: string }> }).content[0]?.text ?? "";
+    expect(text).toContain("## Candidate Templates");
+    expect(text).toContain("Designer (tm-template-designer)");
+    expect(text).toContain("## Recommended Draft");
+    expect(text).toContain("## Blank Fallback Draft");
+  });
+
+  it("maps authority.company.employee.preview_batch_hire to the batch preview endpoint", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        companyId: "company-1",
+        previews: [
+          {
+            inputIndex: 0,
+            matches: [],
+            selectionMode: "auto",
+            selectedTemplateId: "tm-template-designer",
+            selectedTemplateBinding: {
+              templateId: "tm-template-designer",
+              sourceType: "template",
+              confidence: 0.9,
+            },
+            selectedDraft: {
+              sourceType: "template",
+              templateId: "tm-template-designer",
+              role: "Designer",
+              modelTier: "reasoning",
+              budget: 9,
+              traits: "visual",
+              bootstrapBundle: {
+                recommendedSkills: ["figma"],
+              },
+            },
+            blankTemplateBinding: {
+              templateId: null,
+              sourceType: "blank",
+              confidence: null,
+            },
+            blankDraft: {
+              sourceType: "blank",
+              templateId: null,
+              role: "Designer",
+              modelTier: "standard",
+              budget: 5,
+              traits: "visual",
+              bootstrapBundle: {
+                recommendedSkills: [],
+              },
+            },
+            warnings: [],
+          },
+          {
+            inputIndex: 1,
+            matches: [],
+            selectionMode: "blank",
+            selectedTemplateId: null,
+            selectedTemplateBinding: null,
+            selectedDraft: null,
+            blankTemplateBinding: {
+              templateId: null,
+              sourceType: "blank",
+              confidence: null,
+            },
+            blankDraft: {
+              sourceType: "blank",
+              templateId: null,
+              role: "Writer",
+              modelTier: "standard",
+              budget: 5,
+              traits: "clear",
+              bootstrapBundle: {
+                recommendedSkills: [],
+              },
+            },
+            warnings: [],
+          },
+        ],
+        warnings: [],
+      }),
+    } as Response));
+    const tools = registerTools(fetchImpl);
+
+    const result = await tools.find((tool) => tool.name === "authority.company.employee.preview_batch_hire")?.execute("1", {
+      hires: [
+        { role: "Designer", description: "Lead design" },
+        { role: "Writer", description: "Own copy" },
+      ],
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://127.0.0.1:19789/companies/company-1/employees/preview-batch",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toMatchObject({
+      companyId: "company-1",
+      hires: [
+        { role: "Designer", description: "Lead design" },
+        { role: "Writer", description: "Own copy" },
+      ],
+    });
+    expect(result).toMatchObject({
+      content: [{
+        type: "text",
+        text: expect.stringContaining("Batch preview ready: 2 hires (1 auto, 0 explicit, 1 blank)"),
+      }],
+    });
+    const text = (result as { content: Array<{ text: string }> }).content[0]?.text ?? "";
+    expect(text).toContain("# Hire 1");
+    expect(text).toContain("# Hire 2");
+    expect(text).toContain("## Blank Fallback Draft");
   });
 
   it("maps authority.company.employee.hire to the hire endpoint", async () => {

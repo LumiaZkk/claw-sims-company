@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { Company } from "../../domain/org/types";
-import { toast } from "../../components/system/toast-store";
+import { toast } from "../../system/toast-store";
 import {
   applyTakeoverCaseWorkflowAction,
   getTakeoverCaseStatusLabel,

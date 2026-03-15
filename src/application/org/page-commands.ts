@@ -23,7 +23,7 @@ import {
 } from "./directory-commands";
 import type { HrPlanRuntimeState } from "./directory-commands";
 import type { OrgAdvisorSnapshot } from "../assignment/org-fit";
-import type { HireConfig } from "../../components/ui/immersive-hire-dialog";
+import type { HireConfig } from "../../ui/immersive-hire-dialog";
 import { readCompanyRuntimeState } from "../../infrastructure/company/runtime/selectors";
 
 type SavedDepartmentsResult = ReturnType<typeof buildSavedDepartments>;

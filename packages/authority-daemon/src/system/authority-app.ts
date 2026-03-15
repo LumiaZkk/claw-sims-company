@@ -65,7 +65,6 @@ const companyManagementService = createAuthorityCompanyManagementService({
   },
   runManagedExecutorMutation: nativeIntegration.runManagedExecutorMutation,
   ensureManagedCompanyExecutorProvisioned: nativeIntegration.ensureManagedCompanyExecutorProvisioned,
-  syncAgentFileToExecutor: nativeIntegration.syncAgentFileToExecutor,
   deleteManagedAgentFromExecutor: nativeIntegration.deleteManagedAgentFromExecutor,
 });
 
@@ -90,8 +89,14 @@ const companyManagementCommands = createAuthorityCompanyManagementCommands({
   listManagedProvisioningAgentIds: nativeIntegration.listManagedProvisioningAgentIds,
   resolveProvisioningFailureState: nativeIntegration.resolveProvisioningFailureState,
   stringifyError,
+  previewCompanyEmployeeHire: companyManagementService.previewCompanyEmployeeHire,
+  previewCompanyEmployeesHire: companyManagementService.previewCompanyEmployeesHire,
   hireCompanyEmployeeStrongConsistency: companyManagementService.hireCompanyEmployeeStrongConsistency,
   hireCompanyEmployeesStrongConsistency: companyManagementService.hireCompanyEmployeesStrongConsistency,
+  hireCompanyEmployeeWithProvisioningFallback:
+    companyManagementService.hireCompanyEmployeeWithProvisioningFallback,
+  hireCompanyEmployeesWithProvisioningFallback:
+    companyManagementService.hireCompanyEmployeesWithProvisioningFallback,
   buildBootstrapSnapshot: nativeIntegration.buildBootstrapSnapshot,
   getExecutorState: nativeIntegration.getExecutorState,
   deleteManagedAgentFromExecutor: nativeIntegration.deleteManagedAgentFromExecutor,

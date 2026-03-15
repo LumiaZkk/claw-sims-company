@@ -199,6 +199,12 @@ describe("company-executor-sync", () => {
       "HR Director",
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
+      "authority.company.employee.preview_hire",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
+      "authority.company.employee.preview_batch_hire",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
       "authority.company.employee.hire",
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "SOUL.md")?.content).toContain(
@@ -218,6 +224,12 @@ describe("company-executor-sync", () => {
     );
     expect(files.find((file) => file.agentId === "company-1-designer" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
       "部门负责人执行准则",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
+      "authority.company.employee.preview_hire",
+    );
+    expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
+      "authority.company.employee.preview_batch_hire",
     );
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
       "authority.company.employee.hire",
@@ -269,6 +281,8 @@ describe("company-executor-sync", () => {
       ".openclaw/extensions/sims-company/package.json",
     ]);
     expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "company_dispatch"');
+    expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "authority.company.employee.preview_hire"');
+    expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "authority.company.employee.preview_batch_hire"');
     expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "authority.company.employee.hire"');
     expect(files.find((file) => file.name.endsWith("/openclaw.plugin.json"))?.content).toContain('"id": "sims-company"');
     expect(files.find((file) => file.name.endsWith("/package.json"))?.content).toContain('"name": "@cyber-company/sims-company"');

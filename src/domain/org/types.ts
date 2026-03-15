@@ -30,6 +30,7 @@ export interface Company {
   orgSettings?: CompanyOrgSettings;
   departments?: Department[];
   employees: EmployeeRef[];
+  talentMarket?: TalentMarketState;
   quickPrompts: QuickPrompt[];
   workspaceApps?: CompanyWorkspaceApp[];
   workflowCapabilityBindings?: WorkflowCapabilityBinding[];
@@ -165,7 +166,116 @@ export interface EmployeeRef {
   reportsTo?: string;
   departmentId?: string;
   avatarJobId?: string;
+  templateBinding?: EmployeeTemplateBinding;
+  hireProvenance?: HireProvenance;
+  bootstrapBundle?: HireBootstrapBundle;
 }
+
+export type AgentTemplateStatus = "draft" | "ready" | "deprecated" | "retired";
+
+export type AgentTemplateDefinition = {
+  id: string;
+  title: string;
+  summary: string;
+  roleFamily?: string | null;
+  tags?: string[];
+  domainTags?: string[];
+  collaborationTags?: string[];
+  baseSoul?: string | null;
+  strengths?: string[];
+  cautions?: string[];
+  defaultTraits?: string | null;
+  recommendedModelTier?: "standard" | "reasoning" | "ultra";
+  defaultBudgetUsd?: number | null;
+  recommendedSkills?: string[];
+  recommendedApps?: string[];
+  sourceType?: string;
+  sourceRef?: {
+    repo?: string | null;
+    path?: string | null;
+    commit?: string | null;
+    license?: string | null;
+    note?: string | null;
+  } | string | null;
+  qualityScore?: number | null;
+  validationScore?: number | null;
+  adoptionCount?: number;
+  status: AgentTemplateStatus;
+  updatedAt: number;
+};
+
+export type HireIntent = {
+  companyId: string;
+  rolePrompt: string;
+  businessContext: string;
+  departmentName?: string | null;
+  reportsTo?: string | null;
+  desiredModelTier?: "standard" | "reasoning" | "ultra";
+  budgetUsd?: number | null;
+  mustHaveTags?: string[];
+  avoidTags?: string[];
+  operatorNotes?: string | null;
+};
+
+export type TemplateMatch = {
+  templateId: string;
+  score: number;
+  confidence: number;
+  reasons: string[];
+  gaps: string[];
+  autoAdoptEligible: boolean;
+};
+
+export type HireBootstrapBundle = {
+  roleMd: string;
+  soulMd?: string | null;
+  onboardingMd?: string | null;
+  quickPrompts?: Array<{ label: string; prompt: string }>;
+  recommendedSkills?: string[];
+};
+
+export type HireProvenance = {
+  templateId?: string | null;
+  sourceType: string;
+  reasons: string[];
+};
+
+export type CompiledHireDraft = {
+  companyId: string;
+  templateId?: string | null;
+  sourceType: string;
+  role: string;
+  description: string;
+  nickname?: string | null;
+  reportsTo?: string | null;
+  departmentName?: string | null;
+  modelTier?: "standard" | "reasoning" | "ultra";
+  budget?: number | null;
+  traits?: string | null;
+  bootstrapBundle: HireBootstrapBundle;
+  provenance: HireProvenance;
+};
+
+export type EmployeeTemplateBinding = {
+  templateId: string | null;
+  sourceType: "template" | "blank";
+  compiledAt: number;
+  compilerVersion: string;
+  confidence: number | null;
+};
+
+export type TemplateFeedbackSignal = {
+  templateId: string;
+  event: "adopted" | "rejected" | "performance" | "promote" | "retire";
+  score?: number | null;
+  note?: string | null;
+  occurredAt?: number;
+};
+
+export type TalentMarketState = {
+  templates: AgentTemplateDefinition[];
+  updatedAt?: number;
+};
 
 export interface QuickPrompt {
   label: string;

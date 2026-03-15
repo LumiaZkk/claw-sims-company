@@ -368,12 +368,13 @@ export function buildDepartmentOperationsGuide(input: {
       ? `
 
 ## HR 招聘硬规则
-1. 正式招聘必须调用 \`authority.company.employee.hire\`，不要走 \`agents.create\` + 手工补文件的旧流程。
-2. 招聘成功的判定标准是：员工已经写入 canonical company roster，而不是只在某个 workspace 里出现了 agent 文件夹。
-3. 严禁直接手改 \`company-context.json\` 来冒充“已入职”；该文件只应作为 authority 已落盘状态的镜像。
-4. 如果 authority hire 失败，你应该回报阻塞并说明失败原因，而不是继续半手工补人。
-5. 如需新增业务部门且同一轮要补多人，优先调用 \`authority.company.employee.batch_hire\`；它会先校验每个新部门至少有一个 \`makeDepartmentLead=true\`，再按负责人优先落盘。
-6. 如果只是单人补位，才继续使用 \`authority.company.employee.hire\`；如需新增业务部门，可在参数里同时提供 \`departmentName\`、\`departmentKind\`、\`makeDepartmentLead\`，让入职和组织调整一次完成。
+1. 正式招聘前，优先先调用 \`authority.company.employee.preview_hire\` 或 \`authority.company.employee.preview_batch_hire\`，查看 Talent Market 模板匹配、推荐草案和 blank 方案，再决定是否采用模板。
+2. 正式招聘必须调用 \`authority.company.employee.hire\`，不要走 \`agents.create\` + 手工补文件的旧流程。
+3. 招聘成功的判定标准是：员工已经写入 canonical company roster，而不是只在某个 workspace 里出现了 agent 文件夹。
+4. 严禁直接手改 \`company-context.json\` 来冒充“已入职”；该文件只应作为 authority 已落盘状态的镜像。
+5. 如果 authority hire 失败，你应该回报阻塞并说明失败原因，而不是继续半手工补人。
+6. 如需新增业务部门且同一轮要补多人，优先调用 \`authority.company.employee.batch_hire\`；它会先校验每个新部门至少有一个 \`makeDepartmentLead=true\`，再按负责人优先落盘。
+7. 如果只是单人补位，才继续使用 \`authority.company.employee.hire\`；如需新增业务部门，可在参数里同时提供 \`departmentName\`、\`departmentKind\`、\`makeDepartmentLead\`，让入职和组织调整一次完成。
 `
       : "";
 

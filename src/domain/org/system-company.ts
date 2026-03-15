@@ -1,4 +1,5 @@
 import { buildDefaultOrgSettings } from "./autonomy-policy";
+import { buildDefaultTalentMarketTemplates } from "./talent-market";
 import type { Company } from "./types";
 
 export const DEFAULT_MAIN_COMPANY_ID = "system-main-company";
@@ -43,6 +44,10 @@ export function buildDefaultMainCompany(): Company {
         departmentId,
       },
     ],
+    talentMarket: {
+      templates: buildDefaultTalentMarketTemplates(0),
+      updatedAt: 0,
+    },
     quickPrompts: [],
     createdAt: 0,
   };

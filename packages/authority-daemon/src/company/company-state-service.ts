@@ -11,5 +11,10 @@ export function createAuthorityCompanyStateService(
       repository.listCompanyEvents(companyId, cursor, since, limit, recent),
     getCollaborationScope: (companyId, agentId) =>
       repository.getCollaborationScope(companyId, agentId),
+    listCompanyProjects: (companyId) => repository.listCompanyProjects(companyId),
+    loadCompanyProject: (companyId, projectId) => repository.loadCompanyProject(companyId, projectId),
+    createCompanyProject: (project) => repository.createCompanyProject(project),
+    patchCompanyProject: (companyId, projectId, patch) =>
+      repository.patchCompanyProject(companyId, projectId, patch),
   };
 }

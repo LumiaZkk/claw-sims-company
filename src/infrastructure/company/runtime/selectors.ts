@@ -28,6 +28,7 @@ export function selectMissionBoardState(state: CompanyRuntimeState) {
     activeRequirementAggregates: state.activeRequirementAggregates,
     activeRequirementEvidence: state.activeRequirementEvidence,
     primaryRequirementId: state.primaryRequirementId,
+    activeRoundRecords: state.activeRoundRecords,
     activeArtifacts: state.activeArtifacts,
     activeSupportRequests: state.activeSupportRequests,
     activeEscalations: state.activeEscalations,

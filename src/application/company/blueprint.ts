@@ -1,6 +1,9 @@
 import type {
   Company,
   EmployeeRef,
+  EmployeeTemplateBinding,
+  HireBootstrapBundle,
+  HireProvenance,
   QuickPrompt,
 } from "../../domain/org/types";
 import type { SharedKnowledgeItem } from "../../domain/artifact/types";
@@ -28,6 +31,9 @@ export type BlueprintEmployee = {
   metaRole?: EmployeeRef["metaRole"];
   reportsToBlueprintId?: string;
   departmentName?: string;
+  templateBinding?: EmployeeTemplateBinding;
+  hireProvenance?: HireProvenance;
+  bootstrapBundle?: HireBootstrapBundle;
 };
 
 export type BlueprintDepartment = {
@@ -81,7 +87,7 @@ export function buildCompanyBlueprint(params: {
     employeeIdMap.set(employee.agentId, blueprintId);
     return { employee, blueprintId };
   }).map(({ employee, blueprintId }) => {
-    return {
+    const payload: BlueprintEmployee = {
       blueprintId,
       nickname: employee.nickname,
       role: employee.role,
@@ -90,6 +96,16 @@ export function buildCompanyBlueprint(params: {
       reportsToBlueprintId: employee.reportsTo ? employeeIdMap.get(employee.reportsTo) : undefined,
       departmentName: employee.departmentId ? departmentById.get(employee.departmentId)?.name : undefined,
     };
+    if (employee.templateBinding) {
+      payload.templateBinding = employee.templateBinding;
+    }
+    if (employee.hireProvenance) {
+      payload.hireProvenance = employee.hireProvenance;
+    }
+    if (employee.bootstrapBundle) {
+      payload.bootstrapBundle = employee.bootstrapBundle;
+    }
+    return payload;
   });
 
   const departments = (params.company.departments ?? []).map((department) => ({

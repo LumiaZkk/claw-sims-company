@@ -9,6 +9,8 @@ function createDeps() {
     retryCompanyProvisioning: vi
       .fn()
       .mockResolvedValue({ status: 200, payload: { ok: true, kind: "retry" } }),
+    previewHireEmployee: vi.fn().mockResolvedValue({ status: 200, payload: { ok: true, kind: "preview" } }),
+    previewBatchHireEmployees: vi.fn().mockResolvedValue({ status: 200, payload: { ok: true, kind: "preview-batch" } }),
     hireEmployee: vi.fn().mockResolvedValue({ status: 200, payload: { ok: true, kind: "hire" } }),
     batchHireEmployees: vi.fn().mockResolvedValue({ status: 200, payload: { ok: true, kind: "batch" } }),
     deleteCompany: vi.fn().mockResolvedValue({ status: 200, payload: { ok: true, kind: "delete" } }),
@@ -67,8 +69,22 @@ describe("resolveAuthorityCompanyManagementRoute", () => {
     expect(switchResult).toEqual({ status: 200, payload: { ok: true, kind: "switch" } });
   });
 
-  it("delegates hire, batch hire, and delete", async () => {
+  it("delegates preview, hire, batch hire, and delete", async () => {
     const deps = createDeps();
+    const previewResult = await resolveAuthorityCompanyManagementRoute({
+      method: "POST",
+      url: new URL("http://authority.local/companies/company-1/employees/preview"),
+      request: {} as IncomingMessage,
+      readJsonBody: vi.fn().mockResolvedValue({ role: "cto", description: "build stack" }),
+      deps,
+    });
+
+    expect(deps.previewHireEmployee).toHaveBeenCalledWith({
+      companyId: "company-1",
+      body: { role: "cto", description: "build stack" },
+    });
+    expect(previewResult).toEqual({ status: 200, payload: { ok: true, kind: "preview" } });
+
     const hireResult = await resolveAuthorityCompanyManagementRoute({
       method: "POST",
       url: new URL("http://authority.local/companies/company-1/employees"),
@@ -96,6 +112,20 @@ describe("resolveAuthorityCompanyManagementRoute", () => {
       body: { hires: [{ role: "writer" }] },
     });
     expect(batchResult).toEqual({ status: 200, payload: { ok: true, kind: "batch" } });
+
+    const previewBatchResult = await resolveAuthorityCompanyManagementRoute({
+      method: "POST",
+      url: new URL("http://authority.local/companies/company-1/employees/preview-batch"),
+      request: {} as IncomingMessage,
+      readJsonBody: vi.fn().mockResolvedValue({ hires: [{ role: "writer", description: "own copy" }] }),
+      deps,
+    });
+
+    expect(deps.previewBatchHireEmployees).toHaveBeenCalledWith({
+      companyId: "company-1",
+      body: { hires: [{ role: "writer", description: "own copy" }] },
+    });
+    expect(previewBatchResult).toEqual({ status: 200, payload: { ok: true, kind: "preview-batch" } });
 
     const deleteResult = await resolveAuthorityCompanyManagementRoute({
       method: "DELETE",

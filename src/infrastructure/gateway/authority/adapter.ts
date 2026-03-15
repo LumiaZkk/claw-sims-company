@@ -100,6 +100,8 @@ function toHello(url: string): BackendHello {
     },
     features: {
       methods: [
+        "authority.company.employee.preview_hire",
+        "authority.company.employee.preview_batch_hire",
         "authority.company.employee.hire",
         "authority.company.employee.batch_hire",
         "authority.approval.request",
@@ -347,6 +349,16 @@ class AuthorityBackendAdapter implements AgentBackend {
     if (method === "authority.company.employee.hire") {
       return (await authorityClient.hireEmployee(
         params as Parameters<typeof authorityClient.hireEmployee>[0],
+      )) as T;
+    }
+    if (method === "authority.company.employee.preview_hire") {
+      return (await authorityClient.previewHireEmployee(
+        params as Parameters<typeof authorityClient.previewHireEmployee>[0],
+      )) as T;
+    }
+    if (method === "authority.company.employee.preview_batch_hire") {
+      return (await authorityClient.previewBatchHireEmployees(
+        params as Parameters<typeof authorityClient.previewBatchHireEmployees>[0],
       )) as T;
     }
     if (method === "authority.company.employee.batch_hire") {

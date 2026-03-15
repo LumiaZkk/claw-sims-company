@@ -11,6 +11,10 @@ import {
   resolveManagedExecutorProvisioningState,
   planManagedExecutorReconcile,
 } from "./company-executor-sync";
+import {
+  runAuthorityCompanyDispatchCommand,
+  runAuthorityCompanyReportCommand,
+} from "./company-dispatch-command";
 import { CompanyOpsEngine } from "./company-ops-engine";
 import {
   deleteCompanyStrongConsistency,
@@ -18,6 +22,7 @@ import {
   StrongCompanyDeleteError,
   waitForExecutorAgentsAbsent,
 } from "./company-delete";
+import { syncManagedExecutorWorkspacePlugin } from "./company-workspace-plugin-sync";
 import { runAgentWorkspaceEntry } from "./agent-file-runner";
 import { buildCompanyWorkspaceBootstrap } from "./company-workspace-bootstrap";
 import {
@@ -32,7 +37,10 @@ import {
 } from "./requirement-control-runtime";
 import { createManagedFileMirrorQueue } from "./managed-file-mirror";
 import { createOpenClawExecutorBridge } from "./openclaw-bridge";
-import { resolveLocalOpenClawGatewayToken } from "./openclaw-local-auth";
+import {
+  ensureLocalOpenClawPluginEntriesEnabled,
+  resolveLocalOpenClawGatewayToken,
+} from "./openclaw-local-auth";
 import {
   repairAgentSessionsFromDispatches,
   reconcileDispatchesFromCompanyEvents,
@@ -128,6 +136,10 @@ import type {
   AuthorityChatSendRequest,
   AuthorityChatSendResponse,
   AuthorityCollaborationScopeResponse,
+  AuthorityCompanyDispatchRequest,
+  AuthorityCompanyDispatchResponse,
+  AuthorityCompanyReportRequest,
+  AuthorityCompanyReportResponse,
   AuthorityCompanyEventsResponse,
   AuthorityCompanyRuntimeSnapshot,
   AuthorityConversationStateDeleteRequest,
@@ -4210,6 +4222,7 @@ async function reconcileManagedExecutorState(reason: string) {
   if (!currentConfig) {
     return [];
   }
+  ensureLocalOpenClawPluginEntriesEnabled(["sims-company"]);
   const reconcilePlan = planManagedExecutorReconcile({
     trackedAgents: repository.listManagedExecutorAgents(),
     desiredTargets: listDesiredManagedExecutorAgents(currentConfig),
@@ -4258,6 +4271,13 @@ async function reconcileManagedExecutorState(reason: string) {
     }
   }
 
+  const workspacePluginTargets = listDesiredManagedExecutorAgents(currentConfig).filter((target) =>
+    existingAgentIds.has(target.agentId),
+  );
+  const workspacePluginResults = await Promise.allSettled(
+    workspacePluginTargets.map((target) => syncManagedExecutorWorkspacePlugin(target)),
+  );
+
   const runtimeByCompanyId = new Map(
     (currentConfig?.companies ?? []).map((company) => [company.id, repository.loadRuntime(company.id)] as const),
   );
@@ -4277,6 +4297,17 @@ async function reconcileManagedExecutorState(reason: string) {
   });
   if (failures.length > 0) {
     console.warn(`Failed to mirror ${failures.length} managed company file(s) to OpenClaw executor (${reason}).`);
+  }
+  workspacePluginResults.forEach((result, index) => {
+    if (result.status === "rejected") {
+      const agentId = workspacePluginTargets[index]?.agentId;
+      if (agentId) {
+        fileSyncFailedAgentIds.add(agentId);
+      }
+    }
+  });
+  if (workspacePluginResults.some((result) => result.status === "rejected")) {
+    console.warn(`Failed to sync sims-company plugin assets to managed workspaces (${reason}).`);
   }
 
   const changedCompanyIds: string[] = [];
@@ -4753,6 +4784,38 @@ const server = createServer(async (request, response) => {
         return;
       }
       sendJson(response, 200, await proxyGatewayRequest(body.method.trim(), body.params));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/commands/company.dispatch") {
+      const body = await readJsonBody<AuthorityCompanyDispatchRequest>(request);
+      const result = await runAuthorityCompanyDispatchCommand({
+        body,
+        deps: {
+          repository,
+          proxyGatewayRequest,
+        },
+      });
+      sendJson(response, 200, result satisfies AuthorityCompanyDispatchResponse);
+      broadcast({ type: "company.updated", companyId: body.companyId, timestamp: Date.now() });
+      broadcast({ type: "dispatch.updated", companyId: body.companyId, timestamp: Date.now() });
+      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/commands/company.report") {
+      const body = await readJsonBody<AuthorityCompanyReportRequest>(request);
+      const result = await runAuthorityCompanyReportCommand({
+        body,
+        deps: {
+          repository,
+          proxyGatewayRequest,
+        },
+      });
+      sendJson(response, 200, result satisfies AuthorityCompanyReportResponse);
+      broadcast({ type: "company.updated", companyId: body.companyId, timestamp: Date.now() });
+      broadcast({ type: "dispatch.updated", companyId: body.companyId, timestamp: Date.now() });
+      broadcast({ type: "conversation.updated", companyId: body.companyId, timestamp: Date.now() });
       return;
     }
 

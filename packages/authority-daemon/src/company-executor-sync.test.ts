@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildManagedExecutorCompanyWorkspace,
   buildManagedExecutorFilesForCompany,
+  buildManagedExecutorProjectionFilesForCompany,
   buildManagedExecutorWorkspace,
   buildManagedExecutorWorkspaceRoot,
+  listManagedExecutorWorkspacePluginFiles,
   listDesiredManagedExecutorAgents,
   listDesiredManagedExecutorAgentIdsForCompany,
   planManagedExecutorReconcile,
@@ -61,6 +63,14 @@ function createCompany(): Company {
         reportsTo: "company-1-ceo",
         departmentId: "dep-5",
       },
+      {
+        agentId: "company-1-writer",
+        nickname: "文案",
+        role: "Writer",
+        isMeta: false,
+        reportsTo: "company-1-designer",
+        departmentId: "dep-5",
+      },
     ],
     quickPrompts: [],
   };
@@ -112,6 +122,11 @@ describe("company-executor-sync", () => {
         companyId: "company-1",
         workspace: "~/.openclaw/workspaces/cyber-company/company-1/company-1-designer",
       },
+      {
+        agentId: "company-1-writer",
+        companyId: "company-1",
+        workspace: "~/.openclaw/workspaces/cyber-company/company-1/company-1-writer",
+      },
     ]);
   });
 
@@ -122,10 +137,11 @@ describe("company-executor-sync", () => {
       "company-1-cto",
       "company-1-coo",
       "company-1-designer",
+      "company-1-writer",
     ]);
   });
 
-  it("builds managed manager files for both CEO and department leads", () => {
+  it("keeps canonical files in authority and adds projection files for OpenClaw", () => {
     const files = buildManagedExecutorFilesForCompany(createCompany());
 
     expect(files.map((file) => `${file.agentId}:${file.name}`)).toEqual([
@@ -139,6 +155,8 @@ describe("company-executor-sync", () => {
       "company-1-coo:collaboration-context.json",
       "company-1-designer:SOUL.md",
       "company-1-designer:collaboration-context.json",
+      "company-1-writer:SOUL.md",
+      "company-1-writer:collaboration-context.json",
       "company-1-ceo:company-context.json",
       "company-1-ceo:OPERATIONS.md",
       "company-1-hr:department-context.json",
@@ -149,6 +167,18 @@ describe("company-executor-sync", () => {
       "company-1-coo:DEPARTMENT-OPERATIONS.md",
       "company-1-designer:department-context.json",
       "company-1-designer:DEPARTMENT-OPERATIONS.md",
+      "company-1-ceo:AGENTS.md",
+      "company-1-ceo:MEMORY.md",
+      "company-1-hr:AGENTS.md",
+      "company-1-hr:MEMORY.md",
+      "company-1-cto:AGENTS.md",
+      "company-1-cto:MEMORY.md",
+      "company-1-coo:AGENTS.md",
+      "company-1-coo:MEMORY.md",
+      "company-1-designer:AGENTS.md",
+      "company-1-designer:MEMORY.md",
+      "company-1-writer:AGENTS.md",
+      "company-1-writer:MEMORY.md",
     ]);
     expect(files.find((file) => file.name === "company-context.json")?.content).toContain('"id": "company-1"');
     expect(files.find((file) => file.name === "company-context.json")?.content).toContain('"organization"');
@@ -195,6 +225,53 @@ describe("company-executor-sync", () => {
     expect(files.find((file) => file.agentId === "company-1-hr" && file.name === "DEPARTMENT-OPERATIONS.md")?.content).toContain(
       "authority.company.employee.batch_hire",
     );
+    expect(files.find((file) => file.agentId === "company-1-ceo" && file.name === "AGENTS.md")?.content).toContain(
+      "默认汇报链",
+    );
+    expect(files.find((file) => file.agentId === "company-1-ceo" && file.name === "AGENTS.md")?.content).toContain(
+      "`MEMORY.md`",
+    );
+    expect(files.find((file) => file.agentId === "company-1-ceo" && file.name === "AGENTS.md")?.content).toContain(
+      "company_dispatch",
+    );
+    expect(files.find((file) => file.agentId === "company-1-writer" && file.name === "AGENTS.md")?.content).toContain(
+      "员工执行准则",
+    );
+    expect(files.find((file) => file.agentId === "company-1-writer" && file.name === "MEMORY.md")?.content).toContain(
+      '"allowedDispatchTargets"',
+    );
+    expect(files.find((file) => file.agentId === "company-1-writer" && file.name === "MEMORY.md")?.content).toContain(
+      '"organization"',
+    );
+  });
+
+  it("builds projection files with OpenClaw-compatible names only", () => {
+    const files = buildManagedExecutorProjectionFilesForCompany(createCompany());
+
+    expect([...new Set(files.map((file) => file.name))].sort()).toEqual([
+      "AGENTS.md",
+      "MEMORY.md",
+      "SOUL.md",
+    ]);
+    expect(files.some((file) => file.name === "company-context.json")).toBe(false);
+    expect(files.some((file) => file.name === "collaboration-context.json")).toBe(false);
+    expect(files.find((file) => file.agentId === "company-1-designer" && file.name === "AGENTS.md")?.content).toContain(
+      "部门负责人执行准则",
+    );
+  });
+
+  it("lists managed workspace plugin assets separately from agent file projection", () => {
+    const files = listManagedExecutorWorkspacePluginFiles();
+
+    expect(files.map((file) => file.name)).toEqual([
+      ".openclaw/extensions/sims-company/index.js",
+      ".openclaw/extensions/sims-company/openclaw.plugin.json",
+      ".openclaw/extensions/sims-company/package.json",
+    ]);
+    expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "company_dispatch"');
+    expect(files.find((file) => file.name.endsWith("/index.js"))?.content).toContain('name: "authority.company.employee.hire"');
+    expect(files.find((file) => file.name.endsWith("/openclaw.plugin.json"))?.content).toContain('"id": "sims-company"');
+    expect(files.find((file) => file.name.endsWith("/package.json"))?.content).toContain('"name": "@cyber-company/sims-company"');
   });
 
   it("keeps delete intents even when agents.list no longer reports the agent", () => {
@@ -256,7 +333,12 @@ describe("company-executor-sync", () => {
     });
 
     expect(state.state).toBe("degraded");
-    expect(state.pendingAgentIds).toEqual(["company-1-cto", "company-1-coo", "company-1-designer"]);
+    expect(state.pendingAgentIds).toEqual([
+      "company-1-cto",
+      "company-1-coo",
+      "company-1-designer",
+      "company-1-writer",
+    ]);
     expect(state.lastError).toContain("待可见 agent");
   });
 

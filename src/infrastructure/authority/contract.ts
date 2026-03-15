@@ -347,6 +347,57 @@ export type AuthorityChatSendResponse = {
   sessionKey: string;
 };
 
+export type AuthorityCompanyDispatchRequest = {
+  companyId: string;
+  fromActorId: string;
+  targetActorId: string;
+  title?: string | null;
+  summary?: string | null;
+  message?: string | null;
+  dispatchId?: string | null;
+  workItemId?: string | null;
+  topicKey?: string | null;
+  roomId?: string | null;
+  sourceMessageId?: string | null;
+  sourceStepId?: string | null;
+  handoff?: boolean;
+  attachments?: Array<{ type: string; mimeType: string; content: string }>;
+  timeoutMs?: number;
+  createdAt?: number;
+};
+
+export type AuthorityCompanyDispatchResponse = {
+  ok: true;
+  dispatchId: string;
+  workItemId: string;
+  sessionKey: string;
+  runId?: string | null;
+  status: "sent" | "blocked";
+  error?: string | null;
+};
+
+export type AuthorityCompanyReportRequest = {
+  companyId: string;
+  dispatchId: string;
+  fromActorId: string;
+  status: "acknowledged" | "answered" | "blocked";
+  summary?: string | null;
+  details?: string | null;
+  targetActorId?: string | null;
+  timeoutMs?: number;
+  createdAt?: number;
+};
+
+export type AuthorityCompanyReportResponse = {
+  ok: true;
+  dispatchId: string;
+  status: "acknowledged" | "answered" | "blocked";
+  eventId: string;
+  sessionKey: string;
+  runId?: string | null;
+  error?: string | null;
+};
+
 export type AuthorityRequirementTransitionRequest = {
   companyId: string;
   aggregateId: string;

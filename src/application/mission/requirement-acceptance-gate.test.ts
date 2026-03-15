@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildRequirementAcceptanceGate } from "./requirement-acceptance-gate";
 import type { RequirementCloseoutReport } from "./requirement-closeout-report";
+import type { CapabilityPlatformCloseoutSummary } from "../workspace";
+import type { RequirementAggregateRecord } from "../../domain/mission/types";
 
 function createCloseoutReport(
   overrides: Partial<RequirementCloseoutReport> = {},
@@ -43,7 +45,7 @@ function createCloseoutReport(
       detail: "可以继续验收。",
       totals: { ready: 3, attention: 0, missing: 0 },
       checks: [],
-    } as any,
+    } as CapabilityPlatformCloseoutSummary,
     ...overrides,
   };
 }
@@ -55,7 +57,7 @@ describe("buildRequirementAcceptanceGate", () => {
         id: "requirement-1",
         status: "active",
         acceptanceStatus: "not_requested",
-      } as any,
+      } as RequirementAggregateRecord,
       closeoutReport: createCloseoutReport(),
     });
 
@@ -70,7 +72,7 @@ describe("buildRequirementAcceptanceGate", () => {
         id: "requirement-1",
         status: "waiting_review",
         acceptanceStatus: "pending",
-      } as any,
+      } as RequirementAggregateRecord,
       closeoutReport: createCloseoutReport({
         status: "warning",
         advisoryReasons: ["验收依据：当前已有交付物，但还缺少报告/知识型验收依据。"],
@@ -90,7 +92,7 @@ describe("buildRequirementAcceptanceGate", () => {
         id: "requirement-1",
         status: "waiting_review",
         acceptanceStatus: "pending",
-      } as any,
+      } as RequirementAggregateRecord,
       closeoutReport: createCloseoutReport({
         status: "blocked",
         blockingReasons: ["交付物摘要：当前主线还没有稳定的交付物镜像。"],

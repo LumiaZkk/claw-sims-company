@@ -4,6 +4,9 @@ import type { Company } from "../../domain/org/types";
 import type { TrackedTask } from "../../domain/mission/types";
 import type { ManualTakeoverPack } from "../delegation/takeover-pack";
 
+type BoardTaskSurfaceInput = Parameters<typeof buildBoardTaskSurface>[0];
+type StrategicRequirementOverview = BoardTaskSurfaceInput["strategicRequirementOverview"];
+
 function createCompany(overrides: Partial<Company> = {}): Company {
   return {
     id: "company-no",
@@ -144,14 +147,14 @@ describe("buildBoardTaskSurface", () => {
             id: "handoff-1",
             status: "waiting",
             updatedAt: 2_000,
-          } as any,
+          } as NonNullable<Company["handoffs"]>[number],
         ],
         requests: [
           {
             id: "request-1",
             status: "blocked",
             updatedAt: 2_000,
-          } as any,
+          } as NonNullable<Company["requests"]>[number],
         ],
       }),
       companySessions: [],
@@ -165,7 +168,7 @@ describe("buildBoardTaskSurface", () => {
       requirementOverview: null,
       strategicRequirementOverview: {
         aggregateId: "requirement-1",
-      } as any,
+      } as StrategicRequirementOverview,
       isStrategicRequirement: true,
       requirementSyntheticTask: null,
     });

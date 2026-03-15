@@ -5,23 +5,60 @@ import {
   buildRequirementTimeline,
   selectRequirementCenterDeliverableFiles,
 } from "./requirement-center-page-view-model";
+import { buildDefaultOrgSettings } from "../../domain/org/autonomy-policy";
+import type { WorkspaceFileRow } from "../workspace";
+import type { Company, RequirementAggregateRecord, RequirementEvidenceEvent } from "../../domain";
+import type { CompanyEvent } from "../../domain/delegation/events";
+import type { DispatchRecord } from "../../domain/delegation/types";
+
+function createCompany(overrides: Partial<Company> = {}): Company {
+  return {
+    id: "company-1",
+    name: "测试公司",
+    description: "",
+    icon: "🏢",
+    template: "blank",
+    orgSettings: buildDefaultOrgSettings(),
+    employees: [],
+    quickPrompts: [],
+    workspaceApps: [],
+    skillDefinitions: [],
+    skillRuns: [],
+    capabilityRequests: [],
+    capabilityIssues: [],
+    capabilityAuditEvents: [],
+    createdAt: 1,
+    ...overrides,
+  };
+}
 
 describe("requirement-center-page-view-model", () => {
   it("prefers scoped deliverables and falls back to the full workspace list", () => {
-    const workspaceFiles = [
+    const workspaceFiles: WorkspaceFileRow[] = [
       { key: "a", agentId: "writer", artifactId: "artifact-1", name: "chapter-1.md" },
       { key: "b", agentId: "editor", artifactId: "artifact-2", name: "review.md" },
-    ] as any[];
+    ].map((file) => ({
+      agentLabel: file.agentId,
+      role: "Writer",
+      workspace: "workspace",
+      path: `/${file.name}`,
+      kind: "other",
+      resourceType: "document",
+      tags: [],
+      resourceOrigin: "declared" as const,
+      updatedAtMs: null,
+      ...file,
+    }));
 
     const scoped = selectRequirementCenterDeliverableFiles({
-      workspaceFiles: workspaceFiles as any,
+      workspaceFiles,
       scopedArtifactIds: new Set(["artifact-2"]),
       memberIds: [],
     });
     expect(scoped.map((file) => file.key)).toEqual(["b"]);
 
     const fallback = selectRequirementCenterDeliverableFiles({
-      workspaceFiles: workspaceFiles as any,
+      workspaceFiles,
       scopedArtifactIds: new Set(["missing"]),
       memberIds: [],
     });
@@ -30,12 +67,12 @@ describe("requirement-center-page-view-model", () => {
 
   it("summarizes checkout state for the latest room dispatches", () => {
     const checkout = buildRequirementRoomDispatchCheckout({
-      activeCompany: {
+      activeCompany: createCompany({
         employees: [
           { agentId: "writer", nickname: "阿墨" },
           { agentId: "editor", nickname: "小周" },
         ],
-      } as any,
+      }),
       roomDispatches: [
         {
           id: "dispatch-2",
@@ -55,7 +92,7 @@ describe("requirement-center-page-view-model", () => {
           targetActorIds: ["editor"],
           title: "第 1 章初稿",
         },
-      ] as any,
+      ] as DispatchRecord[],
     });
 
     expect(checkout.claimedCount).toBe(1);
@@ -70,7 +107,7 @@ describe("requirement-center-page-view-model", () => {
         workItemId: "work-1",
         roomId: "room-1",
         topicKey: "topic-1",
-      } as any,
+      } as RequirementAggregateRecord,
       activeRequirementEvidence: [
         {
           id: "event-older",
@@ -96,7 +133,7 @@ describe("requirement-center-page-view-model", () => {
           source: "gateway-chat",
           payload: { roomId: "room-1" },
         },
-      ] as any,
+      ] as RequirementEvidenceEvent[],
     });
 
     expect(timeline.map((event) => event.id)).toEqual(["event-newer", "event-chat"]);
@@ -104,10 +141,9 @@ describe("requirement-center-page-view-model", () => {
 
   it("includes recent heartbeat audit entries when company events are provided", () => {
     const surface = buildRequirementCenterPageSurface({
-      activeCompany: {
+      activeCompany: createCompany({
         id: "company-1",
         name: "nl",
-        employees: [],
         orgSettings: {
           heartbeatPolicy: {
             enabled: true,
@@ -124,7 +160,7 @@ describe("requirement-center-page-view-model", () => {
             lastEngineActions: [],
           },
         },
-      } as any,
+      }),
       companyEvents: [
         {
           eventId: "heartbeat-1",
@@ -140,7 +176,7 @@ describe("requirement-center-page-view-model", () => {
             actionCount: 1,
           },
         },
-      ] as any,
+      ] as CompanyEvent[],
       activeConversationStates: [],
       activeDispatches: [],
       activeRoomRecords: [],

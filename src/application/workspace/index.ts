@@ -214,6 +214,7 @@ export {
   resolveWorkflowCapabilityBindings,
   type ResolvedWorkflowCapabilityBinding,
 } from "./workflow-capability-bindings";
+export { resolveWorkspaceAppTemplate } from "../company/workspace-apps";
 
 export function formatWorkspaceBytes(bytes?: number): string {
   if (bytes === undefined) {

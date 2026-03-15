@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest";
 import { buildRequirementCloseoutReport } from "./requirement-closeout-report";
 import { buildDefaultOrgSettings } from "../../domain/org/autonomy-policy";
 import type { Company } from "../../domain/org/types";
+import type { RequirementAggregateRecord } from "../../domain/mission/types";
+import type { WorkspaceFileRow } from "../workspace";
+
+function createAggregate(overrides: Partial<RequirementAggregateRecord> = {}): RequirementAggregateRecord {
+  return {
+    id: "requirement-1",
+    revision: 1,
+    memberIds: [],
+    ...overrides,
+  } as RequirementAggregateRecord;
+}
+
+function createWorkspaceFile(overrides: Partial<WorkspaceFileRow>): WorkspaceFileRow {
+  return {
+    key: "file-1",
+    agentId: "writer",
+    agentLabel: "写手",
+    role: "Writer",
+    workspace: "workspace",
+    name: "document.md",
+    path: "/document.md",
+    kind: "other",
+    resourceType: "document",
+    tags: [],
+    resourceOrigin: "declared",
+    updatedAtMs: 12_000,
+    ...overrides,
+  };
+}
 
 function createCompany(overrides?: Partial<Company>): Company {
   return {
@@ -41,7 +70,7 @@ function createCompany(overrides?: Partial<Company>): Company {
         status: "completed",
         updatedAt: 9_000,
         createdAt: 9_000,
-      } as any,
+      } as Company["capabilityAuditEvents"][number],
     ],
     createdAt: 1,
     ...overrides,
@@ -51,10 +80,7 @@ function createCompany(overrides?: Partial<Company>): Company {
 describe("buildRequirementCloseoutReport", () => {
   it("blocks acceptance when deliverables and traceability are missing", () => {
     const report = buildRequirementCloseoutReport({
-      aggregate: {
-        id: "requirement-1",
-        revision: 2,
-      } as any,
+      aggregate: createAggregate({ revision: 2 }),
       activeCompany: createCompany(),
       workspaceFiles: [],
       deliverableFiles: [],
@@ -76,42 +102,21 @@ describe("buildRequirementCloseoutReport", () => {
 
   it("keeps acceptance available with warnings when deliverables exist but evidence is incomplete", () => {
     const report = buildRequirementCloseoutReport({
-      aggregate: {
-        id: "requirement-1",
-        revision: 3,
-      } as any,
+      aggregate: createAggregate({ revision: 3 }),
       activeCompany: createCompany(),
       workspaceFiles: [
-        {
-          key: "file-1",
-          agentId: "writer",
-          agentLabel: "写手",
-          role: "Writer",
-          workspace: "workspace",
+        createWorkspaceFile({
           name: "chapter-1.md",
           path: "/chapter-1.md",
           kind: "chapter",
-          resourceType: "document",
-          tags: [],
-          resourceOrigin: "declared",
-          updatedAtMs: 12_000,
-        } as any,
+        }),
       ],
       deliverableFiles: [
-        {
-          key: "file-1",
-          agentId: "writer",
-          agentLabel: "写手",
-          role: "Writer",
-          workspace: "workspace",
+        createWorkspaceFile({
           name: "chapter-1.md",
           path: "/chapter-1.md",
           kind: "chapter",
-          resourceType: "document",
-          tags: [],
-          resourceOrigin: "declared",
-          updatedAtMs: 12_000,
-        } as any,
+        }),
       ],
       requirementTimelineCount: 2,
       transcriptPreviewCount: 1,
@@ -133,27 +138,20 @@ describe("buildRequirementCloseoutReport", () => {
 
   it("surfaces evidence highlights when review artifacts exist", () => {
     const report = buildRequirementCloseoutReport({
-      aggregate: {
-        id: "requirement-1",
-        revision: 3,
-      } as any,
+      aggregate: createAggregate({ revision: 3 }),
       activeCompany: createCompany(),
       workspaceFiles: [],
       deliverableFiles: [
-        {
+        createWorkspaceFile({
           key: "review-1",
           agentId: "reviewer",
           agentLabel: "审校",
           role: "Reviewer",
-          workspace: "workspace",
           name: "acceptance-report.md",
           path: "/acceptance-report.md",
           kind: "review",
-          resourceType: "document",
-          tags: [],
-          resourceOrigin: "declared",
           updatedAtMs: 13_000,
-        } as any,
+        }),
       ],
       requirementTimelineCount: 1,
       transcriptPreviewCount: 1,
@@ -170,11 +168,7 @@ describe("buildRequirementCloseoutReport", () => {
 
   it("surfaces consistency and knowledge evidence alongside the closeout report", () => {
     const report = buildRequirementCloseoutReport({
-      aggregate: {
-        id: "requirement-1",
-        revision: 4,
-        memberIds: ["coo-1"],
-      } as any,
+      aggregate: createAggregate({ revision: 4, memberIds: ["coo-1"] }),
       activeCompany: createCompany({
         knowledgeItems: [
           {
@@ -187,55 +181,41 @@ describe("buildRequirementCloseoutReport", () => {
             sourceAgentId: "coo-1",
             sourcePath: "/knowledge/acceptance-summary.md",
             updatedAt: 14_000,
-          } as any,
+          } as NonNullable<Company["knowledgeItems"]>[number],
         ],
       }),
       workspaceFiles: [
-        {
+        createWorkspaceFile({
           key: "canon-1",
-          agentId: "writer",
-          agentLabel: "写手",
-          role: "Writer",
-          workspace: "workspace",
           name: "shared-canon.md",
           path: "/shared-canon.md",
           kind: "canon",
-          resourceType: "document",
           tags: ["domain.reference"],
-          resourceOrigin: "declared",
           updatedAtMs: 10_000,
-        } as any,
-        {
+        }),
+        createWorkspaceFile({
           key: "timeline-1",
-          agentId: "writer",
-          agentLabel: "写手",
-          role: "Writer",
-          workspace: "workspace",
           name: "timeline.md",
           path: "/timeline.md",
           kind: "canon",
-          resourceType: "document",
           tags: ["domain.reference", "story.timeline"],
-          resourceOrigin: "declared",
           updatedAtMs: 11_000,
-        } as any,
+        }),
       ],
       deliverableFiles: [
-        {
+        createWorkspaceFile({
           key: "consistency-report-1",
           artifactId: "artifact-consistency-1",
           agentId: "coo-1",
           agentLabel: "COO",
           role: "COO",
-          workspace: "workspace",
           name: "consistency-report-17000.md",
           path: "/skill-results/consistency-report-17000.md",
           kind: "other",
           resourceType: "report",
           tags: ["qa.report"],
-          resourceOrigin: "declared",
           updatedAtMs: 17_000,
-        } as any,
+        }),
       ],
       requirementTimelineCount: 2,
       transcriptPreviewCount: 1,

@@ -13,29 +13,37 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { gateway } from "../../application/gateway";
 import { toast } from "../../system/toast-store";
 import { syncCompanyCodexAuth } from "../../application/gateway/authority-client";
+import { useTranslate } from "../../i18n";
 
 type CallbackPhase = "connecting" | "authorizing" | "success" | "error";
 
 export function CodexOAuthCallbackPresentationPage() {
+  const t = useTranslate();
   const navigate = useNavigate();
   const completedRef = useRef(false);
   const { activeCompany } = useCompanyShellQuery();
   const { connected, connecting, bootstrapAutoConnect, markModelsRefreshed } = useGatewayStore();
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
-  const callbackProblem = useMemo(() => {
+  const callbackProblem = (() => {
     const providerError = params.get("error");
     if (providerError) {
       const detail = params.get("error_description") || providerError;
-      return `OpenAI 返回授权错误：${detail}`;
+      return t(
+        { zh: "OpenAI 返回授权错误：{detail}", en: "OpenAI returned an authorization error: {detail}" },
+        { detail },
+      );
     }
 
     const code = params.get("code")?.trim();
     const state = params.get("state")?.trim();
     if (!code || !state) {
-      return "回调参数不完整，缺少 code 或 state。请返回设置页重新发起授权。";
+      return t({
+        zh: "回调参数不完整，缺少 code 或 state。请返回设置页重新发起授权。",
+        en: "The callback is missing required parameters: code or state. Return to Settings and start authorization again.",
+      });
     }
     return null;
-  }, [params]);
+  })();
   const [result, setResult] = useState<{ phase: "success" | "error"; message: string } | null>(
     () => (callbackProblem ? { phase: "error", message: callbackProblem } : null),
   );
@@ -87,11 +95,16 @@ export function CodexOAuthCallbackPresentationPage() {
         });
         setResult({
           phase: "success",
-          message: `授权已完成，${completionDescription}`,
+          message: t({ zh: "授权已完成，{description}", en: "Authorization completed. {description}" }, {
+            description: completionDescription,
+          }),
         });
         toast.success(
-          "Codex 授权成功",
-          `已同步 ${codexCount} 个可用模型。${completionDescription}`,
+          t({ zh: "Codex 授权成功", en: "Codex authorization successful" }),
+          t({ zh: "已同步 {count} 个可用模型。{description}", en: "{count} available models were synced. {description}" }, {
+            count: codexCount,
+            description: completionDescription,
+          }),
         );
 
         if (window.opener) {
@@ -108,14 +121,14 @@ export function CodexOAuthCallbackPresentationPage() {
         });
       }
     })();
-  }, [activeCompany, callbackProblem, clearCallbackQuery, connected, markModelsRefreshed, params]);
+  }, [activeCompany, callbackProblem, clearCallbackQuery, connected, markModelsRefreshed, params, t]);
 
   const phase: CallbackPhase = result?.phase ?? (connected ? "authorizing" : "connecting");
   const message =
     result?.message ??
     (connected
-      ? "正在写入 Codex OAuth 凭据并刷新模型目录..."
-      : "正在连接网关并完成 Codex 授权...");
+      ? t({ zh: "正在写入 Codex OAuth 凭据并刷新模型目录...", en: "Writing Codex OAuth credentials and refreshing the model catalog..." })
+      : t({ zh: "正在连接网关并完成 Codex 授权...", en: "Connecting to the gateway and completing Codex authorization..." }));
 
   const icon = (() => {
     switch (phase) {
@@ -130,12 +143,12 @@ export function CodexOAuthCallbackPresentationPage() {
 
   const title =
     phase === "success"
-      ? "Codex 授权完成"
+      ? t({ zh: "Codex 授权完成", en: "Codex authorization complete" })
       : phase === "error"
-        ? "Codex 授权失败"
+        ? t({ zh: "Codex 授权失败", en: "Codex authorization failed" })
         : connecting || !connected
-          ? "正在连接网关"
-          : "正在完成授权";
+          ? t({ zh: "正在连接网关", en: "Connecting to gateway" })
+          : t({ zh: "正在完成授权", en: "Completing authorization" });
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4 py-10">
@@ -147,7 +160,10 @@ export function CodexOAuthCallbackPresentationPage() {
           <div className="space-y-2">
             <CardTitle className="text-xl text-slate-900">{title}</CardTitle>
             <CardDescription>
-              OpenAI Codex (OAuth) 回调页会把授权结果写回网关，并刷新可用模型目录。
+              {t({
+                zh: "OpenAI Codex (OAuth) 回调页会把授权结果写回网关，并刷新可用模型目录。",
+                en: "This OpenAI Codex OAuth callback page writes the result back to the gateway and refreshes the available model catalog.",
+              })}
             </CardDescription>
           </div>
         </CardHeader>
@@ -155,11 +171,11 @@ export function CodexOAuthCallbackPresentationPage() {
           <div className="rounded-xl border bg-white px-4 py-3 text-sm text-slate-700">{message}</div>
           <div className="flex items-center justify-center gap-2">
             <Button variant="outline" onClick={() => navigate("/settings", { replace: true })}>
-              返回设置
+              {t({ zh: "返回设置", en: "Back to Settings" })}
             </Button>
             {window.opener && (
               <Button variant="secondary" onClick={() => window.close()}>
-                关闭窗口
+                {t({ zh: "关闭窗口", en: "Close Window" })}
               </Button>
             )}
           </div>

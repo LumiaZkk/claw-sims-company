@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
+import { useTranslate } from "./i18n";
 import { ApprovalModalHost } from "./system/approval-modal-host";
 import { AuthorityHealthBanner } from "./system/authority-health-banner";
 import { CompanyAuthoritySyncHost } from "./system/company-authority-sync-host";
@@ -41,6 +42,7 @@ import { OrgAutopilotHost } from "./pages/org/OrgAutopilotHost";
 import { extractTextFromMessage } from "./pages/chat/view-models/messages";
 import { toast } from "./system/toast-store";
 import { resolveSessionActorId } from "./lib/sessions";
+import { LanguageSwitcher } from "./ui/language-switcher";
 
 const AutomationPage = lazy(() =>
   import("./pages/automation/Page").then((module) => ({
@@ -123,24 +125,48 @@ const WorkspacePage = lazy(() =>
 );
 
 function CompanyBootstrapScreen() {
+  const t = useTranslate();
+
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center p-8">
       <div className="rounded-2xl border bg-card px-6 py-5 text-center shadow-sm">
         <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary/20 border-t-primary" />
-        <div className="text-sm font-medium">正在恢复公司上下文...</div>
-        <div className="mt-1 text-xs text-muted-foreground">完成后会自动返回你上次所在的组织。</div>
+        <div className="text-sm font-medium">
+          {t({
+            zh: "正在恢复公司上下文...",
+            en: "Restoring company context...",
+          })}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {t({
+            zh: "完成后会自动返回你上次所在的组织。",
+            en: "You will return to the last active organization automatically.",
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
 function RouteLoadingScreen() {
+  const t = useTranslate();
+
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center p-8">
       <div className="rounded-2xl border bg-card px-6 py-5 text-center shadow-sm">
         <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-primary/20 border-t-primary" />
-        <div className="text-sm font-medium">正在加载页面...</div>
-        <div className="mt-1 text-xs text-muted-foreground">当前路由模块正在按需加载。</div>
+        <div className="text-sm font-medium">
+          {t({
+            zh: "正在加载页面...",
+            en: "Loading page...",
+          })}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {t({
+            zh: "当前路由模块正在按需加载。",
+            en: "The current route module is loading on demand.",
+          })}
+        </div>
       </div>
     </div>
   );
@@ -164,19 +190,20 @@ type NavGroup = {
 
 function MainlineQuickSwitch({ hasPrimaryRequirement }: QuickSwitchProps) {
   const location = useLocation();
+  const t = useTranslate();
   const options = [
-    { name: "运行态", path: "/runtime" },
-    { name: "CEO 首页", path: "/ceo" },
+    { name: t({ zh: "运行态", en: "Runtime" }), path: "/runtime" },
+    { name: t({ zh: "CEO 首页", en: "CEO Home" }), path: "/ceo" },
   ];
   if (hasPrimaryRequirement) {
-    options.push({ name: "需求中心", path: "/requirement" });
+    options.push({ name: t({ zh: "需求中心", en: "Requirement Hub" }), path: "/requirement" });
   }
 
   return (
     <div className="mr-2 flex items-center gap-1 rounded-full border bg-secondary/50 p-1 shadow-xs">
       <div className="px-2 flex items-center text-xs font-semibold text-muted-foreground">
         <Sparkles className="mr-1 h-3.5 w-3.5" />
-        主线快切
+        {t({ zh: "主线快切", en: "Primary Routes" })}
       </div>
       {options.map((opt) => (
         <Link
@@ -197,6 +224,7 @@ function MainlineQuickSwitch({ hasPrimaryRequirement }: QuickSwitchProps) {
 
 export default function App() {
   const location = useLocation();
+  const t = useTranslate();
   const isChatRoute = location.pathname.startsWith("/chat/");
   const { loadConfig } = useCompanyShellCommands();
   const { loading, activeCompany, bootstrapPhase, hasPrimaryRequirement } = useCompanyShellQuery();
@@ -226,6 +254,7 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [authorityHealth, setAuthorityHealth] = useState<ReturnType<typeof extractAuthorityHealthSnapshot>>(null);
   const currentProvider = providers.find((provider) => provider.id === providerId);
+  const effectiveAuthorityHealth = connected ? authorityHealth : null;
   const refreshAuthorityHealth = useCallback(async () => {
     if (!connected) {
       setAuthorityHealth(null);
@@ -257,7 +286,6 @@ export default function App() {
 
   useEffect(() => {
     if (!connected) {
-      setAuthorityHealth(null);
       return;
     }
     void refreshAuthorityHealth();
@@ -341,12 +369,24 @@ export default function App() {
       return;
     }
     if (previousConnected && !connected) {
-      toast.warning("Authority 连接已断开", "系统正在自动重连。你可以继续停留在当前页面。");
+      toast.warning(
+        t({ zh: "Authority 连接已断开", en: "Authority disconnected" }),
+        t({
+          zh: "系统正在自动重连。你可以继续停留在当前页面。",
+          en: "The system is reconnecting automatically. You can stay on the current page.",
+        }),
+      );
     } else if (!previousConnected && connected) {
-      toast.success("Authority 已恢复连接", "本机权威源和执行能力已恢复。");
+      toast.success(
+        t({ zh: "Authority 已恢复连接", en: "Authority reconnected" }),
+        t({
+          zh: "本机权威源和执行能力已恢复。",
+          en: "Local authority access and execution capability have been restored.",
+        }),
+      );
     }
     previousConnectedRef.current = connected;
-  }, [connected]);
+  }, [connected, t]);
 
   if (
     !connected &&
@@ -366,7 +406,9 @@ export default function App() {
     );
   }
 
-  const executorSetupRequired = authorityHealth ? requiresAuthorityExecutorOnboarding(authorityHealth) : false;
+  const executorSetupRequired = effectiveAuthorityHealth
+    ? requiresAuthorityExecutorOnboarding(effectiveAuthorityHealth)
+    : false;
   if (
     connected &&
     executorSetupRequired &&
@@ -386,6 +428,9 @@ export default function App() {
     content = (
       <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
         <main className="flex-1 flex flex-col h-full overflow-y-auto relative">
+          <div className="absolute right-4 top-4 z-10">
+            <LanguageSwitcher compact />
+          </div>
           <Suspense fallback={<RouteLoadingScreen />}>
             <Routes>
               <Route path="/select" element={<CompanySelect />} />
@@ -442,39 +487,44 @@ export default function App() {
         resolvedCompany.employees.find((employee) => employee.metaRole === "ceo") ?? null;
       const navGroups: NavGroup[] = [
         {
-          label: "主线",
+          label: t({ zh: "主线", en: "Primary" }),
           items: [
-            { path: "/runtime", label: "运行态", icon: Activity, primary: true },
-            { path: "/ceo", label: "CEO 首页", icon: Building2 },
-            { path: "/requirement", label: "需求中心", icon: BookOpenCheck, primary: true },
+            { path: "/runtime", label: t({ zh: "运行态", en: "Runtime" }), icon: Activity, primary: true },
+            { path: "/ceo", label: t({ zh: "CEO 首页", en: "CEO Home" }), icon: Building2 },
+            {
+              path: "/requirement",
+              label: t({ zh: "需求中心", en: "Requirement Hub" }),
+              icon: BookOpenCheck,
+              primary: true,
+            },
           ],
         },
         {
-          label: "执行",
+          label: t({ zh: "执行", en: "Execution" }),
           items: [
             { path: "/ops", label: "Ops", icon: ShieldAlert },
-            { path: "/board", label: "工作看板", icon: LayoutDashboard },
+            { path: "/board", label: t({ zh: "工作看板", en: "Board" }), icon: LayoutDashboard },
             ...(workspaceApps.length > 0
-              ? [{ path: "/workspace", label: "工作目录", icon: BookOpen }]
+              ? [{ path: "/workspace", label: t({ zh: "工作目录", en: "Workspace" }), icon: BookOpen }]
               : []),
           ],
         },
         {
-          label: "项目",
-          items: [{ path: "/projects", label: "项目追踪", icon: Folder }],
+          label: t({ zh: "项目", en: "Projects" }),
+          items: [{ path: "/projects", label: t({ zh: "项目追踪", en: "Project Tracking" }), icon: Folder }],
         },
         {
-          label: "组织",
+          label: t({ zh: "组织", en: "Organization" }),
           items: [
-            { path: "/employees", label: "员工管理", icon: Users },
-            { path: "/automation", label: "自动化", icon: CalendarClock },
+            { path: "/employees", label: t({ zh: "员工管理", en: "Employees" }), icon: Users },
+            { path: "/automation", label: t({ zh: "自动化", en: "Automation" }), icon: CalendarClock },
           ],
         },
         {
-          label: "系统",
+          label: t({ zh: "系统", en: "System" }),
           items: [
-            { path: "/dashboard", label: "运营报表", icon: BarChart },
-            { path: "/settings", label: "系统设置", icon: Settings },
+            { path: "/dashboard", label: t({ zh: "运营报表", en: "Operations Report" }), icon: BarChart },
+            { path: "/settings", label: t({ zh: "系统设置", en: "Settings" }), icon: Settings },
           ],
         },
       ];
@@ -487,12 +537,18 @@ export default function App() {
             ? "bg-rose-500"
             : "bg-red-500";
       const connectionLabel = connected
-        ? `已连接到${currentProvider?.label || "本机 authority"}`
+        ? t(
+            { zh: "已连接到{provider}", en: "Connected to {provider}" },
+            { provider: currentProvider?.label || t({ zh: "本机 authority", en: "local authority" }) },
+          )
         : phase === "reconnecting" || phase === "connecting"
-          ? "连接中断，正在重连"
+          ? t({ zh: "连接中断，正在重连", en: "Connection lost, reconnecting" })
           : phase === "failed"
-            ? "重连失败，请重新配置连接"
-            : `${currentProvider?.label || "本机 authority"} 已离线`;
+            ? t({ zh: "重连失败，请重新配置连接", en: "Reconnect failed, please reconfigure the connection" })
+            : t(
+                { zh: "{provider} 已离线", en: "{provider} is offline" },
+                { provider: currentProvider?.label || t({ zh: "本机 authority", en: "local authority" }) },
+              );
 
       content = (
         <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
@@ -510,7 +566,9 @@ export default function App() {
           >
             <div className="h-14 flex items-center px-4 border-b border-inherit">
               <Building2 className={`mr-2 h-5 w-5 ${textIconColor}`} />
-              <span className="font-semibold tracking-tight">赛博公司</span>
+              <span className="font-semibold tracking-tight">
+                {t({ zh: "赛博公司", en: "Cyber Company" })}
+              </span>
             </div>
 
             <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -543,7 +601,7 @@ export default function App() {
             {ceoEmployee && (
               <div className="px-3 py-4 border-t border-inherit">
                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-2">
-                  默认沟通入口
+                  {t({ zh: "默认沟通入口", en: "Default Contact" })}
                 </div>
                 <Link
                   to={`/chat/${ceoEmployee.agentId}`}
@@ -553,24 +611,31 @@ export default function App() {
                       : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  <div className="text-sm font-semibold">直接联系 CEO</div>
+                  <div className="text-sm font-semibold">{t({ zh: "直接联系 CEO", en: "Message CEO" })}</div>
                   <div className="mt-1 text-xs leading-5 text-slate-500">
-                    默认先由 CEO 吸收目标、判断组织和调度后台管理层。
+                    {t({
+                      zh: "默认先由 CEO 吸收目标、判断组织和调度后台管理层。",
+                      en: "Start with the CEO by default to intake goals, assess the org, and coordinate leadership.",
+                    })}
                   </div>
                 </Link>
                 <div className="mt-3 px-2 text-[11px] leading-5 text-muted-foreground">
-                  其他员工与管理层会话仍保留在员工页和完整聊天中，首页不再默认全部展开。
+                  {t({
+                    zh: "其他员工与管理层会话仍保留在员工页和完整聊天中，首页不再默认全部展开。",
+                    en: "Other employee and leadership conversations remain in the employee pages and full chat views.",
+                  })}
                 </div>
               </div>
             )}
 
             <div className="p-4 border-t border-inherit space-y-2">
+              <LanguageSwitcher />
               <Link
                 to="/select"
                 className={`flex items-center text-sm font-medium ${isRouteActive("/select") ? "text-foreground bg-secondary/50" : `text-muted-foreground ${linkHover}`} py-2 px-1 rounded-md`}
               >
                 <Building2 className="mr-3 h-4 w-4" />
-                切换公司
+                {t({ zh: "切换公司", en: "Switch Company" })}
               </Link>
             </div>
           </aside>
@@ -585,16 +650,17 @@ export default function App() {
                     onClick={() => setIsMobileMenuOpen(true)}
                   >
                     <Menu className="w-5 h-5" />
-                    <span className="sr-only">Toggle Sidebar</span>
+                    <span className="sr-only">{t({ zh: "切换侧边栏", en: "Toggle sidebar" })}</span>
                   </button>
                   <h1 className="text-base md:text-lg font-semibold truncate max-w-[150px] md:max-w-none">
-                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || "加载中..."}
+                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || t({ zh: "加载中...", en: "Loading..." })}
                   </h1>
                   <span className="text-sm hidden md:inline-block text-muted-foreground truncate">
                     {resolvedCompany.description || ""}
                   </span>
                 </div>
                 <div className="flex items-center gap-4">
+                  <LanguageSwitcher compact />
                   <MainlineQuickSwitch hasPrimaryRequirement={hasPrimaryRequirement} />
                   <div className="flex items-center gap-2">
                     <div className={`h-2 w-2 rounded-full ${connectionIndicatorClass}`} />
@@ -611,10 +677,10 @@ export default function App() {
                     onClick={() => setIsMobileMenuOpen(true)}
                   >
                     <Menu className="h-5 w-5" />
-                    <span className="sr-only">Toggle Sidebar</span>
+                    <span className="sr-only">{t({ zh: "切换侧边栏", en: "Toggle sidebar" })}</span>
                   </button>
                   <div className="truncate text-sm font-semibold">
-                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || "加载中..."}
+                    {resolvedCompany.icon || "🏢"} {resolvedCompany.name || t({ zh: "加载中...", en: "Loading..." })}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -628,7 +694,10 @@ export default function App() {
               <AuthorityHealthBanner />
               {shouldUseSilentRestoreShell ? (
                 <div className="border-b bg-background/90 px-4 py-2 text-xs text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/70">
-                  正在后台恢复最新状态，你可以继续停留在当前页面。
+                  {t({
+                    zh: "正在后台恢复最新状态，你可以继续停留在当前页面。",
+                    en: "Restoring the latest state in the background. You can stay on this page.",
+                  })}
                 </div>
               ) : null}
               <Suspense fallback={<RouteLoadingScreen />}>
